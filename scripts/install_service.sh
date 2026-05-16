@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SERVICE_NAME="${SERVICE_NAME:-industrial-scanner-logger}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
+SERVICE_USER="${SERVICE_USER:-scannerlogger}"
+SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
+ENV_FILE="${ENV_FILE:-/etc/default/${SERVICE_NAME}}"
+OUTPUT_DIR="${OUTPUT_DIR:-/scanner-logs}"
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-55256}"
+PREFIX="${PREFIX:-Site_Shipped_Tracking}"
+NO_READ_MESSAGE="${NO_READ_MESSAGE:-__NO_READ__}"
+SUCCESS_LENGTH="${SUCCESS_LENGTH:-34}"
+START_SERVICE="${START_SERVICE:-1}"
+OVERWRITE_CONFIG="${OVERWRITE_CONFIG:-0}"
+
+usage() {
+    cat <<USAGE
+Usage: sudo scripts/install_service.sh [options]
+
+Install the Industrial Scanner Logger as an Ubuntu systemd service.
+
+Options:
+  --service-name NAME       systemd service name [${SERVICE_NAME}]
+  --install-dir DIR         application install directory [${INSTALL_DIR}]
+  --user USER               system user that runs the service [${SERVICE_USER}]
+  --group GROUP             system group that runs the service [${SERVICE_GROUP}]
+  --env-file PATH           service defaults file [${ENV_FILE}]
+  --output-dir DIR          scanner CSV output directory [${OUTPUT_DIR}]
+  --host HOST               receiver bind address [${HOST}]
+  --port PORT               receiver TCP port [${PORT}]
+  --prefix PREFIX           daily CSV filename prefix [${PREFIX}]
+  --no-read-message TEXT    scanner no-read text [${NO_READ_MESSAGE}]
+  --success-length NUMBER   numeric barcode length required for success [${SUCCESS_LENGTH}]
+  --overwrite-config        replace an existing defaults file
+  --no-start                install and enable the service, but do not start it now
+  -h, --help                show this help
+
+After install, edit receiver options in:
+  ${ENV_FILE}
+USAGE
+}
+
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "Missing required command: $1" >&2
+        exit 1
+    fi
+}
+
+escape_sed_replacement() {
+    printf "%s" "$1" | sed "s/[&|]/\\\\&/g"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --service-name)
+            SERVICE_NAME="$2"
+            ENV_FILE="/etc/default/${SERVICE_NAME}"
+            shift 2
+            ;;
+        --install-dir)
+            INSTALL_DIR="$2"
+            shift 2
+            ;;
+        --user)
+            SERVICE_USER="$2"
+            shift 2
+            ;;
+        --group)
+            SERVICE_GROUP="$2"
+            shift 2
+            ;;
+        --env-file)
+            ENV_FILE="$2"
+            shift 2
+            ;;
+        --output-dir)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        --host)
+            HOST="$2"
+            shift 2
+            ;;
+        --port)
+            PORT="$2"
+            shift 2
+            ;;
+        --prefix)
+            PREFIX="$2"
+            shift 2
+            ;;
+        --no-read-message)
+            NO_READ_MESSAGE="$2"
+            shift 2
+            ;;
+        --success-length)
+            SUCCESS_LENGTH="$2"
+            shift 2
+            ;;
+        --overwrite-config)
+            OVERWRITE_CONFIG=1
+            shift
+            ;;
+        --no-start)
+            START_SERVICE=0
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [[ "${EUID}" -ne 0 ]]; then
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "This installer must run as root, and sudo was not found." >&2
+        exit 1
+    fi
+
+    export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP ENV_FILE START_SERVICE OVERWRITE_CONFIG
+    export OUTPUT_DIR HOST PORT PREFIX NO_READ_MESSAGE SUCCESS_LENGTH
+    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,ENV_FILE,OUTPUT_DIR,HOST,PORT,PREFIX,NO_READ_MESSAGE,SUCCESS_LENGTH,START_SERVICE,OVERWRITE_CONFIG "$0"
+fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+SERVICE_TEMPLATE="${PROJECT_ROOT}/systemd/industrial-scanner-logger.service"
+UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+PYTHON_BIN="${INSTALL_DIR}/.venv/bin/python"
+
+require_command python3
+require_command systemctl
+require_command tar
+require_command sed
+
+if ! python3 -m venv --help >/dev/null 2>&1; then
+    cat >&2 <<'ERROR'
+python3 venv support is not installed.
+
+On Ubuntu, install it with:
+  sudo apt update
+  sudo apt install python3-venv
+ERROR
+    exit 1
+fi
+
+if [[ ! -f "${PROJECT_ROOT}/scanner_tcp_receiver.py" ]]; then
+    echo "Could not find scanner_tcp_receiver.py. Run this script from the project checkout." >&2
+    exit 1
+fi
+
+if [[ ! -f "${SERVICE_TEMPLATE}" ]]; then
+    echo "Missing service template: ${SERVICE_TEMPLATE}" >&2
+    exit 1
+fi
+
+if [[ -r /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    if [[ "${ID:-}" != "ubuntu" && "${ID_LIKE:-}" != *"ubuntu"* && "${ID_LIKE:-}" != *"debian"* ]]; then
+        echo "Warning: this installer is intended for Ubuntu-style systemd systems." >&2
+    fi
+fi
+
+if ! getent group "${SERVICE_GROUP}" >/dev/null; then
+    groupadd --system "${SERVICE_GROUP}"
+fi
+
+if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+    useradd \
+        --system \
+        --gid "${SERVICE_GROUP}" \
+        --home-dir "${INSTALL_DIR}" \
+        --shell /usr/sbin/nologin \
+        --comment "Industrial Scanner Logger" \
+        "${SERVICE_USER}"
+fi
+
+install -d -o root -g root -m 0755 "${INSTALL_DIR}"
+
+tar \
+    --exclude=".git" \
+    --exclude=".venv" \
+    --exclude="__pycache__" \
+    --exclude="*.pyc" \
+    --exclude=".pytest_cache" \
+    --exclude=".ruff_cache" \
+    --exclude=".test-output" \
+    --exclude="scanner-logs" \
+    -C "${PROJECT_ROOT}" \
+    -cf - . | tar -C "${INSTALL_DIR}" -xf -
+
+python3 -m venv "${INSTALL_DIR}/.venv"
+chown -R root:root "${INSTALL_DIR}"
+chmod -R u=rwX,go=rX "${INSTALL_DIR}"
+
+install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${OUTPUT_DIR}"
+install -d -o root -g root -m 0755 "$(dirname -- "${ENV_FILE}")"
+
+if [[ ! -f "${ENV_FILE}" || "${OVERWRITE_CONFIG}" -eq 1 ]]; then
+    cat >"${ENV_FILE}" <<CONFIG
+# Runtime options for ${SERVICE_NAME}.service.
+#
+# Edit this file, then restart the service:
+#   sudo systemctl restart ${SERVICE_NAME}
+#
+# Keep this as one quoted value. systemd expands it into individual arguments
+# because the service uses \$SCANNER_RECEIVER_ARGS as a separate ExecStart word.
+SCANNER_RECEIVER_ARGS="--host ${HOST} --port ${PORT} --output-dir ${OUTPUT_DIR} --prefix ${PREFIX} --no-read-message ${NO_READ_MESSAGE} --success-length ${SUCCESS_LENGTH}"
+CONFIG
+    chmod 0644 "${ENV_FILE}"
+else
+    echo "Keeping existing defaults file: ${ENV_FILE}"
+fi
+
+sed \
+    -e "s|@INSTALL_DIR@|$(escape_sed_replacement "${INSTALL_DIR}")|g" \
+    -e "s|@SERVICE_USER@|$(escape_sed_replacement "${SERVICE_USER}")|g" \
+    -e "s|@SERVICE_GROUP@|$(escape_sed_replacement "${SERVICE_GROUP}")|g" \
+    -e "s|@ENV_FILE@|$(escape_sed_replacement "${ENV_FILE}")|g" \
+    -e "s|@PYTHON_BIN@|$(escape_sed_replacement "${PYTHON_BIN}")|g" \
+    "${SERVICE_TEMPLATE}" >"${UNIT_FILE}"
+
+chmod 0644 "${UNIT_FILE}"
+
+systemctl daemon-reload
+systemctl enable "${SERVICE_NAME}.service"
+
+if [[ "${START_SERVICE}" -eq 1 ]]; then
+    systemctl restart "${SERVICE_NAME}.service"
+fi
+
+cat <<DONE
+Installed ${SERVICE_NAME}.service
+
+Application directory:
+  ${INSTALL_DIR}
+
+Receiver options:
+  ${ENV_FILE}
+
+Scanner logs:
+  ${OUTPUT_DIR}
+
+Useful commands:
+  sudo systemctl status ${SERVICE_NAME}
+  sudo journalctl -u ${SERVICE_NAME} -f
+  sudo nano ${ENV_FILE}
+  sudo systemctl restart ${SERVICE_NAME}
+DONE

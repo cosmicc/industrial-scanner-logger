@@ -26,8 +26,8 @@ Success rule:
     Barcode must be exactly 34 numeric digits.
 
 Example daily CSV files:
-    Ferndale_Shipped_Tracking_2026-05-13.csv
-    Ferndale_Shipped_Tracking_2026-05-14.csv
+    Site_Shipped_Tracking_2026-05-13.csv
+    Site_Shipped_Tracking_2026-05-14.csv
 """
 
 import argparse
@@ -38,6 +38,8 @@ import socket
 import threading
 from datetime import datetime
 from pathlib import Path
+
+from industrial_scanner_logger._version import __version__
 
 
 # False = successful FedEx tracking numbers are logged only once per day.
@@ -579,6 +581,13 @@ def handle_client(conn: socket.socket, addr, logger: DailyCsvLogger):
 def main():
     parser = argparse.ArgumentParser(description="HF811 daily FedEx tracking CSV logger")
 
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Show the receiver version and exit",
+    )
+
     parser.add_argument("--host", default="0.0.0.0", help="IP address to listen on")
     parser.add_argument("--port", type=int, default=55256, help="TCP port to listen on")
 
@@ -590,7 +599,7 @@ def main():
 
     parser.add_argument(
         "--prefix",
-        default="Ferndale_Shipped_Tracking",
+        default="Site_Shipped_Tracking",
         help="Daily CSV filename prefix",
     )
 
@@ -608,6 +617,8 @@ def main():
     )
 
     args = parser.parse_args()
+
+    print(f"Industrial Scanner Logger v{__version__}")
 
     logger = DailyCsvLogger(
         output_dir=Path(args.output_dir),

@@ -2,6 +2,8 @@
 
 Python 3 TCP receiver and CSV logger for a Honeywell HF811 industrial scanner.
 
+Current release: `v1.0.0`
+
 The current receiver listens for scanner TCP connections, classifies scan events, and writes daily CSV logs. It is packaged so the project can be installed, tested, versioned, and uploaded to GitHub as it grows.
 
 ## Current Behavior
@@ -43,9 +45,59 @@ scanner-tcp-receiver \
   --host 0.0.0.0 \
   --port 55256 \
   --output-dir /scanner-logs \
-  --prefix Ferndale_Shipped_Tracking \
+  --prefix Site_Shipped_Tracking \
   --no-read-message __NO_READ__ \
   --success-length 34
+```
+
+Check the installed receiver version:
+
+```bash
+scanner-tcp-receiver --version
+```
+
+## Ubuntu Systemd Service
+
+Install the receiver as a systemd service:
+
+```bash
+sudo scripts/install_service.sh
+```
+
+The installer copies the project to `/opt/industrial-scanner-logger`, creates a Python virtual environment, creates a dedicated `scannerlogger` system user, installs a systemd unit, and starts the service.
+
+Receiver options are service-level configuration in:
+
+```text
+/etc/default/industrial-scanner-logger
+```
+
+Edit that file to change the bind address, TCP port, output directory, CSV prefix, no-read text, or success length:
+
+```bash
+sudo nano /etc/default/industrial-scanner-logger
+sudo systemctl restart industrial-scanner-logger
+```
+
+Useful service commands:
+
+```bash
+sudo systemctl status industrial-scanner-logger
+sudo journalctl -u industrial-scanner-logger -f
+sudo systemctl restart industrial-scanner-logger
+sudo systemctl stop industrial-scanner-logger
+```
+
+Uninstall the service while preserving CSV logs and service defaults:
+
+```bash
+sudo scripts/uninstall_service.sh
+```
+
+Remove the service, installed app, defaults file, logs, and service user/group:
+
+```bash
+sudo scripts/uninstall_service.sh --purge
 ```
 
 ## CSV Outputs
@@ -53,7 +105,7 @@ scanner-tcp-receiver \
 Daily scan files are named with the configured prefix and current date:
 
 ```text
-Ferndale_Shipped_Tracking_2026-05-16.csv
+Site_Shipped_Tracking_2026-05-16.csv
 ```
 
 Daily scan CSV columns:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "industrial-scanner-logger"
-version = "0.1.0"
+dynamic = ["version"]
 description = "TCP receiver and CSV logger for Honeywell HF811 industrial scanner data."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -31,6 +31,9 @@ scanner-tcp-receiver = "industrial_scanner_logger.receiver:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "industrial_scanner_logger._version.__version__"}
 
 [tool.ruff]
 line-length = 100

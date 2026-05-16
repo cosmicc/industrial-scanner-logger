@@ -1,0 +1,25 @@
+[Unit]
+Description=Industrial Scanner TCP Receiver and CSV Logger
+Documentation=file:@INSTALL_DIR@/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_GROUP@
+WorkingDirectory=@INSTALL_DIR@
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=-@ENV_FILE@
+ExecStart=@PYTHON_BIN@ @INSTALL_DIR@/scanner_tcp_receiver.py $SCANNER_RECEIVER_ARGS
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=10
+NoNewPrivileges=true
+UMask=0027
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
