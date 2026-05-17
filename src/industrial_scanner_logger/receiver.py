@@ -36,6 +36,7 @@ import re
 import shutil
 import socket
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -46,6 +47,17 @@ from industrial_scanner_logger._version import __version__
 # Failed scans are always logged.
 LOG_DUPLICATE_SUCCESS_SCANS = False
 
+DEFAULT_MAX_BARCODE_CHARS = 256
+DEFAULT_MAX_CLIENTS = 8
+DEFAULT_FRAME_IDLE_TIMEOUT_SECONDS = 0.25
+DEFAULT_CLIENT_IDLE_TIMEOUT_SECONDS = 300.0
+DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+LOG_BARCODE_PREVIEW_CHARS = 120
+MIN_MAX_BARCODE_CHARS = 64
+
+SAFE_FILE_PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
 
 def clean_barcode(raw: str) -> str:
     """
@@ -55,6 +67,53 @@ def clean_barcode(raw: str) -> str:
     return raw.strip("\r\n\t \x00")
 
 
+def validate_file_prefix(file_prefix: str) -> str:
+    """
+    Keep daily CSV names inside the output directory and shell-friendly.
+    """
+    if not SAFE_FILE_PREFIX_RE.match(file_prefix):
+        raise ValueError(
+            "CSV filename prefix must start with a letter or number and contain only "
+            "letters, numbers, underscore, dash, or dot"
+        )
+
+    if file_prefix in {".", ".."}:
+        raise ValueError("CSV filename prefix cannot be '.' or '..'")
+
+    return file_prefix
+
+
+def validate_positive_int(value: int, name: str) -> int:
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than 0")
+
+    return value
+
+
+def validate_positive_float(value: float, name: str) -> float:
+    if value <= 0:
+        raise ValueError(f"{name} must be greater than 0")
+
+    return value
+
+
+def oversized_scan_marker(raw_length: int) -> str:
+    return f"__OVERSIZED_SCAN_LENGTH_{raw_length}__"
+
+
+def truncate_for_log(value: str, max_chars: int = LOG_BARCODE_PREVIEW_CHARS) -> str:
+    """
+    Keep console and journal lines bounded even for malformed scanner input.
+    """
+    display_value = value.replace("\r", "\\r").replace("\n", "\\n")
+
+    if len(display_value) <= max_chars:
+        return display_value
+
+    omitted = len(display_value) - max_chars
+    return f"{display_value[:max_chars]}...[truncated {omitted} chars]"
+
+
 class DailyCsvLogger:
     def __init__(
         self,
@@ -62,11 +121,28 @@ class DailyCsvLogger:
         file_prefix: str,
         no_read_message: str,
         success_length: int,
+        max_barcode_chars: int = DEFAULT_MAX_BARCODE_CHARS,
     ):
         self.output_dir = output_dir
-        self.file_prefix = file_prefix
+        self.file_prefix = validate_file_prefix(file_prefix)
         self.no_read_message = no_read_message
-        self.success_length = success_length
+        self.success_length = validate_positive_int(success_length, "success_length")
+        self.max_barcode_chars = validate_positive_int(
+            max_barcode_chars,
+            "max_barcode_chars",
+        )
+
+        if self.max_barcode_chars < MIN_MAX_BARCODE_CHARS:
+            raise ValueError(
+                f"max_barcode_chars must be at least {MIN_MAX_BARCODE_CHARS}"
+            )
+
+        if self.success_length > self.max_barcode_chars:
+            raise ValueError("success_length cannot be greater than max_barcode_chars")
+
+        if len(self.no_read_message) > self.max_barcode_chars:
+            raise ValueError("no_read_message cannot be longer than max_barcode_chars")
+
         self.lock = threading.Lock()
 
         self.current_date = None
@@ -100,6 +176,36 @@ class DailyCsvLogger:
     def _csv_path_for_date(self, date_str: str) -> Path:
         filename = f"{self.file_prefix}_{date_str}.csv"
         return self.output_dir / filename
+
+    def _migration_temp_path(self, path: Path) -> Path:
+        return path.with_name(f".{path.name}.migrating-{self._timestamp_string()}")
+
+    def _normalize_barcode_for_storage(self, barcode: str) -> str:
+        if len(barcode) <= self.max_barcode_chars:
+            return barcode
+
+        return oversized_scan_marker(len(barcode))
+
+    def _parse_nonnegative_count(self, row, field_name: str, date_str: str):
+        raw_value = row.get(field_name) or 0
+
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            print(
+                f"Skipping totals row for {date_str}: "
+                f"invalid {field_name}={raw_value!r}"
+            )
+            return None
+
+        if value < 0:
+            print(
+                f"Skipping totals row for {date_str}: "
+                f"invalid negative {field_name}={value}"
+            )
+            return None
+
+        return value
 
     def _backup_file(self, path: Path):
         if path.exists():
@@ -159,26 +265,41 @@ class DailyCsvLogger:
             return
 
         self._backup_file(csv_path)
+        temp_path = self._migration_temp_path(csv_path)
 
-        with csv_path.open("r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+        try:
+            with (
+                csv_path.open("r", newline="", encoding="utf-8") as source,
+                temp_path.open("w", newline="", encoding="utf-8") as target,
+            ):
+                reader = csv.DictReader(source)
+                writer = csv.writer(target)
+                writer.writerow(expected_header)
 
-        with csv_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(expected_header)
+                for row in reader:
+                    date_str = clean_barcode(row.get("date", ""))
+                    time_str = clean_barcode(row.get("time", ""))
+                    tracking = clean_barcode(
+                        row.get("tracking", "") or row.get("barcode", "")
+                    )
+                    was_oversized = len(tracking) > self.max_barcode_chars
+                    tracking = self._normalize_barcode_for_storage(tracking)
+                    status = clean_barcode(row.get("status", ""))
 
-            for row in rows:
-                date_str = clean_barcode(row.get("date", ""))
-                time_str = clean_barcode(row.get("time", ""))
-                tracking = clean_barcode(row.get("tracking", "") or row.get("barcode", ""))
-                status = clean_barcode(row.get("status", ""))
+                    if was_oversized:
+                        status = "FAILED"
 
-                if status not in {"SUCCESS", "FAILED"}:
-                    status = self._classify_scan(tracking)
+                    elif status not in {"SUCCESS", "FAILED"}:
+                        status = self._classify_scan(tracking)
 
-                csv_tracking = "" if tracking == self.no_read_message else tracking
-                writer.writerow([date_str, time_str, status, csv_tracking])
+                    csv_tracking = "" if tracking == self.no_read_message else tracking
+                    writer.writerow([date_str, time_str, status, csv_tracking])
+
+            temp_path.replace(csv_path)
+
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
 
         print(f"Migrated daily CSV header: {csv_path}")
 
@@ -210,31 +331,54 @@ class DailyCsvLogger:
             return
 
         self._backup_file(self.totals_path)
+        temp_path = self._migration_temp_path(self.totals_path)
 
-        with self.totals_path.open("r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+        try:
+            with (
+                self.totals_path.open("r", newline="", encoding="utf-8") as source,
+                temp_path.open("w", newline="", encoding="utf-8") as target,
+            ):
+                reader = csv.DictReader(source)
+                writer = csv.writer(target)
+                writer.writerow(expected_header)
 
-        with self.totals_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(expected_header)
+                for row in reader:
+                    date_str = clean_barcode(row.get("date", ""))
 
-            for row in rows:
-                date_str = clean_barcode(row.get("date", ""))
+                    if not DATE_RE.match(date_str):
+                        continue
 
-                if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_str):
-                    continue
+                    if "total_unique_scans" in row:
+                        successful = self._parse_nonnegative_count(
+                            row, "total_unique_scans", date_str
+                        )
+                        if successful is None:
+                            continue
 
-                if "total_unique_scans" in row:
-                    successful = int(row.get("total_unique_scans") or 0)
-                    total_events = successful
-                    failed = 0
-                else:
-                    total_events = int(row.get("total_events") or 0)
-                    successful = int(row.get("successful_scans") or 0)
-                    failed = int(row.get("failed_scans") or 0)
+                        total_events = successful
+                        failed = 0
 
-                writer.writerow([date_str, total_events, successful, failed])
+                    else:
+                        total_events = self._parse_nonnegative_count(
+                            row, "total_events", date_str
+                        )
+                        successful = self._parse_nonnegative_count(
+                            row, "successful_scans", date_str
+                        )
+                        failed = self._parse_nonnegative_count(
+                            row, "failed_scans", date_str
+                        )
+
+                        if None in {total_events, successful, failed}:
+                            continue
+
+                    writer.writerow([date_str, total_events, successful, failed])
+
+            temp_path.replace(self.totals_path)
+
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
 
         print(f"Migrated totals CSV header: {self.totals_path}")
 
@@ -255,24 +399,35 @@ class DailyCsvLogger:
             return
 
         self._backup_file(self.failed_scans_path)
+        temp_path = self._migration_temp_path(self.failed_scans_path)
 
-        with self.failed_scans_path.open("r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+        try:
+            with (
+                self.failed_scans_path.open("r", newline="", encoding="utf-8") as source,
+                temp_path.open("w", newline="", encoding="utf-8") as target,
+            ):
+                reader = csv.DictReader(source)
+                writer = csv.writer(target)
+                writer.writerow(expected_header)
 
-        with self.failed_scans_path.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(expected_header)
+                for row in reader:
+                    date_str = clean_barcode(row.get("date", ""))
+                    time_str = clean_barcode(row.get("time", ""))
+                    failed_barcode = clean_barcode(
+                        row.get("failed_barcode", "")
+                        or row.get("tracking", "")
+                        or row.get("barcode", "")
+                    )
+                    failed_barcode = self._normalize_barcode_for_storage(
+                        failed_barcode
+                    )
+                    writer.writerow([date_str, time_str, failed_barcode])
 
-            for row in rows:
-                date_str = clean_barcode(row.get("date", ""))
-                time_str = clean_barcode(row.get("time", ""))
-                failed_barcode = clean_barcode(
-                    row.get("failed_barcode", "")
-                    or row.get("tracking", "")
-                    or row.get("barcode", "")
-                )
-                writer.writerow([date_str, time_str, failed_barcode])
+            temp_path.replace(self.failed_scans_path)
+
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
 
         print(f"Migrated failed scans CSV header: {self.failed_scans_path}")
 
@@ -295,10 +450,15 @@ class DailyCsvLogger:
                 tracking = clean_barcode(
                     row.get("tracking", "") or row.get("barcode", "")
                 )
+                was_oversized = len(tracking) > self.max_barcode_chars
+                tracking = self._normalize_barcode_for_storage(tracking)
 
                 status = clean_barcode(row.get("status", ""))
 
-                if status not in {"SUCCESS", "FAILED"}:
+                if was_oversized:
+                    status = "FAILED"
+
+                elif status not in {"SUCCESS", "FAILED"}:
                     status = self._classify_scan(tracking)
 
                 event_count += 1
@@ -330,10 +490,15 @@ class DailyCsvLogger:
                 tracking = clean_barcode(
                     row.get("tracking", "") or row.get("barcode", "")
                 )
+                was_oversized = len(tracking) > self.max_barcode_chars
+                tracking = self._normalize_barcode_for_storage(tracking)
 
                 status = clean_barcode(row.get("status", ""))
 
-                if status not in {"SUCCESS", "FAILED"}:
+                if was_oversized:
+                    status = "FAILED"
+
+                elif status not in {"SUCCESS", "FAILED"}:
                     status = self._classify_scan(tracking)
 
                 event_count += 1
@@ -357,7 +522,7 @@ class DailyCsvLogger:
             for row in reader:
                 date_part = clean_barcode(row.get("date", ""))
 
-                if re.match(r"^\d{4}-\d{2}-\d{2}$", date_part):
+                if DATE_RE.match(date_part):
                     dates.add(date_part)
 
         return dates
@@ -480,7 +645,7 @@ class DailyCsvLogger:
             writer.writerow([date_str, time_str, failed_barcode])
 
     def write_scan_event(self, raw_barcode: str):
-        barcode = clean_barcode(raw_barcode)
+        barcode = self._normalize_barcode_for_storage(clean_barcode(raw_barcode))
 
         if not barcode:
             return
@@ -492,7 +657,7 @@ class DailyCsvLogger:
 
             if status == "SUCCESS":
                 if barcode in self.seen_success_barcodes and not LOG_DUPLICATE_SUCCESS_SCANS:
-                    print(f"Duplicate ignored - {barcode}")
+                    print(f"Duplicate ignored - {truncate_for_log(barcode)}")
                     return
 
                 self.seen_success_barcodes.add(barcode)
@@ -526,28 +691,62 @@ class DailyCsvLogger:
                 f"Failed:{self.failed_count} "
                 f"Status:{status} "
                 f"Time:{time_str} "
-                f"Barcode:{barcode}"
+                f"Barcode:{truncate_for_log(barcode)}"
             )
 
 
-def handle_client(conn: socket.socket, addr, logger: DailyCsvLogger):
-    print(f"Scanner connected from {addr[0]}:{addr[1]}")
+def address_label(addr) -> str:
+    try:
+        return f"{addr[0]}:{addr[1]}"
+    except (IndexError, TypeError):
+        return str(addr)
+
+
+def write_client_scan(
+    logger: DailyCsvLogger,
+    barcode: str,
+    addr,
+    fatal_event: threading.Event,
+) -> bool:
+    try:
+        logger.write_scan_event(barcode)
+        return True
+
+    except Exception as exc:
+        print(f"Fatal logging error for {address_label(addr)}: {exc}")
+        fatal_event.set()
+        return False
+
+
+def handle_client(
+    conn: socket.socket,
+    addr,
+    logger: DailyCsvLogger,
+    stop_event: threading.Event,
+    fatal_event: threading.Event,
+    max_barcode_chars: int,
+    frame_idle_timeout: float,
+    client_idle_timeout: float,
+):
+    print(f"Scanner connected from {address_label(addr)}")
 
     buffer = ""
+    last_data_time = time.monotonic()
 
     # Timeout fallback:
     # If the scanner sends data without CR/LF, flush the idle buffer as one event.
-    conn.settimeout(0.25)
+    conn.settimeout(frame_idle_timeout)
 
     with conn:
-        while True:
+        while not stop_event.is_set() and not fatal_event.is_set():
             try:
                 data = conn.recv(4096)
 
                 if not data:
-                    print(f"Scanner disconnected from {addr[0]}:{addr[1]}")
+                    print(f"Scanner disconnected from {address_label(addr)}")
                     break
 
+                last_data_time = time.monotonic()
                 text = data.decode("utf-8", errors="replace")
                 buffer += text
 
@@ -563,18 +762,46 @@ def handle_client(conn: socket.socket, addr, logger: DailyCsvLogger):
                     barcode = buffer[:split_pos]
                     buffer = buffer[split_pos + 1:]
 
-                    logger.write_scan_event(barcode)
+                    if len(barcode) > max_barcode_chars:
+                        marker = oversized_scan_marker(len(barcode))
+                        print(
+                            f"Oversized barcode frame from {address_label(addr)} "
+                            f"rejected at {len(barcode)} characters"
+                        )
+                        write_client_scan(logger, marker, addr, fatal_event)
+                        return
+
+                    if not write_client_scan(logger, barcode, addr, fatal_event):
+                        return
+
+                if len(buffer) > max_barcode_chars:
+                    marker = oversized_scan_marker(len(buffer))
+                    print(
+                        f"Oversized barcode frame from {address_label(addr)} "
+                        f"rejected at {len(buffer)} characters"
+                    )
+                    write_client_scan(logger, marker, addr, fatal_event)
+                    return
 
             except socket.timeout:
                 # Fallback:
                 # If data arrived but no CR/LF arrived after it, treat the idle
                 # buffer as one complete barcode/event.
                 if buffer:
-                    logger.write_scan_event(buffer)
+                    if not write_client_scan(logger, buffer, addr, fatal_event):
+                        return
                     buffer = ""
 
+                elif time.monotonic() - last_data_time >= client_idle_timeout:
+                    print(f"Scanner idle timeout from {address_label(addr)}")
+                    break
+
             except ConnectionResetError:
-                print(f"Scanner connection reset from {addr[0]}:{addr[1]}")
+                print(f"Scanner connection reset from {address_label(addr)}")
+                break
+
+            except OSError as exc:
+                print(f"Scanner socket error from {address_label(addr)}: {exc}")
                 break
 
 
@@ -616,7 +843,72 @@ def main():
         help="Required numeric tracking length for SUCCESS",
     )
 
+    parser.add_argument(
+        "--max-barcode-chars",
+        type=int,
+        default=DEFAULT_MAX_BARCODE_CHARS,
+        help=(
+            "Maximum accepted characters in one scanner frame before the frame "
+            "is logged as oversized and the client is disconnected"
+        ),
+    )
+
+    parser.add_argument(
+        "--max-clients",
+        type=int,
+        default=DEFAULT_MAX_CLIENTS,
+        help="Maximum simultaneous scanner TCP clients",
+    )
+
+    parser.add_argument(
+        "--frame-idle-timeout",
+        type=float,
+        default=DEFAULT_FRAME_IDLE_TIMEOUT_SECONDS,
+        help="Seconds of read idleness before a partial barcode frame is flushed",
+    )
+
+    parser.add_argument(
+        "--client-idle-timeout",
+        type=float,
+        default=DEFAULT_CLIENT_IDLE_TIMEOUT_SECONDS,
+        help="Seconds before disconnecting an idle client with no buffered barcode",
+    )
+
+    parser.add_argument(
+        "--shutdown-timeout",
+        type=float,
+        default=DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
+        help="Seconds to wait for connected scanner threads during shutdown",
+    )
+
     args = parser.parse_args()
+
+    try:
+        validate_file_prefix(args.prefix)
+        validate_positive_int(args.port, "port")
+        validate_positive_int(args.success_length, "success_length")
+        validate_positive_int(args.max_barcode_chars, "max_barcode_chars")
+        validate_positive_int(args.max_clients, "max_clients")
+        validate_positive_float(args.frame_idle_timeout, "frame_idle_timeout")
+        validate_positive_float(args.client_idle_timeout, "client_idle_timeout")
+        validate_positive_float(args.shutdown_timeout, "shutdown_timeout")
+
+        if args.port > 65535:
+            raise ValueError("port must be between 1 and 65535")
+
+        if args.max_barcode_chars < MIN_MAX_BARCODE_CHARS:
+            raise ValueError(
+                f"max_barcode_chars must be at least {MIN_MAX_BARCODE_CHARS}"
+            )
+
+        if args.success_length > args.max_barcode_chars:
+            raise ValueError("success_length cannot be greater than max_barcode_chars")
+
+        if len(args.no_read_message) > args.max_barcode_chars:
+            raise ValueError("no_read_message cannot be longer than max_barcode_chars")
+
+    except ValueError as exc:
+        parser.error(str(exc))
 
     print(f"Industrial Scanner Logger v{__version__}")
 
@@ -625,35 +917,99 @@ def main():
         file_prefix=args.prefix,
         no_read_message=args.no_read_message,
         success_length=args.success_length,
+        max_barcode_chars=args.max_barcode_chars,
     )
 
     print(f"Listening on {args.host}:{args.port}")
     print(f"No-read message treated as FAILED: {args.no_read_message}")
     print(f"Success rule: exactly {args.success_length} numeric digits")
+    print(f"Maximum barcode frame length: {args.max_barcode_chars} characters")
+    print(f"Maximum simultaneous clients: {args.max_clients}")
     print("Press Ctrl+C to stop.")
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((args.host, args.port))
-    server.listen(5)
+    server.listen(args.max_clients)
+    server.settimeout(0.5)
+
+    stop_event = threading.Event()
+    fatal_event = threading.Event()
+    active_threads = set()
+    active_threads_lock = threading.Lock()
+
+    def cleanup_threads():
+        with active_threads_lock:
+            finished_threads = {
+                thread for thread in active_threads if not thread.is_alive()
+            }
+            active_threads.difference_update(finished_threads)
+
+    def client_runner(client_conn, client_addr):
+        try:
+            handle_client(
+                client_conn,
+                client_addr,
+                logger,
+                stop_event,
+                fatal_event,
+                args.max_barcode_chars,
+                args.frame_idle_timeout,
+                args.client_idle_timeout,
+            )
+        finally:
+            with active_threads_lock:
+                active_threads.discard(threading.current_thread())
 
     try:
-        while True:
-            conn, addr = server.accept()
+        while not stop_event.is_set() and not fatal_event.is_set():
+            cleanup_threads()
+
+            try:
+                conn, addr = server.accept()
+            except socket.timeout:
+                continue
+
+            with active_threads_lock:
+                active_count = len(active_threads)
+
+            if active_count >= args.max_clients:
+                print(
+                    f"Rejecting scanner connection from {address_label(addr)}: "
+                    f"maximum clients reached ({args.max_clients})"
+                )
+                conn.close()
+                continue
 
             thread = threading.Thread(
-                target=handle_client,
-                args=(conn, addr, logger),
-                daemon=True,
+                target=client_runner,
+                args=(conn, addr),
             )
+
+            with active_threads_lock:
+                active_threads.add(thread)
+
             thread.start()
 
     except KeyboardInterrupt:
         print("\nStopping listener.")
 
     finally:
+        stop_event.set()
         server.close()
+
+        with active_threads_lock:
+            threads_to_join = list(active_threads)
+
+        for thread in threads_to_join:
+            thread.join(timeout=args.shutdown_timeout)
+
+    if fatal_event.is_set():
+        print("Stopping listener after fatal logging error.")
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

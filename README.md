@@ -2,7 +2,7 @@
 
 Python 3 TCP receiver and CSV logger for a Honeywell HF811 industrial scanner.
 
-Current release: `v1.0.1`
+Current release: `v1.0.2`
 
 The current receiver listens for scanner TCP connections, classifies scan events, and writes daily CSV logs. It is packaged so the project can be installed, tested, versioned, and uploaded to GitHub as it grows.
 
@@ -47,7 +47,12 @@ scanner-tcp-receiver \
   --output-dir /scanner-logs \
   --prefix Site_Shipped_Tracking \
   --no-read-message __NO_READ__ \
-  --success-length 34
+  --success-length 34 \
+  --max-barcode-chars 256 \
+  --max-clients 8 \
+  --frame-idle-timeout 0.25 \
+  --client-idle-timeout 300 \
+  --shutdown-timeout 5
 ```
 
 Check the installed receiver version:
@@ -72,7 +77,7 @@ Receiver options are service-level configuration in:
 /etc/default/industrial-scanner-logger
 ```
 
-Edit that file to change the bind address, TCP port, output directory, CSV prefix, no-read text, or success length:
+Edit that file to change the bind address, TCP port, output directory, CSV prefix, no-read text, success length, or receiver safety limits:
 
 ```bash
 sudo nano /etc/default/industrial-scanner-logger
@@ -141,15 +146,14 @@ python -m pip install -e ".[dev]"
 ruff check .
 ```
 
-## GitHub Setup
+## Repository
 
-Initialize and publish the repository after choosing the GitHub repository name and visibility:
+GitHub repository:
 
-```bash
-git init
-git add .
-git commit -m "Initial project scaffold"
-gh repo create industrial-scanner-logger --source=. --private --push
+```text
+https://github.com/cosmicc/industrial-scanner-logger
 ```
 
-No open-source license has been selected yet. Add a `LICENSE` file before making the repository public if other people should be allowed to use, modify, or redistribute the code.
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

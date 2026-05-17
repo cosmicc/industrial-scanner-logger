@@ -12,6 +12,11 @@ PORT="${PORT:-55256}"
 PREFIX="${PREFIX:-Site_Shipped_Tracking}"
 NO_READ_MESSAGE="${NO_READ_MESSAGE:-__NO_READ__}"
 SUCCESS_LENGTH="${SUCCESS_LENGTH:-34}"
+MAX_BARCODE_CHARS="${MAX_BARCODE_CHARS:-256}"
+MAX_CLIENTS="${MAX_CLIENTS:-8}"
+FRAME_IDLE_TIMEOUT="${FRAME_IDLE_TIMEOUT:-0.25}"
+CLIENT_IDLE_TIMEOUT="${CLIENT_IDLE_TIMEOUT:-300}"
+SHUTDOWN_TIMEOUT="${SHUTDOWN_TIMEOUT:-5}"
 START_SERVICE="${START_SERVICE:-1}"
 OVERWRITE_CONFIG="${OVERWRITE_CONFIG:-0}"
 
@@ -33,6 +38,11 @@ Options:
   --prefix PREFIX           daily CSV filename prefix [${PREFIX}]
   --no-read-message TEXT    scanner no-read text [${NO_READ_MESSAGE}]
   --success-length NUMBER   numeric barcode length required for success [${SUCCESS_LENGTH}]
+  --max-barcode-chars NUM   maximum accepted scanner frame length [${MAX_BARCODE_CHARS}]
+  --max-clients NUMBER      maximum simultaneous scanner clients [${MAX_CLIENTS}]
+  --frame-idle-timeout SEC  seconds before flushing a partial scanner frame [${FRAME_IDLE_TIMEOUT}]
+  --client-idle-timeout SEC seconds before disconnecting an idle scanner client [${CLIENT_IDLE_TIMEOUT}]
+  --shutdown-timeout SEC    seconds to wait for scanner threads on stop [${SHUTDOWN_TIMEOUT}]
   --overwrite-config        replace an existing defaults file
   --no-start                install and enable the service, but do not start it now
   -h, --help                show this help
@@ -144,6 +154,26 @@ while [[ $# -gt 0 ]]; do
             SUCCESS_LENGTH="$2"
             shift 2
             ;;
+        --max-barcode-chars)
+            MAX_BARCODE_CHARS="$2"
+            shift 2
+            ;;
+        --max-clients)
+            MAX_CLIENTS="$2"
+            shift 2
+            ;;
+        --frame-idle-timeout)
+            FRAME_IDLE_TIMEOUT="$2"
+            shift 2
+            ;;
+        --client-idle-timeout)
+            CLIENT_IDLE_TIMEOUT="$2"
+            shift 2
+            ;;
+        --shutdown-timeout)
+            SHUTDOWN_TIMEOUT="$2"
+            shift 2
+            ;;
         --overwrite-config)
             OVERWRITE_CONFIG=1
             shift
@@ -172,7 +202,8 @@ if [[ "${EUID}" -ne 0 ]]; then
 
     export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP ENV_FILE START_SERVICE OVERWRITE_CONFIG
     export OUTPUT_DIR HOST PORT PREFIX NO_READ_MESSAGE SUCCESS_LENGTH
-    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,ENV_FILE,OUTPUT_DIR,HOST,PORT,PREFIX,NO_READ_MESSAGE,SUCCESS_LENGTH,START_SERVICE,OVERWRITE_CONFIG "$0"
+    export MAX_BARCODE_CHARS MAX_CLIENTS FRAME_IDLE_TIMEOUT CLIENT_IDLE_TIMEOUT SHUTDOWN_TIMEOUT
+    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,ENV_FILE,OUTPUT_DIR,HOST,PORT,PREFIX,NO_READ_MESSAGE,SUCCESS_LENGTH,MAX_BARCODE_CHARS,MAX_CLIENTS,FRAME_IDLE_TIMEOUT,CLIENT_IDLE_TIMEOUT,SHUTDOWN_TIMEOUT,START_SERVICE,OVERWRITE_CONFIG "$0"
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -267,7 +298,7 @@ if [[ ! -f "${ENV_FILE}" || "${OVERWRITE_CONFIG}" -eq 1 ]]; then
 #
 # Keep this as one quoted value. systemd expands it into individual arguments
 # because the service uses \$SCANNER_RECEIVER_ARGS as a separate ExecStart word.
-SCANNER_RECEIVER_ARGS="--host ${HOST} --port ${PORT} --output-dir ${OUTPUT_DIR} --prefix ${PREFIX} --no-read-message ${NO_READ_MESSAGE} --success-length ${SUCCESS_LENGTH}"
+SCANNER_RECEIVER_ARGS="--host ${HOST} --port ${PORT} --output-dir ${OUTPUT_DIR} --prefix ${PREFIX} --no-read-message ${NO_READ_MESSAGE} --success-length ${SUCCESS_LENGTH} --max-barcode-chars ${MAX_BARCODE_CHARS} --max-clients ${MAX_CLIENTS} --frame-idle-timeout ${FRAME_IDLE_TIMEOUT} --client-idle-timeout ${CLIENT_IDLE_TIMEOUT} --shutdown-timeout ${SHUTDOWN_TIMEOUT}"
 CONFIG
     chmod 0644 "${ENV_FILE}"
 else
