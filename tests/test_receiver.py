@@ -15,8 +15,8 @@ from industrial_scanner_logger.receiver import DailyCsvLogger, clean_barcode  # 
 
 
 class ReceiverTests(unittest.TestCase):
-    def test_project_version_is_1_0_0(self):
-        self.assertEqual(__version__, "1.0.0")
+    def test_project_version_is_1_0_1(self):
+        self.assertEqual(__version__, "1.0.1")
 
     def test_clean_barcode_removes_scanner_line_noise(self):
         self.assertEqual(clean_barcode("\x0012345\r\n"), "12345")

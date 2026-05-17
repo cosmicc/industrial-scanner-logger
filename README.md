@@ -2,7 +2,7 @@
 
 Python 3 TCP receiver and CSV logger for a Honeywell HF811 industrial scanner.
 
-Current release: `v1.0.0`
+Current release: `v1.0.1`
 
 The current receiver listens for scanner TCP connections, classifies scan events, and writes daily CSV logs. It is packaged so the project can be installed, tested, versioned, and uploaded to GitHub as it grows.
 

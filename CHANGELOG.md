@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.0.1 - 2026-05-16
+
+- Fix Ubuntu service installer copy step to avoid `tar: .: file changed as we read it`.
+
 ## 1.0.0 - 2026-05-16
 
 - Add baseline Python project structure.

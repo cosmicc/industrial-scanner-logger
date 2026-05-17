@@ -49,6 +49,50 @@ require_command() {
     fi
 }
 
+copy_project_tree() {
+    python3 - "$1" "$2" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+
+
+source = Path(sys.argv[1]).resolve()
+destination = Path(sys.argv[2]).resolve()
+
+excluded_names = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".test-output",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "scanner-logs",
+}
+
+
+def ignore_names(_directory, names):
+    ignored = set()
+
+    for name in names:
+        if name in excluded_names:
+            ignored.add(name)
+        elif name.endswith(".egg-info"):
+            ignored.add(name)
+        elif name.endswith(".pyc"):
+            ignored.add(name)
+        elif ".backup-" in name:
+            ignored.add(name)
+
+    return ignored
+
+
+shutil.copytree(source, destination, dirs_exist_ok=True, ignore=ignore_names)
+PY
+}
+
 escape_sed_replacement() {
     printf "%s" "$1" | sed "s/[&|]/\\\\&/g"
 }
@@ -139,7 +183,6 @@ PYTHON_BIN="${INSTALL_DIR}/.venv/bin/python"
 
 require_command python3
 require_command systemctl
-require_command tar
 require_command sed
 
 if ! python3 -m venv --help >/dev/null 2>&1; then
@@ -186,18 +229,27 @@ if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
 fi
 
 install -d -o root -g root -m 0755 "${INSTALL_DIR}"
+INSTALL_DIR_REAL="$(cd -- "${INSTALL_DIR}" && pwd -P)"
 
-tar \
-    --exclude=".git" \
-    --exclude=".venv" \
-    --exclude="__pycache__" \
-    --exclude="*.pyc" \
-    --exclude=".pytest_cache" \
-    --exclude=".ruff_cache" \
-    --exclude=".test-output" \
-    --exclude="scanner-logs" \
-    -C "${PROJECT_ROOT}" \
-    -cf - . | tar -C "${INSTALL_DIR}" -xf -
+if [[ "${INSTALL_DIR_REAL}" == "${PROJECT_ROOT}" ]]; then
+    echo "Using project checkout in place as install directory: ${INSTALL_DIR_REAL}"
+elif [[ "${INSTALL_DIR_REAL}/" == "${PROJECT_ROOT}/"* ]]; then
+    cat >&2 <<ERROR
+Install directory cannot be inside the project checkout.
+
+Project checkout:
+  ${PROJECT_ROOT}
+
+Install directory:
+  ${INSTALL_DIR_REAL}
+
+Use the default /opt/industrial-scanner-logger install path or another directory
+outside the checkout.
+ERROR
+    exit 1
+else
+    copy_project_tree "${PROJECT_ROOT}" "${INSTALL_DIR_REAL}"
+fi
 
 python3 -m venv "${INSTALL_DIR}/.venv"
 chown -R root:root "${INSTALL_DIR}"
