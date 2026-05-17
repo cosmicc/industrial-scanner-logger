@@ -5,22 +5,24 @@ HF811 Daily FedEx Tracking TCP Listener
 Creates a new dated CSV file each day.
 
 Daily scan CSV format:
-    date,time,status,tracking
+    date,time,scanner_id,status,tracking
 
 Failed scans CSV:
     /scanner-logs/failed_scans.csv
 
 Failed scans CSV format:
-    date,time,failed_barcode
+    date,time,scanner_id,failed_barcode
 
 Daily totals CSV:
     /scanner-logs/scan_totals.csv
 
 Daily totals CSV format:
-    date,total_events,successful_scans,failed_scans
+    date,scanner_id,total_events,successful_scans,failed_scans
 
 Console output format:
-    Event:<number> Success:<number> Failed:<number> Status:<SUCCESS|FAILED> Time:<time> Barcode:<barcode>
+    Event:<number> Success:<number> Failed:<number> Scanner:<id>
+    ScannerEvent:<number> ScannerSuccess:<number> ScannerFailed:<number>
+    Status:<SUCCESS|FAILED> Time:<time> Barcode:<barcode>
 
 Success rule:
     Barcode must be exactly 34 numeric digits.
@@ -54,9 +56,12 @@ DEFAULT_CLIENT_IDLE_TIMEOUT_SECONDS = 300.0
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 LOG_BARCODE_PREVIEW_CHARS = 120
 MIN_MAX_BARCODE_CHARS = 64
+UNKNOWN_SCANNER_ID = "UNKNOWN"
+ALL_SCANNERS_ID = "ALL"
 
 SAFE_FILE_PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+SCANNER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
 
 def clean_barcode(raw: str) -> str:
@@ -114,6 +119,41 @@ def truncate_for_log(value: str, max_chars: int = LOG_BARCODE_PREVIEW_CHARS) -> 
     return f"{display_value[:max_chars]}...[truncated {omitted} chars]"
 
 
+def normalize_scanner_id(scanner_id: str) -> str:
+    scanner_id = clean_barcode(str(scanner_id))
+
+    if not scanner_id:
+        return UNKNOWN_SCANNER_ID
+
+    if SCANNER_ID_RE.match(scanner_id):
+        return scanner_id
+
+    return UNKNOWN_SCANNER_ID
+
+
+def scanner_id_from_addr(addr) -> str:
+    """
+    Identify scanners by the last octet of their IPv4 address.
+    Example: 10.10.10.20 -> 20.
+    """
+    try:
+        host = str(addr[0])
+    except (IndexError, TypeError):
+        return UNKNOWN_SCANNER_ID
+
+    octets = host.split(".")
+
+    if len(octets) == 4 and all(octet.isdigit() for octet in octets):
+        last_octet = int(octets[-1])
+
+        if 0 <= last_octet <= 255 and all(
+            0 <= int(octet) <= 255 for octet in octets
+        ):
+            return str(last_octet)
+
+    return UNKNOWN_SCANNER_ID
+
+
 class DailyCsvLogger:
     def __init__(
         self,
@@ -148,7 +188,8 @@ class DailyCsvLogger:
         self.current_date = None
         self.current_csv_path = None
 
-        self.seen_success_barcodes = set()
+        self.seen_success_barcodes_by_scanner = {}
+        self.scanner_counts = {}
 
         self.event_count = 0
         self.success_count = 0
@@ -185,6 +226,48 @@ class DailyCsvLogger:
             return barcode
 
         return oversized_scan_marker(len(barcode))
+
+    def _new_counts(self):
+        return {
+            "total_events": 0,
+            "successful_scans": 0,
+            "failed_scans": 0,
+        }
+
+    def _get_counts(self, scanner_id: str):
+        scanner_id = normalize_scanner_id(scanner_id)
+        return self.scanner_counts.setdefault(scanner_id, self._new_counts())
+
+    def _get_seen_successes(self, scanner_id: str):
+        scanner_id = normalize_scanner_id(scanner_id)
+        return self.seen_success_barcodes_by_scanner.setdefault(scanner_id, set())
+
+    def _recalculate_total_counts(self):
+        self.event_count = sum(
+            counts["total_events"] for counts in self.scanner_counts.values()
+        )
+        self.success_count = sum(
+            counts["successful_scans"] for counts in self.scanner_counts.values()
+        )
+        self.failed_count = sum(
+            counts["failed_scans"] for counts in self.scanner_counts.values()
+        )
+
+    def _build_all_scanners_counts(self):
+        return self._aggregate_counts(self.scanner_counts)
+
+    def _aggregate_counts(self, counts_by_scanner):
+        return {
+            "total_events": sum(
+                counts["total_events"] for counts in counts_by_scanner.values()
+            ),
+            "successful_scans": sum(
+                counts["successful_scans"] for counts in counts_by_scanner.values()
+            ),
+            "failed_scans": sum(
+                counts["failed_scans"] for counts in counts_by_scanner.values()
+            ),
+        }
 
     def _parse_nonnegative_count(self, row, field_name: str, date_str: str):
         raw_value = row.get(field_name) or 0
@@ -247,9 +330,9 @@ class DailyCsvLogger:
             date,time,tracking
 
         it is migrated to:
-            date,time,status,tracking
+            date,time,scanner_id,status,tracking
         """
-        expected_header = ["date", "time", "status", "tracking"]
+        expected_header = ["date", "time", "scanner_id", "status", "tracking"]
 
         if not csv_path.exists() or csv_path.stat().st_size == 0:
             with csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -279,6 +362,9 @@ class DailyCsvLogger:
                 for row in reader:
                     date_str = clean_barcode(row.get("date", ""))
                     time_str = clean_barcode(row.get("time", ""))
+                    scanner_id = normalize_scanner_id(
+                        row.get("scanner_id", "") or UNKNOWN_SCANNER_ID
+                    )
                     tracking = clean_barcode(
                         row.get("tracking", "") or row.get("barcode", "")
                     )
@@ -293,7 +379,13 @@ class DailyCsvLogger:
                         status = self._classify_scan(tracking)
 
                     csv_tracking = "" if tracking == self.no_read_message else tracking
-                    writer.writerow([date_str, time_str, status, csv_tracking])
+                    writer.writerow([
+                        date_str,
+                        time_str,
+                        scanner_id,
+                        status,
+                        csv_tracking,
+                    ])
 
             temp_path.replace(csv_path)
 
@@ -311,11 +403,17 @@ class DailyCsvLogger:
             date,total_unique_scans
 
         it is migrated to:
-            date,total_events,successful_scans,failed_scans
+            date,scanner_id,total_events,successful_scans,failed_scans
 
-        Old total_unique_scans values are treated as successful_scans with failed_scans=0.
+        Old total_unique_scans values are treated as ALL scanner totals with failed_scans=0.
         """
-        expected_header = ["date", "total_events", "successful_scans", "failed_scans"]
+        expected_header = [
+            "date",
+            "scanner_id",
+            "total_events",
+            "successful_scans",
+            "failed_scans",
+        ]
 
         if not self.totals_path.exists() or self.totals_path.stat().st_size == 0:
             with self.totals_path.open("w", newline="", encoding="utf-8") as f:
@@ -344,6 +442,9 @@ class DailyCsvLogger:
 
                 for row in reader:
                     date_str = clean_barcode(row.get("date", ""))
+                    scanner_id = normalize_scanner_id(
+                        row.get("scanner_id", "") or ALL_SCANNERS_ID
+                    )
 
                     if not DATE_RE.match(date_str):
                         continue
@@ -372,7 +473,13 @@ class DailyCsvLogger:
                         if None in {total_events, successful, failed}:
                             continue
 
-                    writer.writerow([date_str, total_events, successful, failed])
+                    writer.writerow([
+                        date_str,
+                        scanner_id,
+                        total_events,
+                        successful,
+                        failed,
+                    ])
 
             temp_path.replace(self.totals_path)
 
@@ -383,7 +490,7 @@ class DailyCsvLogger:
         print(f"Migrated totals CSV header: {self.totals_path}")
 
     def _ensure_failed_scans_file(self):
-        expected_header = ["date", "time", "failed_barcode"]
+        expected_header = ["date", "time", "scanner_id", "failed_barcode"]
 
         if not self.failed_scans_path.exists() or self.failed_scans_path.stat().st_size == 0:
             with self.failed_scans_path.open("w", newline="", encoding="utf-8") as f:
@@ -413,6 +520,9 @@ class DailyCsvLogger:
                 for row in reader:
                     date_str = clean_barcode(row.get("date", ""))
                     time_str = clean_barcode(row.get("time", ""))
+                    scanner_id = normalize_scanner_id(
+                        row.get("scanner_id", "") or UNKNOWN_SCANNER_ID
+                    )
                     failed_barcode = clean_barcode(
                         row.get("failed_barcode", "")
                         or row.get("tracking", "")
@@ -421,7 +531,7 @@ class DailyCsvLogger:
                     failed_barcode = self._normalize_barcode_for_storage(
                         failed_barcode
                     )
-                    writer.writerow([date_str, time_str, failed_barcode])
+                    writer.writerow([date_str, time_str, scanner_id, failed_barcode])
 
             temp_path.replace(self.failed_scans_path)
 
@@ -435,18 +545,20 @@ class DailyCsvLogger:
         """
         Load today's CSV state after restart so console counters resume correctly.
         """
-        seen_success = set()
-        event_count = 0
-        success_count = 0
-        failed_count = 0
+        seen_success_by_scanner = {}
+        counts_by_scanner = {}
 
         if not csv_path.exists():
-            return seen_success, event_count, success_count, failed_count
+            return seen_success_by_scanner, counts_by_scanner
 
         with csv_path.open("r", newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
 
             for row in reader:
+                scanner_id = normalize_scanner_id(
+                    row.get("scanner_id", "") or UNKNOWN_SCANNER_ID
+                )
+                counts = counts_by_scanner.setdefault(scanner_id, self._new_counts())
                 tracking = clean_barcode(
                     row.get("tracking", "") or row.get("barcode", "")
                 )
@@ -461,32 +573,36 @@ class DailyCsvLogger:
                 elif status not in {"SUCCESS", "FAILED"}:
                     status = self._classify_scan(tracking)
 
-                event_count += 1
+                counts["total_events"] += 1
 
                 if status == "SUCCESS":
-                    success_count += 1
+                    counts["successful_scans"] += 1
                     if tracking:
-                        seen_success.add(tracking)
+                        seen_success_by_scanner.setdefault(scanner_id, set()).add(
+                            tracking
+                        )
                 else:
-                    failed_count += 1
+                    counts["failed_scans"] += 1
 
-        return seen_success, event_count, success_count, failed_count
+        return seen_success_by_scanner, counts_by_scanner
 
     def _count_csv_day(self, csv_path: Path):
         """
         Count total, success, and failed rows in a dated CSV.
         """
         if not csv_path.exists():
-            return 0, 0, 0
+            return {}
 
-        event_count = 0
-        success_count = 0
-        failed_count = 0
+        counts_by_scanner = {}
 
         with csv_path.open("r", newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
 
             for row in reader:
+                scanner_id = normalize_scanner_id(
+                    row.get("scanner_id", "") or UNKNOWN_SCANNER_ID
+                )
+                counts = counts_by_scanner.setdefault(scanner_id, self._new_counts())
                 tracking = clean_barcode(
                     row.get("tracking", "") or row.get("barcode", "")
                 )
@@ -501,55 +617,86 @@ class DailyCsvLogger:
                 elif status not in {"SUCCESS", "FAILED"}:
                     status = self._classify_scan(tracking)
 
-                event_count += 1
+                counts["total_events"] += 1
 
                 if status == "SUCCESS":
-                    success_count += 1
+                    counts["successful_scans"] += 1
                 else:
-                    failed_count += 1
+                    counts["failed_scans"] += 1
 
-        return event_count, success_count, failed_count
+        return counts_by_scanner
 
-    def _existing_total_dates(self):
-        dates = set()
+    def _existing_total_keys(self):
+        keys = set()
 
         if not self.totals_path.exists():
-            return dates
+            return keys
 
         with self.totals_path.open("r", newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
 
             for row in reader:
                 date_part = clean_barcode(row.get("date", ""))
+                scanner_id = normalize_scanner_id(
+                    row.get("scanner_id", "") or ALL_SCANNERS_ID
+                )
 
                 if DATE_RE.match(date_part):
-                    dates.add(date_part)
+                    keys.add((date_part, scanner_id))
 
-        return dates
+        return keys
 
     def _append_scan_total(
         self,
         date_str: str,
+        scanner_id: str,
         total_events: int,
         successful_scans: int,
         failed_scans: int,
     ):
         """
-        Append one completed day's totals to scan_totals.csv.
-        Avoids duplicate date entries.
+        Append one completed scanner/day total to scan_totals.csv.
+        Avoids duplicate date/scanner entries.
         """
-        existing_dates = self._existing_total_dates()
+        scanner_id = normalize_scanner_id(scanner_id)
+        existing_keys = self._existing_total_keys()
 
-        if date_str in existing_dates:
+        if (date_str, scanner_id) in existing_keys:
             return
 
         with self.totals_path.open("a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow([date_str, total_events, successful_scans, failed_scans])
+            writer.writerow([
+                date_str,
+                scanner_id,
+                total_events,
+                successful_scans,
+                failed_scans,
+            ])
 
         print(
-            f"Daily total written: {date_str},"
+            f"Daily total written: {date_str},{scanner_id},"
             f"{total_events},{successful_scans},{failed_scans}"
+        )
+
+    def _append_scan_totals_for_day(self, date_str: str, counts_by_scanner):
+        for scanner_id in sorted(counts_by_scanner):
+            counts = counts_by_scanner[scanner_id]
+            self._append_scan_total(
+                date_str,
+                scanner_id,
+                counts["total_events"],
+                counts["successful_scans"],
+                counts["failed_scans"],
+            )
+
+        aggregate_counts = self._aggregate_counts(counts_by_scanner)
+        self._append_scan_total(
+            date_str,
+            ALL_SCANNERS_ID,
+            aggregate_counts["total_events"],
+            aggregate_counts["successful_scans"],
+            aggregate_counts["failed_scans"],
         )
 
     def _write_missing_prior_totals(self):
@@ -558,7 +705,6 @@ class DailyCsvLogger:
         have an entry in scan_totals.csv.
         """
         today = self._today_string()
-        existing_dates = self._existing_total_dates()
 
         pattern = f"{self.file_prefix}_*.csv"
 
@@ -579,19 +725,10 @@ class DailyCsvLogger:
             if file_date >= today:
                 continue
 
-            if file_date in existing_dates:
-                continue
-
             self._ensure_daily_csv_header(csv_path)
 
-            total_events, successful_scans, failed_scans = self._count_csv_day(csv_path)
-
-            self._append_scan_total(
-                file_date,
-                total_events,
-                successful_scans,
-                failed_scans,
-            )
+            counts_by_scanner = self._count_csv_day(csv_path)
+            self._append_scan_totals_for_day(file_date, counts_by_scanner)
 
     def _rotate_if_needed(self):
         """
@@ -606,12 +743,7 @@ class DailyCsvLogger:
 
         # If crossing from an existing day to a new day, finalize the prior day.
         if self.current_date is not None:
-            self._append_scan_total(
-                self.current_date,
-                self.event_count,
-                self.success_count,
-                self.failed_count,
-            )
+            self._append_scan_totals_for_day(self.current_date, self.scanner_counts)
 
         self.current_date = today
         self.current_csv_path = self._csv_path_for_date(today)
@@ -619,32 +751,39 @@ class DailyCsvLogger:
         self._ensure_daily_csv_header(self.current_csv_path)
 
         (
-            self.seen_success_barcodes,
-            self.event_count,
-            self.success_count,
-            self.failed_count,
+            self.seen_success_barcodes_by_scanner,
+            self.scanner_counts,
         ) = self._load_existing_day_state(self.current_csv_path)
+        self._recalculate_total_counts()
 
         print("=" * 80)
         print(f"Now logging to: {self.current_csv_path.resolve()}")
         print(f"Starting event count: {self.event_count}")
         print(f"Starting successful scan count: {self.success_count}")
         print(f"Starting failed scan count: {self.failed_count}")
+        print(f"Starting scanner count: {len(self.scanner_counts)}")
         print(f"Daily totals file: {self.totals_path.resolve()}")
         print(f"Failed scans file: {self.failed_scans_path.resolve()}")
         print(f"Success rule: exactly {self.success_length} numeric digits")
         print("=" * 80)
 
-    def _append_failed_scan(self, date_str: str, time_str: str, failed_barcode: str):
+    def _append_failed_scan(
+        self,
+        date_str: str,
+        time_str: str,
+        scanner_id: str,
+        failed_barcode: str,
+    ):
         """
         Append failed scan to failed_scans.csv forever.
         This file does not roll over.
         """
         with self.failed_scans_path.open("a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow([date_str, time_str, failed_barcode])
+            writer.writerow([date_str, time_str, scanner_id, failed_barcode])
 
-    def write_scan_event(self, raw_barcode: str):
+    def write_scan_event(self, raw_barcode: str, scanner_id: str = UNKNOWN_SCANNER_ID):
+        scanner_id = normalize_scanner_id(scanner_id)
         barcode = self._normalize_barcode_for_storage(clean_barcode(raw_barcode))
 
         if not barcode:
@@ -654,18 +793,26 @@ class DailyCsvLogger:
             self._rotate_if_needed()
 
             status = self._classify_scan(barcode)
+            scanner_counts = self._get_counts(scanner_id)
+            seen_success_barcodes = self._get_seen_successes(scanner_id)
 
             if status == "SUCCESS":
-                if barcode in self.seen_success_barcodes and not LOG_DUPLICATE_SUCCESS_SCANS:
-                    print(f"Duplicate ignored - {truncate_for_log(barcode)}")
+                if barcode in seen_success_barcodes and not LOG_DUPLICATE_SUCCESS_SCANS:
+                    print(
+                        f"Duplicate ignored - Scanner:{scanner_id} "
+                        f"Barcode:{truncate_for_log(barcode)}"
+                    )
                     return
 
-                self.seen_success_barcodes.add(barcode)
+                seen_success_barcodes.add(barcode)
+                scanner_counts["successful_scans"] += 1
                 self.success_count += 1
 
             else:
+                scanner_counts["failed_scans"] += 1
                 self.failed_count += 1
 
+            scanner_counts["total_events"] += 1
             self.event_count += 1
 
             date_str = self.current_date
@@ -678,17 +825,21 @@ class DailyCsvLogger:
 
             with self.current_csv_path.open("a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                writer.writerow([date_str, time_str, status, csv_tracking])
+                writer.writerow([date_str, time_str, scanner_id, status, csv_tracking])
 
             # Forever-appended failed scan CSV:
             # Keep the no-read message visible here so the failure is explicit.
             if status == "FAILED":
-                self._append_failed_scan(date_str, time_str, barcode)
+                self._append_failed_scan(date_str, time_str, scanner_id, barcode)
 
             print(
                 f"Event:{self.event_count} "
                 f"Success:{self.success_count} "
                 f"Failed:{self.failed_count} "
+                f"Scanner:{scanner_id} "
+                f"ScannerEvent:{scanner_counts['total_events']} "
+                f"ScannerSuccess:{scanner_counts['successful_scans']} "
+                f"ScannerFailed:{scanner_counts['failed_scans']} "
                 f"Status:{status} "
                 f"Time:{time_str} "
                 f"Barcode:{truncate_for_log(barcode)}"
@@ -706,14 +857,18 @@ def write_client_scan(
     logger: DailyCsvLogger,
     barcode: str,
     addr,
+    scanner_id: str,
     fatal_event: threading.Event,
 ) -> bool:
     try:
-        logger.write_scan_event(barcode)
+        logger.write_scan_event(barcode, scanner_id)
         return True
 
     except Exception as exc:
-        print(f"Fatal logging error for {address_label(addr)}: {exc}")
+        print(
+            f"Fatal logging error for {address_label(addr)} "
+            f"ScannerID:{scanner_id}: {exc}"
+        )
         fatal_event.set()
         return False
 
@@ -728,7 +883,8 @@ def handle_client(
     frame_idle_timeout: float,
     client_idle_timeout: float,
 ):
-    print(f"Scanner connected from {address_label(addr)}")
+    scanner_id = scanner_id_from_addr(addr)
+    print(f"Scanner connected from {address_label(addr)} ScannerID:{scanner_id}")
 
     buffer = ""
     last_data_time = time.monotonic()
@@ -743,7 +899,10 @@ def handle_client(
                 data = conn.recv(4096)
 
                 if not data:
-                    print(f"Scanner disconnected from {address_label(addr)}")
+                    print(
+                        f"Scanner disconnected from {address_label(addr)} "
+                        f"ScannerID:{scanner_id}"
+                    )
                     break
 
                 last_data_time = time.monotonic()
@@ -766,21 +925,29 @@ def handle_client(
                         marker = oversized_scan_marker(len(barcode))
                         print(
                             f"Oversized barcode frame from {address_label(addr)} "
-                            f"rejected at {len(barcode)} characters"
+                            f"ScannerID:{scanner_id} rejected at {len(barcode)} "
+                            "characters"
                         )
-                        write_client_scan(logger, marker, addr, fatal_event)
+                        write_client_scan(logger, marker, addr, scanner_id, fatal_event)
                         return
 
-                    if not write_client_scan(logger, barcode, addr, fatal_event):
+                    if not write_client_scan(
+                        logger,
+                        barcode,
+                        addr,
+                        scanner_id,
+                        fatal_event,
+                    ):
                         return
 
                 if len(buffer) > max_barcode_chars:
                     marker = oversized_scan_marker(len(buffer))
                     print(
                         f"Oversized barcode frame from {address_label(addr)} "
-                        f"rejected at {len(buffer)} characters"
+                        f"ScannerID:{scanner_id} rejected at {len(buffer)} "
+                        "characters"
                     )
-                    write_client_scan(logger, marker, addr, fatal_event)
+                    write_client_scan(logger, marker, addr, scanner_id, fatal_event)
                     return
 
             except socket.timeout:
@@ -788,20 +955,35 @@ def handle_client(
                 # If data arrived but no CR/LF arrived after it, treat the idle
                 # buffer as one complete barcode/event.
                 if buffer:
-                    if not write_client_scan(logger, buffer, addr, fatal_event):
+                    if not write_client_scan(
+                        logger,
+                        buffer,
+                        addr,
+                        scanner_id,
+                        fatal_event,
+                    ):
                         return
                     buffer = ""
 
                 elif time.monotonic() - last_data_time >= client_idle_timeout:
-                    print(f"Scanner idle timeout from {address_label(addr)}")
+                    print(
+                        f"Scanner idle timeout from {address_label(addr)} "
+                        f"ScannerID:{scanner_id}"
+                    )
                     break
 
             except ConnectionResetError:
-                print(f"Scanner connection reset from {address_label(addr)}")
+                print(
+                    f"Scanner connection reset from {address_label(addr)} "
+                    f"ScannerID:{scanner_id}"
+                )
                 break
 
             except OSError as exc:
-                print(f"Scanner socket error from {address_label(addr)}: {exc}")
+                print(
+                    f"Scanner socket error from {address_label(addr)} "
+                    f"ScannerID:{scanner_id}: {exc}"
+                )
                 break
 
 
@@ -974,9 +1156,11 @@ def main():
                 active_count = len(active_threads)
 
             if active_count >= args.max_clients:
+                scanner_id = scanner_id_from_addr(addr)
                 print(
                     f"Rejecting scanner connection from {address_label(addr)}: "
-                    f"maximum clients reached ({args.max_clients})"
+                    f"ScannerID:{scanner_id} maximum clients reached "
+                    f"({args.max_clients})"
                 )
                 conn.close()
                 continue

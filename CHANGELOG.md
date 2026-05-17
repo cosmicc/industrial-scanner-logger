@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.1.0 - 2026-05-17
+
+- Add scanner ID column to daily scan and failed scan CSVs.
+- Identify scanners by the last octet of their IPv4 address.
+- Track duplicate successful scans independently per scanner.
+- Record daily totals per scanner plus an `ALL` aggregate row.
+
 ## 1.0.2 - 2026-05-17
 
 - Bound scanner frame size, concurrent clients, idle clients, and shutdown waits.

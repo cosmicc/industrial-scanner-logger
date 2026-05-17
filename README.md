@@ -2,7 +2,7 @@
 
 Python 3 TCP receiver and CSV logger for a Honeywell HF811 industrial scanner.
 
-Current release: `v1.0.2`
+Current release: `v1.1.0`
 
 The current receiver listens for scanner TCP connections, classifies scan events, and writes daily CSV logs. It is packaged so the project can be installed, tested, versioned, and uploaded to GitHub as it grows.
 
@@ -11,10 +11,12 @@ The current receiver listens for scanner TCP connections, classifies scan events
 - Listens on TCP port `55256` by default.
 - Writes one dated scan CSV per day.
 - Writes failed scans to `failed_scans.csv`.
-- Writes completed daily totals to `scan_totals.csv`.
+- Writes completed daily totals per scanner and per day to `scan_totals.csv`.
 - Treats a scan as `SUCCESS` only when the barcode is exactly 34 numeric digits.
 - Treats blank scans, the configured no-read message, wrong lengths, and non-numeric values as `FAILED`.
-- Ignores duplicate successful tracking numbers during the same day by default.
+- Identifies each scanner by the last octet of its IPv4 address.
+- Ignores duplicate successful tracking numbers on the same scanner during the same day by default.
+- Allows the same package tracking number to be logged by different scanners.
 
 ## Requirements
 
@@ -116,20 +118,24 @@ Site_Shipped_Tracking_2026-05-16.csv
 Daily scan CSV columns:
 
 ```text
-date,time,status,tracking
+date,time,scanner_id,status,tracking
 ```
 
 Failed scan CSV columns:
 
 ```text
-date,time,failed_barcode
+date,time,scanner_id,failed_barcode
 ```
 
 Daily totals CSV columns:
 
 ```text
-date,total_events,successful_scans,failed_scans
+date,scanner_id,total_events,successful_scans,failed_scans
 ```
+
+The `scanner_id` is the last octet of the scanner IP address. For example,
+scanner `10.10.10.20` is recorded as scanner `20`. `scan_totals.csv` includes
+one row per scanner plus an `ALL` row for the full day.
 
 ## Development
 
