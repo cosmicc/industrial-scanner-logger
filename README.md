@@ -2,7 +2,7 @@
 
 Python 3 TCP receiver and CSV logger for a Honeywell HF811 industrial scanner.
 
-Current release: `v1.1.0`
+Current release: `v1.1.1`
 
 The current receiver listens for scanner TCP connections, classifies scan events, and writes daily CSV logs. It is packaged so the project can be installed, tested, versioned, and uploaded to GitHub as it grows.
 
@@ -12,6 +12,7 @@ The current receiver listens for scanner TCP connections, classifies scan events
 - Writes one dated scan CSV per day.
 - Writes failed scans to `failed_scans.csv`.
 - Writes completed daily totals per scanner and per day to `scan_totals.csv`.
+- Writes troubleshooting events to `/var/log/industrial-scanner-logger.log` when installed as a service.
 - Treats a scan as `SUCCESS` only when the barcode is exactly 34 numeric digits.
 - Treats blank scans, the configured no-read message, wrong lengths, and non-numeric values as `FAILED`.
 - Identifies each scanner by the last octet of its IPv4 address.
@@ -31,13 +32,17 @@ From the project folder:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
-scanner-tcp-receiver --output-dir ./scanner-logs
+scanner-tcp-receiver \
+  --output-dir ./scanner-logs \
+  --log-file ./scanner-logs/industrial-scanner-logger.log
 ```
 
 You can also run the compatibility script directly:
 
 ```bash
-python3 scanner_tcp_receiver.py --output-dir ./scanner-logs
+python3 scanner_tcp_receiver.py \
+  --output-dir ./scanner-logs \
+  --log-file ./scanner-logs/industrial-scanner-logger.log
 ```
 
 ## Common Options
@@ -54,7 +59,8 @@ scanner-tcp-receiver \
   --max-clients 8 \
   --frame-idle-timeout 0.25 \
   --client-idle-timeout 300 \
-  --shutdown-timeout 5
+  --shutdown-timeout 5 \
+  --log-file /var/log/industrial-scanner-logger.log
 ```
 
 Check the installed receiver version:
@@ -79,7 +85,7 @@ Receiver options are service-level configuration in:
 /etc/default/industrial-scanner-logger
 ```
 
-Edit that file to change the bind address, TCP port, output directory, CSV prefix, no-read text, success length, or receiver safety limits:
+Edit that file to change the bind address, TCP port, output directory, CSV prefix, no-read text, success length, receiver safety limits, or troubleshooting log path:
 
 ```bash
 sudo nano /etc/default/industrial-scanner-logger
@@ -91,9 +97,16 @@ Useful service commands:
 ```bash
 sudo systemctl status industrial-scanner-logger
 sudo journalctl -u industrial-scanner-logger -f
+scripts/live-scanner-log
+sudo tail -f /var/log/industrial-scanner-logger.log
 sudo systemctl restart industrial-scanner-logger
 sudo systemctl stop industrial-scanner-logger
 ```
+
+The troubleshooting log records service startup, version, configuration, scanner
+connections and disconnections, warnings, and errors. It does not write the raw
+barcode or tracking data received from scanners; that scanner data remains in
+the CSV outputs.
 
 Uninstall the service while preserving CSV logs and service defaults:
 

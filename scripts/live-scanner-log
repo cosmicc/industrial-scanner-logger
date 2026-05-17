@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+sudo journalctl -u industrial-scanner-logger -f

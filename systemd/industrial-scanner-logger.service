@@ -10,6 +10,7 @@ User=@SERVICE_USER@
 Group=@SERVICE_GROUP@
 WorkingDirectory=@INSTALL_DIR@
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-@ENV_FILE@
 ExecStart=@PYTHON_BIN@ @INSTALL_DIR@/scanner_tcp_receiver.py $SCANNER_RECEIVER_ARGS
 Restart=on-failure

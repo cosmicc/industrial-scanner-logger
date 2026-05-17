@@ -7,6 +7,7 @@ SERVICE_USER="${SERVICE_USER:-scannerlogger}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
 ENV_FILE="${ENV_FILE:-/etc/default/${SERVICE_NAME}}"
 OUTPUT_DIR="${OUTPUT_DIR:-/scanner-logs}"
+LOG_FILE="${LOG_FILE:-/var/log/industrial-scanner-logger.log}"
 PURGE="${PURGE:-0}"
 
 usage() {
@@ -22,6 +23,7 @@ Options:
   --group GROUP          service group to remove with --purge [${SERVICE_GROUP}]
   --env-file PATH        service defaults file [${ENV_FILE}]
   --output-dir DIR       scanner CSV output directory [${OUTPUT_DIR}]
+  --log-file PATH        troubleshooting log file [${LOG_FILE}]
   --purge                also remove defaults file, log directory, and service user/group
   -h, --help             show this help
 
@@ -56,6 +58,10 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_DIR="$2"
             shift 2
             ;;
+        --log-file)
+            LOG_FILE="$2"
+            shift 2
+            ;;
         --purge)
             PURGE=1
             shift
@@ -78,8 +84,8 @@ if [[ "${EUID}" -ne 0 ]]; then
         exit 1
     fi
 
-    export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP ENV_FILE OUTPUT_DIR PURGE
-    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,ENV_FILE,OUTPUT_DIR,PURGE "$0"
+    export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP ENV_FILE OUTPUT_DIR LOG_FILE PURGE
+    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,ENV_FILE,OUTPUT_DIR,LOG_FILE,PURGE "$0"
 fi
 
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -98,6 +104,7 @@ fi
 
 if [[ "${PURGE}" -eq 1 ]]; then
     rm -f "${ENV_FILE}"
+    rm -f "${LOG_FILE}"
     rm -rf "${OUTPUT_DIR}"
 
     if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
@@ -123,6 +130,7 @@ if [[ "${PURGE}" -eq 0 ]]; then
 Preserved:
   ${ENV_FILE}
   ${OUTPUT_DIR}
+  ${LOG_FILE}
 
 Run again with --purge to remove preserved config, logs, and the service user/group.
 KEPT

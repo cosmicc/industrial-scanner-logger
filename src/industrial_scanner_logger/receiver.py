@@ -34,9 +34,11 @@ Example daily CSV files:
 
 import argparse
 import csv
+import logging
 import re
 import shutil
 import socket
+import sys
 import threading
 import time
 from datetime import datetime
@@ -54,6 +56,7 @@ DEFAULT_MAX_CLIENTS = 8
 DEFAULT_FRAME_IDLE_TIMEOUT_SECONDS = 0.25
 DEFAULT_CLIENT_IDLE_TIMEOUT_SECONDS = 300.0
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+DEFAULT_LOG_FILE = "/var/log/industrial-scanner-logger.log"
 LOG_BARCODE_PREVIEW_CHARS = 120
 MIN_MAX_BARCODE_CHARS = 64
 UNKNOWN_SCANNER_ID = "UNKNOWN"
@@ -62,6 +65,61 @@ ALL_SCANNERS_ID = "ALL"
 SAFE_FILE_PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SCANNER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+SCRIPT_LOGGER = logging.getLogger("industrial_scanner_logger")
+SCRIPT_LOGGER.addHandler(logging.NullHandler())
+
+
+def _clear_script_logger_handlers():
+    for handler in list(SCRIPT_LOGGER.handlers):
+        SCRIPT_LOGGER.removeHandler(handler)
+        handler.close()
+
+
+def configure_script_logging(log_file: str = DEFAULT_LOG_FILE, console: bool = True):
+    """
+    Configure troubleshooting logs for startup, service, and connection events.
+
+    Scanner barcode data is intentionally not written through this logger.
+    """
+    _clear_script_logger_handlers()
+    SCRIPT_LOGGER.setLevel(logging.INFO)
+    SCRIPT_LOGGER.propagate = False
+
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    if console:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        SCRIPT_LOGGER.addHandler(console_handler)
+
+    if log_file:
+        try:
+            log_path = Path(log_file)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        except OSError as exc:
+            SCRIPT_LOGGER.warning(
+                "File logging disabled: could not open %s: %s",
+                log_file,
+                exc,
+            )
+        else:
+            file_handler.setFormatter(formatter)
+            SCRIPT_LOGGER.addHandler(file_handler)
+
+    return SCRIPT_LOGGER
+
+
+def reset_script_logging():
+    """
+    Reset script logging to a quiet state. Used by tests.
+    """
+    _clear_script_logger_handlers()
+    SCRIPT_LOGGER.addHandler(logging.NullHandler())
+    SCRIPT_LOGGER.propagate = False
 
 
 def clean_barcode(raw: str) -> str:
@@ -275,16 +333,20 @@ class DailyCsvLogger:
         try:
             value = int(raw_value)
         except (TypeError, ValueError):
-            print(
-                f"Skipping totals row for {date_str}: "
-                f"invalid {field_name}={raw_value!r}"
+            SCRIPT_LOGGER.warning(
+                "Skipping totals row for %s: invalid %s=%r",
+                date_str,
+                field_name,
+                raw_value,
             )
             return None
 
         if value < 0:
-            print(
-                f"Skipping totals row for {date_str}: "
-                f"invalid negative {field_name}={value}"
+            SCRIPT_LOGGER.warning(
+                "Skipping totals row for %s: invalid negative %s=%s",
+                date_str,
+                field_name,
+                value,
             )
             return None
 
@@ -294,7 +356,7 @@ class DailyCsvLogger:
         if path.exists():
             backup_path = path.with_name(f"{path.name}.backup-{self._timestamp_string()}")
             shutil.copy2(path, backup_path)
-            print(f"Backup created: {backup_path}")
+            SCRIPT_LOGGER.info("Backup created: %s", backup_path)
 
     def _classify_scan(self, barcode: str) -> str:
         """
@@ -393,7 +455,7 @@ class DailyCsvLogger:
             temp_path.unlink(missing_ok=True)
             raise
 
-        print(f"Migrated daily CSV header: {csv_path}")
+        SCRIPT_LOGGER.info("Migrated daily CSV header: %s", csv_path)
 
     def _ensure_totals_file(self):
         """
@@ -487,7 +549,7 @@ class DailyCsvLogger:
             temp_path.unlink(missing_ok=True)
             raise
 
-        print(f"Migrated totals CSV header: {self.totals_path}")
+        SCRIPT_LOGGER.info("Migrated totals CSV header: %s", self.totals_path)
 
     def _ensure_failed_scans_file(self):
         expected_header = ["date", "time", "scanner_id", "failed_barcode"]
@@ -539,7 +601,10 @@ class DailyCsvLogger:
             temp_path.unlink(missing_ok=True)
             raise
 
-        print(f"Migrated failed scans CSV header: {self.failed_scans_path}")
+        SCRIPT_LOGGER.info(
+            "Migrated failed scans CSV header: %s",
+            self.failed_scans_path,
+        )
 
     def _load_existing_day_state(self, csv_path: Path):
         """
@@ -674,9 +739,14 @@ class DailyCsvLogger:
                 failed_scans,
             ])
 
-        print(
-            f"Daily total written: {date_str},{scanner_id},"
-            f"{total_events},{successful_scans},{failed_scans}"
+        SCRIPT_LOGGER.info(
+            "Daily total written date=%s scanner_id=%s total_events=%s "
+            "successful_scans=%s failed_scans=%s",
+            date_str,
+            scanner_id,
+            total_events,
+            successful_scans,
+            failed_scans,
         )
 
     def _append_scan_totals_for_day(self, date_str: str, counts_by_scanner):
@@ -756,16 +826,17 @@ class DailyCsvLogger:
         ) = self._load_existing_day_state(self.current_csv_path)
         self._recalculate_total_counts()
 
-        print("=" * 80)
-        print(f"Now logging to: {self.current_csv_path.resolve()}")
-        print(f"Starting event count: {self.event_count}")
-        print(f"Starting successful scan count: {self.success_count}")
-        print(f"Starting failed scan count: {self.failed_count}")
-        print(f"Starting scanner count: {len(self.scanner_counts)}")
-        print(f"Daily totals file: {self.totals_path.resolve()}")
-        print(f"Failed scans file: {self.failed_scans_path.resolve()}")
-        print(f"Success rule: exactly {self.success_length} numeric digits")
-        print("=" * 80)
+        SCRIPT_LOGGER.info("Now logging to: %s", self.current_csv_path.resolve())
+        SCRIPT_LOGGER.info("Starting event count: %s", self.event_count)
+        SCRIPT_LOGGER.info("Starting successful scan count: %s", self.success_count)
+        SCRIPT_LOGGER.info("Starting failed scan count: %s", self.failed_count)
+        SCRIPT_LOGGER.info("Starting scanner count: %s", len(self.scanner_counts))
+        SCRIPT_LOGGER.info("Daily totals file: %s", self.totals_path.resolve())
+        SCRIPT_LOGGER.info("Failed scans file: %s", self.failed_scans_path.resolve())
+        SCRIPT_LOGGER.info(
+            "Success rule: exactly %s numeric digits",
+            self.success_length,
+        )
 
     def _append_failed_scan(
         self,
@@ -798,9 +869,14 @@ class DailyCsvLogger:
 
             if status == "SUCCESS":
                 if barcode in seen_success_barcodes and not LOG_DUPLICATE_SUCCESS_SCANS:
+                    SCRIPT_LOGGER.info(
+                        "Duplicate successful scan ignored scanner_id=%s",
+                        scanner_id,
+                    )
                     print(
                         f"Duplicate ignored - Scanner:{scanner_id} "
-                        f"Barcode:{truncate_for_log(barcode)}"
+                        f"Barcode:{truncate_for_log(barcode)}",
+                        flush=True,
                     )
                     return
 
@@ -832,6 +908,20 @@ class DailyCsvLogger:
             if status == "FAILED":
                 self._append_failed_scan(date_str, time_str, scanner_id, barcode)
 
+            SCRIPT_LOGGER.info(
+                "Scan event recorded scanner_id=%s status=%s total_events=%s "
+                "successful_scans=%s failed_scans=%s scanner_events=%s "
+                "scanner_successful_scans=%s scanner_failed_scans=%s",
+                scanner_id,
+                status,
+                self.event_count,
+                self.success_count,
+                self.failed_count,
+                scanner_counts["total_events"],
+                scanner_counts["successful_scans"],
+                scanner_counts["failed_scans"],
+            )
+
             print(
                 f"Event:{self.event_count} "
                 f"Success:{self.success_count} "
@@ -842,7 +932,8 @@ class DailyCsvLogger:
                 f"ScannerFailed:{scanner_counts['failed_scans']} "
                 f"Status:{status} "
                 f"Time:{time_str} "
-                f"Barcode:{truncate_for_log(barcode)}"
+                f"Barcode:{truncate_for_log(barcode)}",
+                flush=True,
             )
 
 
@@ -865,9 +956,11 @@ def write_client_scan(
         return True
 
     except Exception as exc:
-        print(
-            f"Fatal logging error for {address_label(addr)} "
-            f"ScannerID:{scanner_id}: {exc}"
+        SCRIPT_LOGGER.error(
+            "Fatal logging error address=%s scanner_id=%s error=%s",
+            address_label(addr),
+            scanner_id,
+            exc,
         )
         fatal_event.set()
         return False
@@ -884,7 +977,11 @@ def handle_client(
     client_idle_timeout: float,
 ):
     scanner_id = scanner_id_from_addr(addr)
-    print(f"Scanner connected from {address_label(addr)} ScannerID:{scanner_id}")
+    SCRIPT_LOGGER.info(
+        "Scanner connected address=%s scanner_id=%s",
+        address_label(addr),
+        scanner_id,
+    )
 
     buffer = ""
     last_data_time = time.monotonic()
@@ -899,9 +996,10 @@ def handle_client(
                 data = conn.recv(4096)
 
                 if not data:
-                    print(
-                        f"Scanner disconnected from {address_label(addr)} "
-                        f"ScannerID:{scanner_id}"
+                    SCRIPT_LOGGER.info(
+                        "Scanner disconnected address=%s scanner_id=%s",
+                        address_label(addr),
+                        scanner_id,
                     )
                     break
 
@@ -923,10 +1021,12 @@ def handle_client(
 
                     if len(barcode) > max_barcode_chars:
                         marker = oversized_scan_marker(len(barcode))
-                        print(
-                            f"Oversized barcode frame from {address_label(addr)} "
-                            f"ScannerID:{scanner_id} rejected at {len(barcode)} "
-                            "characters"
+                        SCRIPT_LOGGER.warning(
+                            "Oversized scanner frame rejected address=%s "
+                            "scanner_id=%s length=%s",
+                            address_label(addr),
+                            scanner_id,
+                            len(barcode),
                         )
                         write_client_scan(logger, marker, addr, scanner_id, fatal_event)
                         return
@@ -942,10 +1042,12 @@ def handle_client(
 
                 if len(buffer) > max_barcode_chars:
                     marker = oversized_scan_marker(len(buffer))
-                    print(
-                        f"Oversized barcode frame from {address_label(addr)} "
-                        f"ScannerID:{scanner_id} rejected at {len(buffer)} "
-                        "characters"
+                    SCRIPT_LOGGER.warning(
+                        "Oversized scanner frame rejected address=%s scanner_id=%s "
+                        "length=%s",
+                        address_label(addr),
+                        scanner_id,
+                        len(buffer),
                     )
                     write_client_scan(logger, marker, addr, scanner_id, fatal_event)
                     return
@@ -966,23 +1068,27 @@ def handle_client(
                     buffer = ""
 
                 elif time.monotonic() - last_data_time >= client_idle_timeout:
-                    print(
-                        f"Scanner idle timeout from {address_label(addr)} "
-                        f"ScannerID:{scanner_id}"
+                    SCRIPT_LOGGER.warning(
+                        "Scanner idle timeout address=%s scanner_id=%s",
+                        address_label(addr),
+                        scanner_id,
                     )
                     break
 
             except ConnectionResetError:
-                print(
-                    f"Scanner connection reset from {address_label(addr)} "
-                    f"ScannerID:{scanner_id}"
+                SCRIPT_LOGGER.warning(
+                    "Scanner connection reset address=%s scanner_id=%s",
+                    address_label(addr),
+                    scanner_id,
                 )
                 break
 
             except OSError as exc:
-                print(
-                    f"Scanner socket error from {address_label(addr)} "
-                    f"ScannerID:{scanner_id}: {exc}"
+                SCRIPT_LOGGER.error(
+                    "Scanner socket error address=%s scanner_id=%s error=%s",
+                    address_label(addr),
+                    scanner_id,
+                    exc,
                 )
                 break
 
@@ -1063,7 +1169,18 @@ def main():
         help="Seconds to wait for connected scanner threads during shutdown",
     )
 
+    parser.add_argument(
+        "--log-file",
+        default=DEFAULT_LOG_FILE,
+        help=(
+            "Troubleshooting log file for script events. Use an empty value to "
+            "disable file logging."
+        ),
+    )
+
     args = parser.parse_args()
+
+    configure_script_logging(args.log_file)
 
     try:
         validate_file_prefix(args.prefix)
@@ -1092,7 +1209,7 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
 
-    print(f"Industrial Scanner Logger v{__version__}")
+    SCRIPT_LOGGER.info("Industrial Scanner Logger v%s", __version__)
 
     logger = DailyCsvLogger(
         output_dir=Path(args.output_dir),
@@ -1102,17 +1219,32 @@ def main():
         max_barcode_chars=args.max_barcode_chars,
     )
 
-    print(f"Listening on {args.host}:{args.port}")
-    print(f"No-read message treated as FAILED: {args.no_read_message}")
-    print(f"Success rule: exactly {args.success_length} numeric digits")
-    print(f"Maximum barcode frame length: {args.max_barcode_chars} characters")
-    print(f"Maximum simultaneous clients: {args.max_clients}")
-    print("Press Ctrl+C to stop.")
+    SCRIPT_LOGGER.info("Listening on %s:%s", args.host, args.port)
+    SCRIPT_LOGGER.info("No-read message treated as FAILED: %s", args.no_read_message)
+    SCRIPT_LOGGER.info("Success rule: exactly %s numeric digits", args.success_length)
+    SCRIPT_LOGGER.info(
+        "Maximum barcode frame length: %s characters",
+        args.max_barcode_chars,
+    )
+    SCRIPT_LOGGER.info("Maximum simultaneous clients: %s", args.max_clients)
+    SCRIPT_LOGGER.info("Troubleshooting log file: %s", args.log_file or "disabled")
+    SCRIPT_LOGGER.info("Press Ctrl+C to stop.")
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((args.host, args.port))
-    server.listen(args.max_clients)
+    try:
+        server.bind((args.host, args.port))
+        server.listen(args.max_clients)
+    except OSError as exc:
+        SCRIPT_LOGGER.error(
+            "Unable to start listener host=%s port=%s error=%s",
+            args.host,
+            args.port,
+            exc,
+        )
+        server.close()
+        return 1
+
     server.settimeout(0.5)
 
     stop_event = threading.Event()
@@ -1157,10 +1289,12 @@ def main():
 
             if active_count >= args.max_clients:
                 scanner_id = scanner_id_from_addr(addr)
-                print(
-                    f"Rejecting scanner connection from {address_label(addr)}: "
-                    f"ScannerID:{scanner_id} maximum clients reached "
-                    f"({args.max_clients})"
+                SCRIPT_LOGGER.warning(
+                    "Rejecting scanner connection address=%s scanner_id=%s "
+                    "maximum clients reached max_clients=%s",
+                    address_label(addr),
+                    scanner_id,
+                    args.max_clients,
                 )
                 conn.close()
                 continue
@@ -1176,7 +1310,7 @@ def main():
             thread.start()
 
     except KeyboardInterrupt:
-        print("\nStopping listener.")
+        SCRIPT_LOGGER.info("Stopping listener after keyboard interrupt.")
 
     finally:
         stop_event.set()
@@ -1189,9 +1323,10 @@ def main():
             thread.join(timeout=args.shutdown_timeout)
 
     if fatal_event.is_set():
-        print("Stopping listener after fatal logging error.")
+        SCRIPT_LOGGER.error("Stopping listener after fatal logging error.")
         return 1
 
+    SCRIPT_LOGGER.info("Listener stopped.")
     return 0
 
 

@@ -15,8 +15,10 @@ from industrial_scanner_logger import __version__  # noqa: E402
 from industrial_scanner_logger.receiver import (  # noqa: E402
     DailyCsvLogger,
     clean_barcode,
+    configure_script_logging,
     handle_client,
     oversized_scan_marker,
+    reset_script_logging,
     scanner_id_from_addr,
 )
 
@@ -47,8 +49,8 @@ class FakeSocket:
 
 
 class ReceiverTests(unittest.TestCase):
-    def test_project_version_is_1_1_0(self):
-        self.assertEqual(__version__, "1.1.0")
+    def test_project_version_is_1_1_1(self):
+        self.assertEqual(__version__, "1.1.1")
 
     def test_clean_barcode_removes_scanner_line_noise(self):
         self.assertEqual(clean_barcode("\x0012345\r\n"), "12345")
@@ -240,6 +242,45 @@ class ReceiverTests(unittest.TestCase):
                     },
                 ],
             )
+
+    def test_script_log_omits_scanner_barcode_data(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            output_dir = Path(temp_dir)
+            log_path = output_dir / "industrial-scanner-logger.log"
+            valid_tracking = "9" * 34
+
+            configure_script_logging(str(log_path), console=False)
+
+            try:
+                logger = DailyCsvLogger(
+                    output_dir=output_dir,
+                    file_prefix="Test",
+                    no_read_message="__NO_READ__",
+                    success_length=34,
+                )
+                logger.write_scan_event(valid_tracking, "20")
+
+                fake_sock = FakeSocket([b""])
+                handle_client(
+                    fake_sock,
+                    ("10.10.10.20", 0),
+                    logger,
+                    threading.Event(),
+                    threading.Event(),
+                    256,
+                    0.05,
+                    1.0,
+                )
+            finally:
+                reset_script_logging()
+
+            script_log = log_path.read_text(encoding="utf-8")
+
+            self.assertIn("Now logging to:", script_log)
+            self.assertIn("Scan event recorded scanner_id=20 status=SUCCESS", script_log)
+            self.assertIn("Scanner connected address=10.10.10.20:0", script_log)
+            self.assertIn("Scanner disconnected address=10.10.10.20:0", script_log)
+            self.assertNotIn(valid_tracking, script_log)
 
     def test_write_scan_event_logs_success_failure_and_ignores_duplicate_success(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):

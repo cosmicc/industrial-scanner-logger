@@ -7,6 +7,7 @@ SERVICE_USER="${SERVICE_USER:-scannerlogger}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
 ENV_FILE="${ENV_FILE:-/etc/default/${SERVICE_NAME}}"
 OUTPUT_DIR="${OUTPUT_DIR:-/scanner-logs}"
+LOG_FILE="${LOG_FILE:-/var/log/industrial-scanner-logger.log}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-55256}"
 PREFIX="${PREFIX:-Site_Shipped_Tracking}"
@@ -33,6 +34,7 @@ Options:
   --group GROUP             system group that runs the service [${SERVICE_GROUP}]
   --env-file PATH           service defaults file [${ENV_FILE}]
   --output-dir DIR          scanner CSV output directory [${OUTPUT_DIR}]
+  --log-file PATH           troubleshooting log file [${LOG_FILE}]
   --host HOST               receiver bind address [${HOST}]
   --port PORT               receiver TCP port [${PORT}]
   --prefix PREFIX           daily CSV filename prefix [${PREFIX}]
@@ -134,6 +136,10 @@ while [[ $# -gt 0 ]]; do
             OUTPUT_DIR="$2"
             shift 2
             ;;
+        --log-file)
+            LOG_FILE="$2"
+            shift 2
+            ;;
         --host)
             HOST="$2"
             shift 2
@@ -201,9 +207,9 @@ if [[ "${EUID}" -ne 0 ]]; then
     fi
 
     export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP ENV_FILE START_SERVICE OVERWRITE_CONFIG
-    export OUTPUT_DIR HOST PORT PREFIX NO_READ_MESSAGE SUCCESS_LENGTH
+    export OUTPUT_DIR LOG_FILE HOST PORT PREFIX NO_READ_MESSAGE SUCCESS_LENGTH
     export MAX_BARCODE_CHARS MAX_CLIENTS FRAME_IDLE_TIMEOUT CLIENT_IDLE_TIMEOUT SHUTDOWN_TIMEOUT
-    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,ENV_FILE,OUTPUT_DIR,HOST,PORT,PREFIX,NO_READ_MESSAGE,SUCCESS_LENGTH,MAX_BARCODE_CHARS,MAX_CLIENTS,FRAME_IDLE_TIMEOUT,CLIENT_IDLE_TIMEOUT,SHUTDOWN_TIMEOUT,START_SERVICE,OVERWRITE_CONFIG "$0"
+    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,ENV_FILE,OUTPUT_DIR,LOG_FILE,HOST,PORT,PREFIX,NO_READ_MESSAGE,SUCCESS_LENGTH,MAX_BARCODE_CHARS,MAX_CLIENTS,FRAME_IDLE_TIMEOUT,CLIENT_IDLE_TIMEOUT,SHUTDOWN_TIMEOUT,START_SERVICE,OVERWRITE_CONFIG "$0"
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -287,6 +293,10 @@ chown -R root:root "${INSTALL_DIR}"
 chmod -R u=rwX,go=rX "${INSTALL_DIR}"
 
 install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${OUTPUT_DIR}"
+install -d -o root -g root -m 0755 "$(dirname -- "${LOG_FILE}")"
+touch "${LOG_FILE}"
+chown "${SERVICE_USER}:${SERVICE_GROUP}" "${LOG_FILE}"
+chmod 0640 "${LOG_FILE}"
 install -d -o root -g root -m 0755 "$(dirname -- "${ENV_FILE}")"
 
 if [[ ! -f "${ENV_FILE}" || "${OVERWRITE_CONFIG}" -eq 1 ]]; then
@@ -298,7 +308,7 @@ if [[ ! -f "${ENV_FILE}" || "${OVERWRITE_CONFIG}" -eq 1 ]]; then
 #
 # Keep this as one quoted value. systemd expands it into individual arguments
 # because the service uses \$SCANNER_RECEIVER_ARGS as a separate ExecStart word.
-SCANNER_RECEIVER_ARGS="--host ${HOST} --port ${PORT} --output-dir ${OUTPUT_DIR} --prefix ${PREFIX} --no-read-message ${NO_READ_MESSAGE} --success-length ${SUCCESS_LENGTH} --max-barcode-chars ${MAX_BARCODE_CHARS} --max-clients ${MAX_CLIENTS} --frame-idle-timeout ${FRAME_IDLE_TIMEOUT} --client-idle-timeout ${CLIENT_IDLE_TIMEOUT} --shutdown-timeout ${SHUTDOWN_TIMEOUT}"
+SCANNER_RECEIVER_ARGS="--host ${HOST} --port ${PORT} --output-dir ${OUTPUT_DIR} --prefix ${PREFIX} --no-read-message ${NO_READ_MESSAGE} --success-length ${SUCCESS_LENGTH} --max-barcode-chars ${MAX_BARCODE_CHARS} --max-clients ${MAX_CLIENTS} --frame-idle-timeout ${FRAME_IDLE_TIMEOUT} --client-idle-timeout ${CLIENT_IDLE_TIMEOUT} --shutdown-timeout ${SHUTDOWN_TIMEOUT} --log-file ${LOG_FILE}"
 CONFIG
     chmod 0644 "${ENV_FILE}"
 else
@@ -334,9 +344,13 @@ Receiver options:
 Scanner logs:
   ${OUTPUT_DIR}
 
+Troubleshooting log:
+  ${LOG_FILE}
+
 Useful commands:
   sudo systemctl status ${SERVICE_NAME}
   sudo journalctl -u ${SERVICE_NAME} -f
+  sudo tail -f ${LOG_FILE}
   sudo nano ${ENV_FILE}
   sudo systemctl restart ${SERVICE_NAME}
 DONE
