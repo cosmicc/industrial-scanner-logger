@@ -134,16 +134,17 @@ time as a failure. Existing installs keep their current defaults file, so set
 `--client-idle-timeout 0` in `/etc/default/industrial-scanner-logger` or rerun
 the installer with `--overwrite-config` to pick up this default.
 
-Uninstall the service while preserving CSV logs and service defaults:
+Uninstall the service and service defaults while preserving the app directory,
+CSV logs, script logs, raw scan data logs, and service user/group:
 
 ```bash
 sudo scripts/uninstall_service.sh
 ```
 
-Remove the service, installed app, defaults file, logs, and service user/group:
+Only remove the installed application directory when you explicitly want to:
 
 ```bash
-sudo scripts/uninstall_service.sh --purge
+sudo scripts/uninstall_service.sh --remove-app
 ```
 
 ## CSV Outputs
