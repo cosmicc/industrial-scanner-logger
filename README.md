@@ -2,7 +2,7 @@
 
 Python 3 TCP receiver and CSV logger for a Honeywell HF811 industrial scanner.
 
-Current release: `v1.1.1`
+Current release: `v1.1.2`
 
 The current receiver listens for scanner TCP connections, classifies scan events, and writes daily CSV logs. It is packaged so the project can be installed, tested, versioned, and uploaded to GitHub as it grows.
 
@@ -13,6 +13,7 @@ The current receiver listens for scanner TCP connections, classifies scan events
 - Writes failed scans to `failed_scans.csv`.
 - Writes completed daily totals per scanner and per day to `scan_totals.csv`.
 - Writes troubleshooting events to `/var/log/industrial-scanner-logger.log` when installed as a service.
+- Writes raw per-scan event lines to daily logs under `/var/log/industrial-scanner-logger/`.
 - Treats a scan as `SUCCESS` only when the barcode is exactly 34 numeric digits.
 - Treats blank scans, the configured no-read message, wrong lengths, and non-numeric values as `FAILED`.
 - Identifies each scanner by the last octet of its IPv4 address.
@@ -34,7 +35,8 @@ source .venv/bin/activate
 python -m pip install -e .
 scanner-tcp-receiver \
   --output-dir ./scanner-logs \
-  --log-file ./scanner-logs/industrial-scanner-logger.log
+  --log-file ./scanner-logs/industrial-scanner-logger.log \
+  --scan-data-log-dir ./scanner-logs
 ```
 
 You can also run the compatibility script directly:
@@ -42,7 +44,8 @@ You can also run the compatibility script directly:
 ```bash
 python3 scanner_tcp_receiver.py \
   --output-dir ./scanner-logs \
-  --log-file ./scanner-logs/industrial-scanner-logger.log
+  --log-file ./scanner-logs/industrial-scanner-logger.log \
+  --scan-data-log-dir ./scanner-logs
 ```
 
 ## Common Options
@@ -58,9 +61,14 @@ scanner-tcp-receiver \
   --max-barcode-chars 256 \
   --max-clients 8 \
   --frame-idle-timeout 0.25 \
-  --client-idle-timeout 300 \
+  --client-idle-timeout 0 \
   --shutdown-timeout 5 \
-  --log-file /var/log/industrial-scanner-logger.log
+  --log-file /var/log/industrial-scanner-logger.log \
+  --scan-data-log-dir /var/log/industrial-scanner-logger \
+  --scan-data-log-prefix scanner-log-data \
+  --tcp-keepalive-idle 60 \
+  --tcp-keepalive-interval 15 \
+  --tcp-keepalive-probes 4
 ```
 
 Check the installed receiver version:
@@ -99,14 +107,32 @@ sudo systemctl status industrial-scanner-logger
 sudo journalctl -u industrial-scanner-logger -f
 scripts/live-scanner-log
 sudo tail -f /var/log/industrial-scanner-logger.log
+sudo tail -f /var/log/industrial-scanner-logger/scanner-log-data-$(date +%F).log
 sudo systemctl restart industrial-scanner-logger
 sudo systemctl stop industrial-scanner-logger
 ```
 
 The troubleshooting log records service startup, version, configuration, scanner
-connections and disconnections, warnings, and errors. It does not write the raw
-barcode or tracking data received from scanners; that scanner data remains in
-the CSV outputs.
+connections and disconnections, warnings, and errors. The service journal and
+troubleshooting log do not receive one line per scan.
+
+Raw per-scan event lines are written to daily files like:
+
+```text
+/var/log/industrial-scanner-logger/scanner-log-data-2026-05-17.log
+```
+
+These daily scan data logs contain the `Event:... Barcode:...` lines that used
+to go to the service console. The CSV outputs remain the primary structured
+record.
+
+For service installs, idle scanner disconnects are disabled by default with
+`--client-idle-timeout 0`. A scanner can sit connected with no boxes moving
+without being disconnected by the receiver. TCP keepalive stays enabled so dead
+network connections can still be detected without treating normal scanner idle
+time as a failure. Existing installs keep their current defaults file, so set
+`--client-idle-timeout 0` in `/etc/default/industrial-scanner-logger` or rerun
+the installer with `--overwrite-config` to pick up this default.
 
 Uninstall the service while preserving CSV logs and service defaults:
 

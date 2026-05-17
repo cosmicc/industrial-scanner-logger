@@ -19,7 +19,7 @@ Daily totals CSV:
 Daily totals CSV format:
     date,scanner_id,total_events,successful_scans,failed_scans
 
-Console output format:
+Daily raw scan data log format:
     Event:<number> Success:<number> Failed:<number> Scanner:<id>
     ScannerEvent:<number> ScannerSuccess:<number> ScannerFailed:<number>
     Status:<SUCCESS|FAILED> Time:<time> Barcode:<barcode>
@@ -54,9 +54,14 @@ LOG_DUPLICATE_SUCCESS_SCANS = False
 DEFAULT_MAX_BARCODE_CHARS = 256
 DEFAULT_MAX_CLIENTS = 8
 DEFAULT_FRAME_IDLE_TIMEOUT_SECONDS = 0.25
-DEFAULT_CLIENT_IDLE_TIMEOUT_SECONDS = 300.0
+DEFAULT_CLIENT_IDLE_TIMEOUT_SECONDS = 0.0
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 DEFAULT_LOG_FILE = "/var/log/industrial-scanner-logger.log"
+DEFAULT_SCAN_DATA_LOG_DIR = "/var/log/industrial-scanner-logger"
+DEFAULT_SCAN_DATA_LOG_PREFIX = "scanner-log-data"
+DEFAULT_TCP_KEEPALIVE_IDLE_SECONDS = 60
+DEFAULT_TCP_KEEPALIVE_INTERVAL_SECONDS = 15
+DEFAULT_TCP_KEEPALIVE_PROBES = 4
 LOG_BARCODE_PREVIEW_CHARS = 120
 MIN_MAX_BARCODE_CHARS = 64
 UNKNOWN_SCANNER_ID = "UNKNOWN"
@@ -160,6 +165,13 @@ def validate_positive_float(value: float, name: str) -> float:
     return value
 
 
+def validate_nonnegative_float(value: float, name: str) -> float:
+    if value < 0:
+        raise ValueError(f"{name} must be 0 or greater")
+
+    return value
+
+
 def oversized_scan_marker(raw_length: int) -> str:
     return f"__OVERSIZED_SCAN_LENGTH_{raw_length}__"
 
@@ -212,6 +224,44 @@ def scanner_id_from_addr(addr) -> str:
     return UNKNOWN_SCANNER_ID
 
 
+def enable_tcp_keepalive(
+    conn: socket.socket,
+    idle_seconds: int,
+    interval_seconds: int,
+    probe_count: int,
+):
+    """
+    Ask TCP to detect dead peers without disconnecting healthy idle scanners.
+    """
+    try:
+        conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except OSError as exc:
+        SCRIPT_LOGGER.warning("Could not enable TCP keepalive: %s", exc)
+        return
+
+    keepalive_options = [
+        ("TCP_KEEPIDLE", idle_seconds),
+        ("TCP_KEEPINTVL", interval_seconds),
+        ("TCP_KEEPCNT", probe_count),
+    ]
+
+    for option_name, value in keepalive_options:
+        option = getattr(socket, option_name, None)
+
+        if option is None:
+            continue
+
+        try:
+            conn.setsockopt(socket.IPPROTO_TCP, option, value)
+        except OSError as exc:
+            SCRIPT_LOGGER.warning(
+                "Could not set %s=%s on scanner socket: %s",
+                option_name,
+                value,
+                exc,
+            )
+
+
 class DailyCsvLogger:
     def __init__(
         self,
@@ -220,6 +270,8 @@ class DailyCsvLogger:
         no_read_message: str,
         success_length: int,
         max_barcode_chars: int = DEFAULT_MAX_BARCODE_CHARS,
+        scan_data_log_dir=None,
+        scan_data_log_prefix: str = DEFAULT_SCAN_DATA_LOG_PREFIX,
     ):
         self.output_dir = output_dir
         self.file_prefix = validate_file_prefix(file_prefix)
@@ -241,10 +293,16 @@ class DailyCsvLogger:
         if len(self.no_read_message) > self.max_barcode_chars:
             raise ValueError("no_read_message cannot be longer than max_barcode_chars")
 
+        if scan_data_log_dir is None:
+            scan_data_log_dir = self.output_dir
+
+        self.scan_data_log_dir = Path(scan_data_log_dir)
+        self.scan_data_log_prefix = validate_file_prefix(scan_data_log_prefix)
         self.lock = threading.Lock()
 
         self.current_date = None
         self.current_csv_path = None
+        self.current_scan_data_log_path = None
 
         self.seen_success_barcodes_by_scanner = {}
         self.scanner_counts = {}
@@ -252,8 +310,10 @@ class DailyCsvLogger:
         self.event_count = 0
         self.success_count = 0
         self.failed_count = 0
+        self.scan_data_log_error_reported = False
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.scan_data_log_dir.mkdir(parents=True, exist_ok=True)
 
         self.totals_path = self.output_dir / "scan_totals.csv"
         self.failed_scans_path = self.output_dir / "failed_scans.csv"
@@ -275,6 +335,10 @@ class DailyCsvLogger:
     def _csv_path_for_date(self, date_str: str) -> Path:
         filename = f"{self.file_prefix}_{date_str}.csv"
         return self.output_dir / filename
+
+    def _scan_data_log_path_for_date(self, date_str: str) -> Path:
+        filename = f"{self.scan_data_log_prefix}-{date_str}.log"
+        return self.scan_data_log_dir / filename
 
     def _migration_temp_path(self, path: Path) -> Path:
         return path.with_name(f".{path.name}.migrating-{self._timestamp_string()}")
@@ -817,6 +881,8 @@ class DailyCsvLogger:
 
         self.current_date = today
         self.current_csv_path = self._csv_path_for_date(today)
+        self.current_scan_data_log_path = self._scan_data_log_path_for_date(today)
+        self.scan_data_log_error_reported = False
 
         self._ensure_daily_csv_header(self.current_csv_path)
 
@@ -827,6 +893,10 @@ class DailyCsvLogger:
         self._recalculate_total_counts()
 
         SCRIPT_LOGGER.info("Now logging to: %s", self.current_csv_path.resolve())
+        SCRIPT_LOGGER.info(
+            "Raw scan data log: %s",
+            self.current_scan_data_log_path.resolve(),
+        )
         SCRIPT_LOGGER.info("Starting event count: %s", self.event_count)
         SCRIPT_LOGGER.info("Starting successful scan count: %s", self.success_count)
         SCRIPT_LOGGER.info("Starting failed scan count: %s", self.failed_count)
@@ -853,6 +923,22 @@ class DailyCsvLogger:
             writer = csv.writer(f)
             writer.writerow([date_str, time_str, scanner_id, failed_barcode])
 
+    def _append_scan_data_log_line(self, line: str):
+        """
+        Append the high-volume raw scan event line to the date-rotated data log.
+        """
+        try:
+            with self.current_scan_data_log_path.open("a", encoding="utf-8") as f:
+                f.write(f"{line}\n")
+        except OSError as exc:
+            if not self.scan_data_log_error_reported:
+                SCRIPT_LOGGER.error(
+                    "Could not write raw scan data log file=%s error=%s",
+                    self.current_scan_data_log_path,
+                    exc,
+                )
+                self.scan_data_log_error_reported = True
+
     def write_scan_event(self, raw_barcode: str, scanner_id: str = UNKNOWN_SCANNER_ID):
         scanner_id = normalize_scanner_id(scanner_id)
         barcode = self._normalize_barcode_for_storage(clean_barcode(raw_barcode))
@@ -873,10 +959,9 @@ class DailyCsvLogger:
                         "Duplicate successful scan ignored scanner_id=%s",
                         scanner_id,
                     )
-                    print(
+                    self._append_scan_data_log_line(
                         f"Duplicate ignored - Scanner:{scanner_id} "
-                        f"Barcode:{truncate_for_log(barcode)}",
-                        flush=True,
+                        f"Barcode:{truncate_for_log(barcode)}"
                     )
                     return
 
@@ -908,21 +993,7 @@ class DailyCsvLogger:
             if status == "FAILED":
                 self._append_failed_scan(date_str, time_str, scanner_id, barcode)
 
-            SCRIPT_LOGGER.info(
-                "Scan event recorded scanner_id=%s status=%s total_events=%s "
-                "successful_scans=%s failed_scans=%s scanner_events=%s "
-                "scanner_successful_scans=%s scanner_failed_scans=%s",
-                scanner_id,
-                status,
-                self.event_count,
-                self.success_count,
-                self.failed_count,
-                scanner_counts["total_events"],
-                scanner_counts["successful_scans"],
-                scanner_counts["failed_scans"],
-            )
-
-            print(
+            self._append_scan_data_log_line(
                 f"Event:{self.event_count} "
                 f"Success:{self.success_count} "
                 f"Failed:{self.failed_count} "
@@ -932,8 +1003,7 @@ class DailyCsvLogger:
                 f"ScannerFailed:{scanner_counts['failed_scans']} "
                 f"Status:{status} "
                 f"Time:{time_str} "
-                f"Barcode:{truncate_for_log(barcode)}",
-                flush=True,
+                f"Barcode:{truncate_for_log(barcode)}"
             )
 
 
@@ -975,6 +1045,10 @@ def handle_client(
     max_barcode_chars: int,
     frame_idle_timeout: float,
     client_idle_timeout: float,
+    tcp_keepalive: bool = True,
+    tcp_keepalive_idle: int = DEFAULT_TCP_KEEPALIVE_IDLE_SECONDS,
+    tcp_keepalive_interval: int = DEFAULT_TCP_KEEPALIVE_INTERVAL_SECONDS,
+    tcp_keepalive_probes: int = DEFAULT_TCP_KEEPALIVE_PROBES,
 ):
     scanner_id = scanner_id_from_addr(addr)
     SCRIPT_LOGGER.info(
@@ -986,6 +1060,45 @@ def handle_client(
     buffer = ""
     last_data_time = time.monotonic()
 
+    def write_buffered_scan(reason: str) -> bool:
+        nonlocal buffer
+
+        if not buffer:
+            return True
+
+        barcode = buffer
+        buffer = ""
+
+        if len(barcode) > max_barcode_chars:
+            marker = oversized_scan_marker(len(barcode))
+            SCRIPT_LOGGER.warning(
+                "Oversized scanner frame rejected address=%s scanner_id=%s "
+                "reason=%s length=%s",
+                address_label(addr),
+                scanner_id,
+                reason,
+                len(barcode),
+            )
+            return write_client_scan(logger, marker, addr, scanner_id, fatal_event)
+
+        SCRIPT_LOGGER.debug(
+            "Flushing buffered scanner frame address=%s scanner_id=%s reason=%s "
+            "length=%s",
+            address_label(addr),
+            scanner_id,
+            reason,
+            len(barcode),
+        )
+        return write_client_scan(logger, barcode, addr, scanner_id, fatal_event)
+
+    if tcp_keepalive:
+        enable_tcp_keepalive(
+            conn,
+            tcp_keepalive_idle,
+            tcp_keepalive_interval,
+            tcp_keepalive_probes,
+        )
+
     # Timeout fallback:
     # If the scanner sends data without CR/LF, flush the idle buffer as one event.
     conn.settimeout(frame_idle_timeout)
@@ -996,6 +1109,9 @@ def handle_client(
                 data = conn.recv(4096)
 
                 if not data:
+                    if not write_buffered_scan("disconnect"):
+                        return
+
                     SCRIPT_LOGGER.info(
                         "Scanner disconnected address=%s scanner_id=%s",
                         address_label(addr),
@@ -1057,17 +1173,13 @@ def handle_client(
                 # If data arrived but no CR/LF arrived after it, treat the idle
                 # buffer as one complete barcode/event.
                 if buffer:
-                    if not write_client_scan(
-                        logger,
-                        buffer,
-                        addr,
-                        scanner_id,
-                        fatal_event,
-                    ):
+                    if not write_buffered_scan("frame_idle_timeout"):
                         return
-                    buffer = ""
 
-                elif time.monotonic() - last_data_time >= client_idle_timeout:
+                elif (
+                    client_idle_timeout > 0
+                    and time.monotonic() - last_data_time >= client_idle_timeout
+                ):
                     SCRIPT_LOGGER.warning(
                         "Scanner idle timeout address=%s scanner_id=%s",
                         address_label(addr),
@@ -1076,6 +1188,9 @@ def handle_client(
                     break
 
             except ConnectionResetError:
+                if not write_buffered_scan("connection_reset"):
+                    return
+
                 SCRIPT_LOGGER.warning(
                     "Scanner connection reset address=%s scanner_id=%s",
                     address_label(addr),
@@ -1084,6 +1199,9 @@ def handle_client(
                 break
 
             except OSError as exc:
+                if not write_buffered_scan("socket_error"):
+                    return
+
                 SCRIPT_LOGGER.error(
                     "Scanner socket error address=%s scanner_id=%s error=%s",
                     address_label(addr),
@@ -1159,7 +1277,10 @@ def main():
         "--client-idle-timeout",
         type=float,
         default=DEFAULT_CLIENT_IDLE_TIMEOUT_SECONDS,
-        help="Seconds before disconnecting an idle client with no buffered barcode",
+        help=(
+            "Seconds before disconnecting an idle client with no buffered barcode. "
+            "Use 0 to keep idle scanner connections open indefinitely"
+        ),
     )
 
     parser.add_argument(
@@ -1178,19 +1299,62 @@ def main():
         ),
     )
 
+    parser.add_argument(
+        "--scan-data-log-dir",
+        default=DEFAULT_SCAN_DATA_LOG_DIR,
+        help="Directory for daily raw scan event logs",
+    )
+
+    parser.add_argument(
+        "--scan-data-log-prefix",
+        default=DEFAULT_SCAN_DATA_LOG_PREFIX,
+        help="Filename prefix for daily raw scan event logs",
+    )
+
+    parser.add_argument(
+        "--disable-tcp-keepalive",
+        action="store_true",
+        help="Disable TCP keepalive probes on scanner connections",
+    )
+
+    parser.add_argument(
+        "--tcp-keepalive-idle",
+        type=int,
+        default=DEFAULT_TCP_KEEPALIVE_IDLE_SECONDS,
+        help="Idle seconds before TCP keepalive probes start",
+    )
+
+    parser.add_argument(
+        "--tcp-keepalive-interval",
+        type=int,
+        default=DEFAULT_TCP_KEEPALIVE_INTERVAL_SECONDS,
+        help="Seconds between TCP keepalive probes",
+    )
+
+    parser.add_argument(
+        "--tcp-keepalive-probes",
+        type=int,
+        default=DEFAULT_TCP_KEEPALIVE_PROBES,
+        help="Failed TCP keepalive probes before the connection is considered dead",
+    )
+
     args = parser.parse_args()
 
     configure_script_logging(args.log_file)
 
     try:
         validate_file_prefix(args.prefix)
+        validate_file_prefix(args.scan_data_log_prefix)
         validate_positive_int(args.port, "port")
         validate_positive_int(args.success_length, "success_length")
         validate_positive_int(args.max_barcode_chars, "max_barcode_chars")
         validate_positive_int(args.max_clients, "max_clients")
         validate_positive_float(args.frame_idle_timeout, "frame_idle_timeout")
-        validate_positive_float(args.client_idle_timeout, "client_idle_timeout")
+        validate_nonnegative_float(args.client_idle_timeout, "client_idle_timeout")
         validate_positive_float(args.shutdown_timeout, "shutdown_timeout")
+        validate_positive_int(args.tcp_keepalive_idle, "tcp_keepalive_idle")
+        validate_positive_int(args.tcp_keepalive_interval, "tcp_keepalive_interval")
+        validate_positive_int(args.tcp_keepalive_probes, "tcp_keepalive_probes")
 
         if args.port > 65535:
             raise ValueError("port must be between 1 and 65535")
@@ -1217,6 +1381,8 @@ def main():
         no_read_message=args.no_read_message,
         success_length=args.success_length,
         max_barcode_chars=args.max_barcode_chars,
+        scan_data_log_dir=Path(args.scan_data_log_dir),
+        scan_data_log_prefix=args.scan_data_log_prefix,
     )
 
     SCRIPT_LOGGER.info("Listening on %s:%s", args.host, args.port)
@@ -1227,6 +1393,15 @@ def main():
         args.max_barcode_chars,
     )
     SCRIPT_LOGGER.info("Maximum simultaneous clients: %s", args.max_clients)
+    SCRIPT_LOGGER.info("Raw scan data log directory: %s", args.scan_data_log_dir)
+    SCRIPT_LOGGER.info(
+        "Client idle timeout: %s",
+        "disabled" if args.client_idle_timeout == 0 else args.client_idle_timeout,
+    )
+    SCRIPT_LOGGER.info(
+        "TCP keepalive: %s",
+        "disabled" if args.disable_tcp_keepalive else "enabled",
+    )
     SCRIPT_LOGGER.info("Troubleshooting log file: %s", args.log_file or "disabled")
     SCRIPT_LOGGER.info("Press Ctrl+C to stop.")
 
@@ -1270,6 +1445,10 @@ def main():
                 args.max_barcode_chars,
                 args.frame_idle_timeout,
                 args.client_idle_timeout,
+                not args.disable_tcp_keepalive,
+                args.tcp_keepalive_idle,
+                args.tcp_keepalive_interval,
+                args.tcp_keepalive_probes,
             )
         finally:
             with active_threads_lock:

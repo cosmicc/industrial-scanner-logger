@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.1.2 - 2026-05-17
+
+- Disable scanner idle disconnects by default so connected scanners can remain idle between boxes.
+- Enable configurable TCP keepalive settings for detecting dead scanner sockets.
+- Flush buffered undelimited scan data on disconnect, reset, and socket error paths when possible.
+- Move high-volume per-scan event lines out of the service console and into daily raw scan data logs.
+- Add installer-managed `/var/log/industrial-scanner-logger/scanner-log-data-YYYY-MM-DD.log` files.
+
 ## 1.1.1 - 2026-05-17
 
 - Add troubleshooting script logging to console and `/var/log/industrial-scanner-logger.log`.

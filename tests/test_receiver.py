@@ -1,4 +1,5 @@
 import csv
+import socket
 import sys
 import tempfile
 import threading
@@ -28,13 +29,22 @@ class FakeSocket:
         self.chunks = list(chunks)
         self.closed = False
         self.timeout = None
+        self.socket_options = []
 
     def settimeout(self, timeout):
         self.timeout = timeout
 
+    def setsockopt(self, level, option, value):
+        self.socket_options.append((level, option, value))
+
     def recv(self, _size):
         if self.chunks:
-            return self.chunks.pop(0)
+            chunk = self.chunks.pop(0)
+
+            if isinstance(chunk, BaseException):
+                raise chunk
+
+            return chunk
 
         return b""
 
@@ -49,8 +59,8 @@ class FakeSocket:
 
 
 class ReceiverTests(unittest.TestCase):
-    def test_project_version_is_1_1_1(self):
-        self.assertEqual(__version__, "1.1.1")
+    def test_project_version_is_1_1_2(self):
+        self.assertEqual(__version__, "1.1.2")
 
     def test_clean_barcode_removes_scanner_line_noise(self):
         self.assertEqual(clean_barcode("\x0012345\r\n"), "12345")
@@ -186,6 +196,65 @@ class ReceiverTests(unittest.TestCase):
             )
             self.assertEqual(failed_rows[0]["scanner_id"], "20")
 
+    def test_client_handler_flushes_undelimited_scan_on_disconnect(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+            )
+            valid_tracking = b"2" * 34
+            fake_sock = FakeSocket([valid_tracking, b""])
+
+            handle_client(
+                fake_sock,
+                ("10.10.10.20", 0),
+                logger,
+                threading.Event(),
+                threading.Event(),
+                256,
+                10.0,
+                0,
+            )
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["scanner_id"], "20")
+            self.assertEqual(rows[0]["status"], "SUCCESS")
+            self.assertEqual(rows[0]["tracking"], valid_tracking.decode("ascii"))
+
+    def test_disabled_client_idle_timeout_keeps_scanner_until_data_arrives(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+            )
+            valid_tracking = (b"3" * 34) + b"\n"
+            fake_sock = FakeSocket([socket.timeout(), socket.timeout(), valid_tracking, b""])
+
+            handle_client(
+                fake_sock,
+                ("10.10.10.21", 0),
+                logger,
+                threading.Event(),
+                threading.Event(),
+                256,
+                0.01,
+                0,
+            )
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["scanner_id"], "21")
+            self.assertEqual(rows[0]["status"], "SUCCESS")
+
     def test_duplicate_success_rule_is_per_scanner(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
             logger = DailyCsvLogger(
@@ -243,7 +312,7 @@ class ReceiverTests(unittest.TestCase):
                 ],
             )
 
-    def test_script_log_omits_scanner_barcode_data(self):
+    def test_script_log_omits_scanner_barcode_data_and_daily_data_log_keeps_it(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
             output_dir = Path(temp_dir)
             log_path = output_dir / "industrial-scanner-logger.log"
@@ -275,12 +344,15 @@ class ReceiverTests(unittest.TestCase):
                 reset_script_logging()
 
             script_log = log_path.read_text(encoding="utf-8")
+            data_logs = list(output_dir.glob("scanner-log-data-*.log"))
 
             self.assertIn("Now logging to:", script_log)
-            self.assertIn("Scan event recorded scanner_id=20 status=SUCCESS", script_log)
             self.assertIn("Scanner connected address=10.10.10.20:0", script_log)
             self.assertIn("Scanner disconnected address=10.10.10.20:0", script_log)
+            self.assertNotIn("Scan event recorded", script_log)
             self.assertNotIn(valid_tracking, script_log)
+            self.assertEqual(len(data_logs), 1)
+            self.assertIn(valid_tracking, data_logs[0].read_text(encoding="utf-8"))
 
     def test_write_scan_event_logs_success_failure_and_ignores_duplicate_success(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):

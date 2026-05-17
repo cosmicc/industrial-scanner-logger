@@ -8,6 +8,7 @@ SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
 ENV_FILE="${ENV_FILE:-/etc/default/${SERVICE_NAME}}"
 OUTPUT_DIR="${OUTPUT_DIR:-/scanner-logs}"
 LOG_FILE="${LOG_FILE:-/var/log/industrial-scanner-logger.log}"
+SCAN_DATA_LOG_DIR="${SCAN_DATA_LOG_DIR:-/var/log/industrial-scanner-logger}"
 PURGE="${PURGE:-0}"
 
 usage() {
@@ -24,6 +25,7 @@ Options:
   --env-file PATH        service defaults file [${ENV_FILE}]
   --output-dir DIR       scanner CSV output directory [${OUTPUT_DIR}]
   --log-file PATH        troubleshooting log file [${LOG_FILE}]
+  --scan-data-log-dir DIR daily raw scan event log directory [${SCAN_DATA_LOG_DIR}]
   --purge                also remove defaults file, log directory, and service user/group
   -h, --help             show this help
 
@@ -62,6 +64,10 @@ while [[ $# -gt 0 ]]; do
             LOG_FILE="$2"
             shift 2
             ;;
+        --scan-data-log-dir)
+            SCAN_DATA_LOG_DIR="$2"
+            shift 2
+            ;;
         --purge)
             PURGE=1
             shift
@@ -84,8 +90,9 @@ if [[ "${EUID}" -ne 0 ]]; then
         exit 1
     fi
 
-    export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP ENV_FILE OUTPUT_DIR LOG_FILE PURGE
-    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,ENV_FILE,OUTPUT_DIR,LOG_FILE,PURGE "$0"
+    export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP ENV_FILE OUTPUT_DIR LOG_FILE
+    export SCAN_DATA_LOG_DIR PURGE
+    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,PURGE "$0"
 fi
 
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -105,6 +112,7 @@ fi
 if [[ "${PURGE}" -eq 1 ]]; then
     rm -f "${ENV_FILE}"
     rm -f "${LOG_FILE}"
+    rm -rf "${SCAN_DATA_LOG_DIR}"
     rm -rf "${OUTPUT_DIR}"
 
     if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
@@ -131,6 +139,7 @@ Preserved:
   ${ENV_FILE}
   ${OUTPUT_DIR}
   ${LOG_FILE}
+  ${SCAN_DATA_LOG_DIR}
 
 Run again with --purge to remove preserved config, logs, and the service user/group.
 KEPT
