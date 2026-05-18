@@ -77,6 +77,65 @@ class ApiQueryTests(unittest.TestCase):
 
         self.assertEqual(context.exception.status_code, 404)
 
+    def test_dashboard_daily_totals_returns_today_and_yesterday_counts(self):
+        from industrial_scanner_logger.api import fetch_dashboard_daily_totals
+
+        class FakeCursor:
+            def __init__(self):
+                self.params = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return None
+
+            def execute(self, _query, params):
+                self.params = params
+
+            def fetchall(self):
+                return [
+                    {
+                        "scan_date": date(2026, 5, 18),
+                        "successful_scans": 14,
+                        "failed_scans": 2,
+                    }
+                ]
+
+        class FakeDb:
+            def __init__(self):
+                self.cursor_instance = FakeCursor()
+
+            def cursor(self):
+                return self.cursor_instance
+
+        db = FakeDb()
+        totals = fetch_dashboard_daily_totals(
+            db,
+            date(2026, 5, 18),
+            date(2026, 5, 17),
+        )
+
+        self.assertEqual(
+            db.cursor_instance.params,
+            [date(2026, 5, 18), date(2026, 5, 17)],
+        )
+        self.assertEqual(
+            totals,
+            {
+                "today": {
+                    "scan_date": "2026-05-18",
+                    "successful_scans": 14,
+                    "failed_scans": 2,
+                },
+                "yesterday": {
+                    "scan_date": "2026-05-17",
+                    "successful_scans": 0,
+                    "failed_scans": 0,
+                },
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

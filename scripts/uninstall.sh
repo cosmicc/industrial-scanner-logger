@@ -12,18 +12,18 @@ OUTPUT_DIR="${OUTPUT_DIR:-/scanner-logs}"
 LOG_FILE="${LOG_FILE:-/var/log/industrial-scanner-logger.log}"
 SCAN_DATA_LOG_DIR="${SCAN_DATA_LOG_DIR:-/var/log/industrial-scanner-logger}"
 NGINX_SITE_NAME="${NGINX_SITE_NAME:-industrial-scanner-logger}"
-NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/industrial-scanner-logger}"
+NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/scanner-site}"
 
 usage() {
     cat <<USAGE
 Usage: sudo scripts/uninstall.sh [options]
 
-Uninstall the Industrial Scanner Logger runtime, services, and nginx site.
+Uninstall the Industrial Scanner Logger services, nginx site, and UFW firewall.
 
 Options:
   --service-name NAME    systemd service name [${SERVICE_NAME}]
   --api-service-name NAME REST API service name [${API_SERVICE_NAME}]
-  --install-dir DIR      application install directory [${INSTALL_DIR}]
+  --install-dir DIR      application install directory to preserve [${INSTALL_DIR}]
   --user USER            service user name to preserve [${SERVICE_USER}]
   --group GROUP          service group name to preserve [${SERVICE_GROUP}]
   --output-dir DIR       scanner CSV output directory [${OUTPUT_DIR}]
@@ -35,11 +35,30 @@ Options:
 
 The receiver config file is always removed.
 The old /etc/default service defaults file is removed if present.
-The installed application directory is removed.
+The installed application directory is always preserved.
 The service user and group are always preserved for future installs.
 Scanner CSV logs, script logs, and raw scan data logs are always preserved.
 The nginx package is preserved because it may serve other sites.
+The UFW firewall is disabled and the ufw package is removed.
 USAGE
+}
+
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "Missing required command: $1" >&2
+        exit 1
+    fi
+}
+
+uninstall_ufw_firewall() {
+    if command -v ufw >/dev/null 2>&1; then
+        ufw --force disable || true
+    fi
+
+    require_command apt-get
+
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get purge -y ufw
 }
 
 while [[ $# -gt 0 ]]; do
@@ -99,14 +118,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "${EUID}" -ne 0 ]]; then
-    if ! command -v sudo >/dev/null 2>&1; then
-        echo "This uninstaller must run as root, and sudo was not found." >&2
-        exit 1
-    fi
-
-    export SERVICE_NAME API_SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP LEGACY_ENV_FILE
-    export OUTPUT_DIR LOG_FILE SCAN_DATA_LOG_DIR NGINX_SITE_NAME NGINX_WEB_ROOT
-    exec sudo --preserve-env=SERVICE_NAME,API_SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,LEGACY_ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,NGINX_SITE_NAME,NGINX_WEB_ROOT "$0"
+    echo "This uninstaller must be run as root. Re-run it with sudo." >&2
+    exit 1
 fi
 
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -119,13 +132,14 @@ if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now "${API_SERVICE_NAME}.service" >/dev/null 2>&1 || true
 fi
 
+uninstall_ufw_firewall
+
 rm -f "${NGINX_SITE_LINK}"
 rm -f "${NGINX_SITE_FILE}"
 rm -f "${UNIT_FILE}"
 rm -f "${API_UNIT_FILE}"
 rm -f "${CONFIG_FILE}"
 rm -f "${LEGACY_ENV_FILE}"
-rm -rf "${INSTALL_DIR}"
 rmdir "${NGINX_WEB_ROOT}" >/dev/null 2>&1 || true
 
 if command -v systemctl >/dev/null 2>&1; then
@@ -142,18 +156,19 @@ cat <<DONE
 Uninstalled ${SERVICE_NAME}.service
 
 Removed:
-  ${INSTALL_DIR}
   ${UNIT_FILE}
   ${API_UNIT_FILE}
   ${CONFIG_FILE}
   ${LEGACY_ENV_FILE}
   ${NGINX_SITE_FILE}
   ${NGINX_SITE_LINK}
+  ufw firewall/package
 DONE
 
 cat <<KEPT
 
 Preserved:
+  ${INSTALL_DIR}
   ${OUTPUT_DIR}
   ${LOG_FILE}
   ${SCAN_DATA_LOG_DIR}

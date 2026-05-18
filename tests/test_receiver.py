@@ -532,6 +532,46 @@ log_level = warning
             self.assertEqual(failed_rows[0]["scanner_id"], "UNKNOWN")
             self.assertEqual(failed_rows[0]["failed_barcode"], "__NO_READ__")
 
+            data_logs = list(Path(temp_dir).glob("scanner-log-data-*.log"))
+            self.assertEqual(len(data_logs), 1)
+            data_log_text = data_logs[0].read_text(encoding="utf-8")
+            self.assertNotIn("Duplicate ignored", data_log_text)
+            self.assertEqual(len(data_log_text.splitlines()), 2)
+
+    def test_duplicate_success_is_silently_ignored(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            log_path = output_dir / "industrial-scanner-logger.log"
+            stdout = StringIO()
+
+            with redirect_stdout(stdout):
+                configure_script_logging(str(log_path), console=True)
+
+                try:
+                    logger = DailyCsvLogger(
+                        output_dir=output_dir,
+                        file_prefix="Test",
+                        no_read_message="__NO_READ__",
+                        success_length=34,
+                    )
+
+                    valid_tracking = "5" * 34
+
+                    logger.write_scan_event(valid_tracking, "21")
+                    logger.write_scan_event(valid_tracking, "21")
+                finally:
+                    reset_script_logging()
+
+            script_log = log_path.read_text(encoding="utf-8")
+            data_logs = list(output_dir.glob("scanner-log-data-*.log"))
+            self.assertEqual(len(data_logs), 1)
+            data_log_text = data_logs[0].read_text(encoding="utf-8")
+
+            self.assertNotIn("Duplicate successful scan ignored", stdout.getvalue())
+            self.assertNotIn("Duplicate successful scan ignored", script_log)
+            self.assertNotIn("Duplicate ignored", data_log_text)
+            self.assertEqual(len(data_log_text.splitlines()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

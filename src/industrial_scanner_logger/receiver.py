@@ -1264,14 +1264,6 @@ class DailyCsvLogger:
 
             if status == "SUCCESS":
                 if barcode in seen_success_barcodes and not LOG_DUPLICATE_SUCCESS_SCANS:
-                    SCRIPT_LOGGER.info(
-                        "Duplicate successful scan ignored scanner_id=%s",
-                        scanner_id,
-                    )
-                    self._append_scan_data_log_line(
-                        f"Duplicate ignored - Scanner:{scanner_id} "
-                        f"Barcode:{truncate_for_log(barcode)}"
-                    )
                     return
 
                 seen_success_barcodes.add(barcode)

@@ -31,6 +31,7 @@ The current receiver listens for scanner TCP connections, classifies scan events
 - Ubuntu systemd host for the installer
 - PostgreSQL, if PostgreSQL logging or the REST API will be used
 - Nginx is installed automatically by `scripts/install.sh` when the API proxy is enabled
+- UFW is installed and configured automatically by `scripts/install.sh`
 
 ## Quick Start
 
@@ -121,7 +122,8 @@ The installer copies the project to `/opt/industrial-scanner-logger`, creates a
 Python virtual environment, installs the Python package dependencies, creates a
 dedicated `scannerlogger` system user, installs the receiver and API systemd
 units, installs nginx if needed, enables an nginx site for `/api`, and starts
-the services.
+the services. It also installs UFW, denies incoming traffic by default, and
+allows only `22/tcp`, `55256/tcp`, `80/tcp`, and `443/tcp` incoming.
 
 The nginx site template is:
 
@@ -140,7 +142,16 @@ It uses `/api` for the REST API and leaves `/` for the web interface document
 root:
 
 ```text
-/var/www/industrial-scanner-logger
+/var/www/scanner-site
+```
+
+Static files placed under the repo's `html/` directory are copied into the web
+root during install. For example:
+
+```text
+html/index.html -> /var/www/scanner-site/index.html
+html/health/index.html -> /var/www/scanner-site/health/index.html
+html/assets/site.css -> /var/www/scanner-site/assets/site.css
 ```
 
 The default nginx listen value is `80 default_server`, so the installer disables
@@ -311,9 +322,9 @@ location /api/ {
 }
 ```
 
-Uninstall the runtime, service files, config file, nginx site, and installed app
-directory while preserving CSV logs, script logs, raw scan data logs, the nginx
-package, and the service user/group:
+Uninstall the runtime services, service files, config file, nginx site, and UFW
+package while preserving the installed app directory, CSV logs, script logs,
+raw scan data logs, the nginx package, and the service user/group:
 
 ```bash
 sudo scripts/uninstall.sh

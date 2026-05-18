@@ -1,10 +1,10 @@
-import sys
 import shutil
 import subprocess
-from datetime import date, datetime
-from typing import Optional
+import sys
 from collections import deque
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -114,7 +114,11 @@ VIEW_DEFINITIONS = {
     },
 }
 
+
 def build_dashboard_health(config):
+    current_day = date.today()
+    previous_day = current_day - timedelta(days=1)
+
     services = {
         "scanner": systemd_service_status(SCANNER_SERVICE_UNIT),
         "api": systemd_service_status(API_SERVICE_UNIT),
@@ -130,6 +134,7 @@ def build_dashboard_health(config):
     }
     last_received = None
     recent_scans = []
+    daily_totals = empty_daily_totals(current_day, previous_day)
 
     try:
         db = connect_db(config)
@@ -172,6 +177,12 @@ def build_dashboard_health(config):
                 [],
             )
 
+            daily_totals = fetch_dashboard_daily_totals(
+                db,
+                current_day,
+                previous_day,
+            )
+
             database = {
                 "active": True,
                 "state": "ok",
@@ -201,7 +212,50 @@ def build_dashboard_health(config):
         "connected_scanner_ids": connected_scanner_ids,
         "last_received": last_received,
         "recent_scans": recent_scans,
+        "daily_totals": daily_totals,
         "script_log": script_log,
+    }
+
+
+def empty_daily_totals(current_day: date, previous_day: date) -> dict:
+    return {
+        "today": dashboard_total_row(current_day),
+        "yesterday": dashboard_total_row(previous_day),
+    }
+
+
+def dashboard_total_row(scan_date: date, row: Optional[dict] = None) -> dict:
+    row = row or {}
+    return {
+        "scan_date": scan_date.isoformat(),
+        "successful_scans": int(row.get("successful_scans") or 0),
+        "failed_scans": int(row.get("failed_scans") or 0),
+    }
+
+
+def fetch_dashboard_daily_totals(
+    db,
+    current_day: date,
+    previous_day: date,
+) -> dict:
+    rows = fetch_all(
+        db,
+        """
+        SELECT
+            scan_date,
+            count(*) FILTER (WHERE is_success) AS successful_scans,
+            count(*) FILTER (WHERE is_success = false) AS failed_scans
+        FROM scanner_logger.scan_events
+        WHERE scan_date IN (%s, %s)
+        GROUP BY scan_date
+        """,
+        [current_day, previous_day],
+    )
+    rows_by_date = {row["scan_date"]: row for row in rows}
+
+    return {
+        "today": dashboard_total_row(current_day, rows_by_date.get(current_day)),
+        "yesterday": dashboard_total_row(previous_day, rows_by_date.get(previous_day)),
     }
 
 

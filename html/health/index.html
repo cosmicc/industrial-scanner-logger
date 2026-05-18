@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scanner Logger Health</title>
+  <link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+  <main class="page">
+    <h1>Industrial Scanner Logger Health</h1>
+    <div class="subhead">
+      Auto-refreshes every 5 seconds. Data source: <code>/api/v1/dashboard/health</code>
+    </div>
+
+    <section class="grid">
+      <div class="card">
+        <h2>Scanner Receiver Service</h2>
+        <div class="status-row">
+          <span id="scanner-dot" class="dot"></span>
+          <span id="scanner-status">Checking...</span>
+        </div>
+        <div id="scanner-detail" class="detail"></div>
+      </div>
+
+      <div class="card">
+        <h2>API Service</h2>
+        <div class="status-row">
+          <span id="api-dot" class="dot"></span>
+          <span id="api-status">Checking...</span>
+        </div>
+        <div id="api-detail" class="detail"></div>
+      </div>
+
+      <div class="card">
+        <h2>PostgreSQL</h2>
+        <div class="status-row">
+          <span id="db-dot" class="dot"></span>
+          <span id="db-status">Checking...</span>
+        </div>
+        <div id="db-detail" class="detail"></div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h2>Last Received Data</h2>
+        <div id="last-received" class="big-value">Checking...</div>
+      </div>
+
+      <div class="card">
+        <h2>Currently Connected Scanner IDs</h2>
+        <div id="scanner-list" class="scanner-list">Checking...</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h2>Today Totals</h2>
+        <div id="today-date" class="detail">Checking...</div>
+        <div class="metric-grid">
+          <div class="metric">
+            <div class="metric-label">Successful Scans</div>
+            <div id="today-success" class="metric-value success">0</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Failed Scans</div>
+            <div id="today-failed" class="metric-value failed">0</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Yesterday Totals</h2>
+        <div id="yesterday-date" class="detail">Checking...</div>
+        <div class="metric-grid">
+          <div class="metric">
+            <div class="metric-label">Successful Scans</div>
+            <div id="yesterday-success" class="metric-value success">0</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Failed Scans</div>
+            <div id="yesterday-failed" class="metric-value failed">0</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Last 10 Script Log Lines</h2>
+      <div id="script-log-meta" class="log-meta">Checking...</div>
+      <pre id="script-log-lines" class="log-box">Checking...</pre>
+    </section>
+
+    <section class="card">
+      <h2>Last 10 Scan Rows</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Time</th>
+            <th>Scanner ID</th>
+            <th>Status</th>
+            <th>Barcode</th>
+            <th>Failure Reason</th>
+          </tr>
+        </thead>
+        <tbody id="recent-scans">
+          <tr>
+            <td colspan="6">Checking...</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <div class="footer">
+      Last page update: <span id="page-updated">never</span>
+    </div>
+  </main>
+
+  <script>
+    const API_URL = "/api/v1/dashboard/health";
+
+    function setIndicator(prefix, active, statusText, detailText) {
+      const dot = document.getElementById(`${prefix}-dot`);
+      const status = document.getElementById(`${prefix}-status`);
+      const detail = document.getElementById(`${prefix}-detail`);
+
+      dot.classList.remove("green", "red");
+      dot.classList.add(active ? "green" : "red");
+
+      status.textContent = statusText;
+      detail.textContent = detailText || "";
+    }
+
+    function renderScannerList(scannerIds) {
+      const container = document.getElementById("scanner-list");
+      container.innerHTML = "";
+
+      if (!scannerIds || scannerIds.length === 0) {
+        container.textContent = "No established scanner TCP connections detected.";
+        return;
+      }
+
+      for (const scannerId of scannerIds) {
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = `Scanner ${scannerId}`;
+        container.appendChild(badge);
+      }
+    }
+
+    function renderRecentScans(rows) {
+      const tbody = document.getElementById("recent-scans");
+      tbody.innerHTML = "";
+
+      if (!rows || rows.length === 0) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td colspan="6">No scan rows found.</td>`;
+        tbody.appendChild(tr);
+        return;
+      }
+
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        const statusClass = row.is_success ? "success" : "failed";
+        const statusText = row.is_success ? "SUCCESS" : "FAILED";
+
+        tr.innerHTML = `
+          <td>${row.scan_date ?? ""}</td>
+          <td>${row.scan_time ?? ""}</td>
+          <td>${row.scanner_id ?? ""}</td>
+          <td class="${statusClass}">${statusText}</td>
+          <td>${escapeHtml(row.barcode ?? "")}</td>
+          <td>${escapeHtml(row.failure_reason ?? "")}</td>
+        `;
+
+        tbody.appendChild(tr);
+      }
+    }
+
+    function renderDailyTotals(totals) {
+      renderDailyTotal("today", totals?.today);
+      renderDailyTotal("yesterday", totals?.yesterday);
+    }
+
+    function renderDailyTotal(prefix, total) {
+      const dateElement = document.getElementById(`${prefix}-date`);
+      const successElement = document.getElementById(`${prefix}-success`);
+      const failedElement = document.getElementById(`${prefix}-failed`);
+
+      if (!total) {
+        dateElement.textContent = "Unavailable";
+        successElement.textContent = "0";
+        failedElement.textContent = "0";
+        return;
+      }
+
+      dateElement.textContent = total.scan_date || "No date returned";
+      successElement.textContent = formatCount(total.successful_scans);
+      failedElement.textContent = formatCount(total.failed_scans);
+    }
+
+    function formatCount(value) {
+      return Number(value || 0).toLocaleString();
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function renderScriptLog(scriptLog) {
+      const meta = document.getElementById("script-log-meta");
+      const lines = document.getElementById("script-log-lines");
+
+      if (!scriptLog) {
+        meta.textContent = "No log data returned by API.";
+        lines.textContent = "";
+        return;
+      }
+
+      meta.textContent = `Source: ${scriptLog.path || "unknown"}`;
+
+      if (!scriptLog.available) {
+        lines.textContent = scriptLog.error || "Log file unavailable.";
+        return;
+      }
+
+      if (!scriptLog.lines || scriptLog.lines.length === 0) {
+        lines.textContent = "Log file exists, but no lines were returned.";
+        return;
+      }
+
+      lines.textContent = scriptLog.lines.join("\n");
+    }
+
+    async function refreshHealth() {
+      try {
+        const response = await fetch(API_URL, { cache: "no-store" });
+
+        if (!response.ok) {
+          throw new Error(`API returned HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        const scanner = data.services?.scanner || {};
+        const api = data.services?.api || {};
+        const database = data.database || {};
+
+        setIndicator(
+          "scanner",
+          Boolean(scanner.active),
+          scanner.active ? "Running" : "Not Running",
+          `${scanner.unit || "scanner service"}: ${scanner.state || "unknown"}`
+        );
+
+        setIndicator(
+          "api",
+          Boolean(api.active),
+          api.active ? "Running" : "Not Running",
+          `${api.unit || "api service"}: ${api.state || "unknown"}`
+        );
+
+        setIndicator(
+          "db",
+          Boolean(database.active),
+          database.active ? "Connected" : "Unavailable",
+          database.error || database.state || ""
+        );
+
+        if (data.last_received) {
+          document.getElementById("last-received").textContent =
+            `${data.last_received.scan_date} ${data.last_received.scan_time}`;
+        } else {
+          document.getElementById("last-received").textContent =
+            "No scan rows found.";
+        }
+
+        renderScannerList(data.connected_scanner_ids);
+        renderDailyTotals(database.active ? data.daily_totals : null);
+        renderRecentScans(data.recent_scans);
+        renderScriptLog(data.script_log);
+
+        document.getElementById("page-updated").textContent =
+          new Date().toLocaleString();
+
+      } catch (error) {
+        setIndicator("scanner", false, "Unknown", "API unavailable.");
+        setIndicator("api", false, "Unavailable", error.message);
+        setIndicator("db", false, "Unknown", "API unavailable.");
+
+        document.getElementById("last-received").innerHTML =
+          `<span class="error">Unable to load health data.</span>`;
+
+        document.getElementById("scanner-list").textContent =
+          "Unable to load scanner connection data.";
+
+        renderDailyTotals(null);
+
+        document.getElementById("recent-scans").innerHTML =
+          `<tr><td colspan="6" class="error">Unable to load recent scan rows.</td></tr>`;
+
+        document.getElementById("script-log-meta").textContent =
+          "Unable to load script log.";
+
+        document.getElementById("script-log-lines").textContent =
+          error.message;
+      }
+    }
+
+    refreshHealth();
+    setInterval(refreshHealth, 5000);
+  </script>
+</body>
+</html>

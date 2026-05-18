@@ -40,16 +40,17 @@ NGINX_ENABLED="${NGINX_ENABLED:-1}"
 NGINX_SITE_NAME="${NGINX_SITE_NAME:-industrial-scanner-logger}"
 NGINX_LISTEN="${NGINX_LISTEN:-80 default_server}"
 NGINX_SERVER_NAME="${NGINX_SERVER_NAME:-_}"
-NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/industrial-scanner-logger}"
+NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/scanner-site}"
 NGINX_DISABLE_DEFAULT_SITE="${NGINX_DISABLE_DEFAULT_SITE:-1}"
 START_SERVICE="${START_SERVICE:-1}"
 OVERWRITE_CONFIG="${OVERWRITE_CONFIG:-0}"
+APT_UPDATED=0
 
 usage() {
     cat <<USAGE
 Usage: sudo scripts/install.sh [options]
 
-Install the Industrial Scanner Logger runtime, services, and nginx API proxy.
+Install the Industrial Scanner Logger runtime, services, nginx API proxy, and UFW firewall.
 
 Options:
   --service-name NAME       systemd service name [${SERVICE_NAME}]
@@ -110,6 +111,13 @@ require_command() {
     fi
 }
 
+apt_get_update_once() {
+    if [[ "${APT_UPDATED}" -eq 0 ]]; then
+        apt-get update
+        APT_UPDATED=1
+    fi
+}
+
 copy_project_tree() {
     python3 - "$1" "$2" <<'PY'
 from pathlib import Path
@@ -154,6 +162,49 @@ shutil.copytree(source, destination, dirs_exist_ok=True, ignore=ignore_names)
 PY
 }
 
+install_html_tree() {
+    local source_dir="$1"
+    local destination_dir="$2"
+
+    if [[ ! -d "${source_dir}" ]]; then
+        return
+    fi
+
+    python3 - "${source_dir}" "${destination_dir}" <<'PY'
+from pathlib import Path
+import os
+import shutil
+import sys
+
+
+source = Path(sys.argv[1]).resolve()
+destination = Path(sys.argv[2]).resolve()
+touched_dirs = {destination}
+
+destination.mkdir(parents=True, exist_ok=True)
+
+for path in source.rglob("*"):
+    if path.name in {".gitkeep", ".DS_Store"}:
+        continue
+
+    target = destination / path.relative_to(source)
+
+    if path.is_dir():
+        target.mkdir(parents=True, exist_ok=True)
+        touched_dirs.add(target)
+    elif path.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        touched_dirs.add(target.parent)
+        shutil.copy2(path, target)
+        os.chown(target, 0, 0)
+        os.chmod(target, 0o644)
+
+for directory in sorted(touched_dirs, key=lambda item: len(item.parts)):
+    os.chown(directory, 0, 0)
+    os.chmod(directory, 0o755)
+PY
+}
+
 escape_sed_replacement() {
     printf "%s" "$1" | sed "s/[&|]/\\\\&/g"
 }
@@ -176,8 +227,29 @@ install_nginx_package() {
 
     echo "Installing nginx..."
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update
+    apt_get_update_once
     apt-get install -y nginx
+}
+
+install_ufw_firewall() {
+    require_command apt-get
+
+    if ! command -v ufw >/dev/null 2>&1; then
+        echo "Installing ufw..."
+        export DEBIAN_FRONTEND=noninteractive
+        apt_get_update_once
+        apt-get install -y ufw
+    fi
+
+    echo "Configuring ufw firewall..."
+    ufw --force reset
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow 22/tcp
+    ufw allow 55256/tcp
+    ufw allow 80/tcp
+    ufw allow 443/tcp
+    ufw --force enable
 }
 
 while [[ $# -gt 0 ]]; do
@@ -378,23 +450,8 @@ if [[ "${API_ENABLED}" -eq 0 ]]; then
 fi
 
 if [[ "${EUID}" -ne 0 ]]; then
-    if ! command -v sudo >/dev/null 2>&1; then
-        echo "This installer must run as root, and sudo was not found." >&2
-        exit 1
-    fi
-
-    export SERVICE_NAME API_SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP LEGACY_ENV_FILE
-    export START_SERVICE OVERWRITE_CONFIG
-    export OUTPUT_DIR LOG_FILE SCAN_DATA_LOG_DIR SCAN_DATA_LOG_PREFIX
-    export HOST PORT PREFIX NO_READ_MESSAGE SUCCESS_LENGTH
-    export MAX_BARCODE_CHARS MAX_CLIENTS FRAME_IDLE_TIMEOUT CLIENT_IDLE_TIMEOUT SHUTDOWN_TIMEOUT
-    export TCP_KEEPALIVE_IDLE TCP_KEEPALIVE_INTERVAL TCP_KEEPALIVE_PROBES
-    export POSTGRESQL_ENABLED POSTGRESQL_DSN POSTGRESQL_TABLE
-    export POSTGRESQL_CONNECT_TIMEOUT POSTGRESQL_RETRY_INTERVAL POSTGRESQL_REQUIRED
-    export API_ENABLED API_HOST API_PORT API_ROOT_PATH API_LOG_LEVEL
-    export NGINX_ENABLED NGINX_SITE_NAME NGINX_LISTEN NGINX_SERVER_NAME NGINX_WEB_ROOT
-    export NGINX_DISABLE_DEFAULT_SITE
-    exec sudo --preserve-env=SERVICE_NAME,API_SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,LEGACY_ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,SCAN_DATA_LOG_PREFIX,HOST,PORT,PREFIX,NO_READ_MESSAGE,SUCCESS_LENGTH,MAX_BARCODE_CHARS,MAX_CLIENTS,FRAME_IDLE_TIMEOUT,CLIENT_IDLE_TIMEOUT,SHUTDOWN_TIMEOUT,TCP_KEEPALIVE_IDLE,TCP_KEEPALIVE_INTERVAL,TCP_KEEPALIVE_PROBES,POSTGRESQL_ENABLED,POSTGRESQL_DSN,POSTGRESQL_TABLE,POSTGRESQL_CONNECT_TIMEOUT,POSTGRESQL_RETRY_INTERVAL,POSTGRESQL_REQUIRED,API_ENABLED,API_HOST,API_PORT,API_ROOT_PATH,API_LOG_LEVEL,NGINX_ENABLED,NGINX_SITE_NAME,NGINX_LISTEN,NGINX_SERVER_NAME,NGINX_WEB_ROOT,NGINX_DISABLE_DEFAULT_SITE,START_SERVICE,OVERWRITE_CONFIG "$0"
+    echo "This installer must be run as root. Re-run it with sudo." >&2
+    exit 1
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -402,6 +459,7 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 SERVICE_TEMPLATE="${PROJECT_ROOT}/systemd/industrial-scanner-logger.service"
 API_SERVICE_TEMPLATE="${PROJECT_ROOT}/systemd/industrial-scanner-logger-api.service"
 NGINX_TEMPLATE="${PROJECT_ROOT}/nginx/industrial-scanner-logger.conf"
+HTML_SOURCE_DIR="${PROJECT_ROOT}/html"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 API_UNIT_FILE="/etc/systemd/system/${API_SERVICE_NAME}.service"
 NGINX_AVAILABLE_DIR="/etc/nginx/sites-available"
@@ -450,6 +508,8 @@ if [[ "${NGINX_ENABLED}" -eq 1 ]]; then
     validate_api_root_path
     install_nginx_package
 fi
+
+install_ufw_firewall
 
 if [[ -r /etc/os-release ]]; then
     # shellcheck disable=SC1091
@@ -605,6 +665,7 @@ if [[ "${NGINX_ENABLED}" -eq 1 ]]; then
     install -d -o root -g root -m 0755 "${NGINX_AVAILABLE_DIR}"
     install -d -o root -g root -m 0755 "${NGINX_ENABLED_DIR}"
     install -d -o root -g root -m 0755 "${NGINX_WEB_ROOT}"
+    install_html_tree "${HTML_SOURCE_DIR}" "${NGINX_WEB_ROOT}"
 
     sed \
         -e "s|@NGINX_LISTEN@|$(escape_sed_replacement "${NGINX_LISTEN}")|g" \
@@ -677,6 +738,9 @@ Nginx API proxy:
 
 Web root:
   ${NGINX_WEB_ROOT}
+
+UFW firewall:
+  enabled; incoming allow list is 22/tcp, 55256/tcp, 80/tcp, 443/tcp
 
 Useful commands:
   sudo systemctl status ${SERVICE_NAME}
