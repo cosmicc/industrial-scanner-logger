@@ -268,13 +268,13 @@ def empty_current_scan_rate() -> dict:
 
 
 def scan_rate_row(scan_count: int) -> dict:
+    scans_per_minute = (scan_count / CURRENT_SCAN_RATE_WINDOW_SECONDS) * 60
+
     return {
         "window_seconds": CURRENT_SCAN_RATE_WINDOW_SECONDS,
         "scan_count": scan_count,
-        "scans_per_minute": round(
-            (scan_count / CURRENT_SCAN_RATE_WINDOW_SECONDS) * 60,
-            2,
-        ),
+        "scans_per_minute": round(scans_per_minute, 2),
+        "scans_per_hour": round(scans_per_minute * 60, 2),
     }
 
 

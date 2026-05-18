@@ -178,6 +178,7 @@ class ApiQueryTests(unittest.TestCase):
                 "window_seconds": 60,
                 "scan_count": 7,
                 "scans_per_minute": 7.0,
+                "scans_per_hour": 420.0,
             },
         )
 

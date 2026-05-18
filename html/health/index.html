@@ -200,11 +200,8 @@
         return;
       }
 
-      const windowSeconds = Number(scanRate.window_seconds || 60);
-
       rateElement.textContent = `${formatRate(scanRate.scans_per_minute)} scans/min`;
-      detailElement.textContent =
-        `${formatCount(scanRate.scan_count)} scans in the last ${windowSeconds} seconds`;
+      detailElement.textContent = `${formatRate(scanRate.scans_per_hour)} scans/hour`;
     }
 
     function renderDailyTotal(prefix, total) {
