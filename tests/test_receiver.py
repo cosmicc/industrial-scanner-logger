@@ -18,10 +18,26 @@ from industrial_scanner_logger.receiver import (  # noqa: E402
     clean_barcode,
     configure_script_logging,
     handle_client,
+    load_receiver_config,
     oversized_scan_marker,
+    parse_postgresql_table,
     reset_script_logging,
+    scanner_id_for_postgresql,
     scanner_id_from_addr,
 )
+
+
+class FakePostgreSQLLogger:
+    def __init__(self):
+        self.rows = []
+        self.closed = False
+
+    def write_scan_event(self, tracking_number, scanner_id, scan_date, scan_time):
+        self.rows.append((scan_date, scan_time, scanner_id, tracking_number))
+        return True
+
+    def close(self):
+        self.closed = True
 
 
 class FakeSocket:
@@ -59,8 +75,8 @@ class FakeSocket:
 
 
 class ReceiverTests(unittest.TestCase):
-    def test_project_version_is_1_1_2(self):
-        self.assertEqual(__version__, "1.1.2")
+    def test_project_version_is_1_2_0(self):
+        self.assertEqual(__version__, "1.2.0")
 
     def test_clean_barcode_removes_scanner_line_noise(self):
         self.assertEqual(clean_barcode("\x0012345\r\n"), "12345")
@@ -70,6 +86,91 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(scanner_id_from_addr(("10.10.10.20", 55256)), "20")
         self.assertEqual(scanner_id_from_addr(("192.168.1.7", 55256)), "7")
         self.assertEqual(scanner_id_from_addr(("localhost", 55256)), "UNKNOWN")
+
+    def test_scanner_id_for_postgresql_uses_smallint_range(self):
+        self.assertEqual(scanner_id_for_postgresql("20"), 20)
+        self.assertEqual(scanner_id_for_postgresql("255"), 255)
+        self.assertEqual(scanner_id_for_postgresql("UNKNOWN"), 0)
+        self.assertEqual(scanner_id_for_postgresql("scanner-A"), 0)
+
+    def test_parse_postgresql_table_requires_safe_schema_table_name(self):
+        self.assertEqual(
+            parse_postgresql_table("scanner_logger.scan_events"),
+            ("scanner_logger", "scan_events"),
+        )
+
+        with self.assertRaises(ValueError):
+            parse_postgresql_table("scan_events")
+
+        with self.assertRaises(ValueError):
+            parse_postgresql_table("scanner_logger.scan-events")
+
+    def test_load_receiver_config_reads_ini_options(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "industrial-scanner-logger.conf"
+            config_path.write_text(
+                """
+[receiver]
+host = 127.0.0.1
+port = 60000
+output_dir = /tmp/scanner-logs
+prefix = Test
+no_read_message = NOREAD
+success_length = 20
+max_barcode_chars = 128
+max_clients = 3
+frame_idle_timeout = 0.5
+client_idle_timeout = 0
+shutdown_timeout = 2
+
+[logging]
+log_file = /tmp/industrial-scanner-logger.log
+scan_data_log_dir = /tmp/raw-scans
+scan_data_log_prefix = scanner-data
+
+[tcp_keepalive]
+enabled = false
+idle = 30
+interval = 10
+probes = 2
+
+[postgresql]
+enabled = true
+required = true
+dsn = postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger
+table = scanner_logger.scan_events
+connect_timeout = 4
+retry_interval = 12
+""".strip(),
+                encoding="utf-8",
+            )
+
+            config = load_receiver_config(str(config_path))
+
+            self.assertTrue(config.config_loaded)
+            self.assertEqual(config.host, "127.0.0.1")
+            self.assertEqual(config.port, 60000)
+            self.assertEqual(config.output_dir, "/tmp/scanner-logs")
+            self.assertEqual(config.prefix, "Test")
+            self.assertEqual(config.no_read_message, "NOREAD")
+            self.assertEqual(config.success_length, 20)
+            self.assertEqual(config.max_barcode_chars, 128)
+            self.assertEqual(config.max_clients, 3)
+            self.assertEqual(config.frame_idle_timeout, 0.5)
+            self.assertEqual(config.client_idle_timeout, 0)
+            self.assertEqual(config.shutdown_timeout, 2)
+            self.assertEqual(config.log_file, "/tmp/industrial-scanner-logger.log")
+            self.assertEqual(config.scan_data_log_dir, "/tmp/raw-scans")
+            self.assertEqual(config.scan_data_log_prefix, "scanner-data")
+            self.assertTrue(config.disable_tcp_keepalive)
+            self.assertEqual(config.tcp_keepalive_idle, 30)
+            self.assertEqual(config.tcp_keepalive_interval, 10)
+            self.assertEqual(config.tcp_keepalive_probes, 2)
+            self.assertTrue(config.postgresql_enabled)
+            self.assertTrue(config.postgresql_required)
+            self.assertEqual(config.postgresql_table, "scanner_logger.scan_events")
+            self.assertEqual(config.postgresql_connect_timeout, 4)
+            self.assertEqual(config.postgresql_retry_interval, 12)
 
     def test_classify_scan_accepts_only_expected_numeric_length(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
@@ -311,6 +412,34 @@ class ReceiverTests(unittest.TestCase):
                     },
                 ],
             )
+
+    def test_postgresql_logger_receives_accepted_scan_events_after_dedup(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            postgresql_logger = FakePostgreSQLLogger()
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                postgresql_logger=postgresql_logger,
+            )
+
+            valid_tracking = "4" * 34
+
+            logger.write_scan_event(valid_tracking, "20")
+            logger.write_scan_event(valid_tracking, "20")
+            logger.write_scan_event("__NO_READ__", "20")
+
+            self.assertEqual(len(postgresql_logger.rows), 2)
+            self.assertEqual(postgresql_logger.rows[0][0], logger.current_date)
+            self.assertRegex(postgresql_logger.rows[0][1], r"^\d{2}:\d{2}:\d{2}$")
+            self.assertEqual(postgresql_logger.rows[0][2:], ("20", valid_tracking))
+            self.assertEqual(postgresql_logger.rows[1][0], logger.current_date)
+            self.assertRegex(postgresql_logger.rows[1][1], r"^\d{2}:\d{2}:\d{2}$")
+            self.assertEqual(postgresql_logger.rows[1][2:], ("20", "__NO_READ__"))
+
+            logger.close()
+            self.assertTrue(postgresql_logger.closed)
 
     def test_script_log_omits_scanner_barcode_data_and_daily_data_log_keeps_it(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):

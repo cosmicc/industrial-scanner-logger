@@ -33,6 +33,7 @@ Example daily CSV files:
 """
 
 import argparse
+import configparser
 import csv
 import logging
 import re
@@ -51,6 +52,7 @@ from industrial_scanner_logger._version import __version__
 # Failed scans are always logged.
 LOG_DUPLICATE_SUCCESS_SCANS = False
 
+DEFAULT_CONFIG_FILE = "/etc/industrial-scanner-logger.conf"
 DEFAULT_MAX_BARCODE_CHARS = 256
 DEFAULT_MAX_CLIENTS = 8
 DEFAULT_FRAME_IDLE_TIMEOUT_SECONDS = 0.25
@@ -62,6 +64,10 @@ DEFAULT_SCAN_DATA_LOG_PREFIX = "scanner-log-data"
 DEFAULT_TCP_KEEPALIVE_IDLE_SECONDS = 60
 DEFAULT_TCP_KEEPALIVE_INTERVAL_SECONDS = 15
 DEFAULT_TCP_KEEPALIVE_PROBES = 4
+DEFAULT_POSTGRESQL_DSN = "postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger"
+DEFAULT_POSTGRESQL_TABLE = "scanner_logger.scan_events"
+DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS = 3.0
+DEFAULT_POSTGRESQL_RETRY_INTERVAL_SECONDS = 30.0
 LOG_BARCODE_PREVIEW_CHARS = 120
 MIN_MAX_BARCODE_CHARS = 64
 UNKNOWN_SCANNER_ID = "UNKNOWN"
@@ -70,8 +76,44 @@ ALL_SCANNERS_ID = "ALL"
 SAFE_FILE_PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SCANNER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+POSTGRESQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 SCRIPT_LOGGER = logging.getLogger("industrial_scanner_logger")
 SCRIPT_LOGGER.addHandler(logging.NullHandler())
+
+CONFIG_DEFAULTS = {
+    "receiver": {
+        "host": "0.0.0.0",
+        "port": "55256",
+        "output_dir": "/scanner-logs",
+        "prefix": "Site_Shipped_Tracking",
+        "no_read_message": "__NO_READ__",
+        "success_length": "34",
+        "max_barcode_chars": str(DEFAULT_MAX_BARCODE_CHARS),
+        "max_clients": str(DEFAULT_MAX_CLIENTS),
+        "frame_idle_timeout": str(DEFAULT_FRAME_IDLE_TIMEOUT_SECONDS),
+        "client_idle_timeout": str(DEFAULT_CLIENT_IDLE_TIMEOUT_SECONDS),
+        "shutdown_timeout": str(DEFAULT_SHUTDOWN_TIMEOUT_SECONDS),
+    },
+    "logging": {
+        "log_file": DEFAULT_LOG_FILE,
+        "scan_data_log_dir": DEFAULT_SCAN_DATA_LOG_DIR,
+        "scan_data_log_prefix": DEFAULT_SCAN_DATA_LOG_PREFIX,
+    },
+    "tcp_keepalive": {
+        "enabled": "true",
+        "idle": str(DEFAULT_TCP_KEEPALIVE_IDLE_SECONDS),
+        "interval": str(DEFAULT_TCP_KEEPALIVE_INTERVAL_SECONDS),
+        "probes": str(DEFAULT_TCP_KEEPALIVE_PROBES),
+    },
+    "postgresql": {
+        "enabled": "false",
+        "required": "false",
+        "dsn": DEFAULT_POSTGRESQL_DSN,
+        "table": DEFAULT_POSTGRESQL_TABLE,
+        "connect_timeout": str(DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS),
+        "retry_interval": str(DEFAULT_POSTGRESQL_RETRY_INTERVAL_SECONDS),
+    },
+}
 
 
 def _clear_script_logger_handlers():
@@ -224,6 +266,108 @@ def scanner_id_from_addr(addr) -> str:
     return UNKNOWN_SCANNER_ID
 
 
+def scanner_id_for_postgresql(scanner_id: str) -> int:
+    """
+    Convert the service scanner ID into the database SMALLINT range.
+
+    The PostgreSQL schema stores scanner_id as 0-255. Unknown/non-IPv4 clients
+    are stored as 0 because the schema intentionally does not include NULL IDs.
+    """
+    scanner_id = normalize_scanner_id(scanner_id)
+
+    try:
+        value = int(scanner_id)
+    except ValueError:
+        return 0
+
+    if 0 <= value <= 255:
+        return value
+
+    return 0
+
+
+def parse_postgresql_table(table_name: str):
+    parts = table_name.split(".")
+
+    if len(parts) != 2:
+        raise ValueError("postgresql_table must use schema.table format")
+
+    schema_name, relation_name = parts
+
+    for identifier in (schema_name, relation_name):
+        if not POSTGRESQL_IDENTIFIER_RE.match(identifier):
+            raise ValueError(
+                "postgresql_table identifiers must start with a letter or underscore "
+                "and contain only letters, numbers, or underscores"
+            )
+
+    return schema_name, relation_name
+
+
+def _new_config_parser():
+    config = configparser.ConfigParser(interpolation=None)
+    config.read_dict(CONFIG_DEFAULTS)
+    return config
+
+
+def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
+    """
+    Load receiver options from an INI config file.
+
+    The service uses the default path with no command-line runtime options.
+    """
+    config = _new_config_parser()
+    config_path = Path(config_file)
+    config_loaded = False
+
+    if config_path.exists():
+        try:
+            with config_path.open(encoding="utf-8") as f:
+                config.read_file(f)
+        except configparser.Error as exc:
+            raise ValueError(f"could not parse config file {config_path}: {exc}") from exc
+
+        config_loaded = True
+
+    elif str(config_path) != DEFAULT_CONFIG_FILE:
+        raise ValueError(f"config file does not exist: {config_path}")
+
+    try:
+        return argparse.Namespace(
+            config_file=str(config_path),
+            config_loaded=config_loaded,
+            host=config.get("receiver", "host"),
+            port=config.getint("receiver", "port"),
+            output_dir=config.get("receiver", "output_dir"),
+            prefix=config.get("receiver", "prefix"),
+            no_read_message=config.get("receiver", "no_read_message"),
+            success_length=config.getint("receiver", "success_length"),
+            max_barcode_chars=config.getint("receiver", "max_barcode_chars"),
+            max_clients=config.getint("receiver", "max_clients"),
+            frame_idle_timeout=config.getfloat("receiver", "frame_idle_timeout"),
+            client_idle_timeout=config.getfloat("receiver", "client_idle_timeout"),
+            shutdown_timeout=config.getfloat("receiver", "shutdown_timeout"),
+            log_file=config.get("logging", "log_file"),
+            scan_data_log_dir=config.get("logging", "scan_data_log_dir"),
+            scan_data_log_prefix=config.get("logging", "scan_data_log_prefix"),
+            disable_tcp_keepalive=not config.getboolean("tcp_keepalive", "enabled"),
+            tcp_keepalive_idle=config.getint("tcp_keepalive", "idle"),
+            tcp_keepalive_interval=config.getint("tcp_keepalive", "interval"),
+            tcp_keepalive_probes=config.getint("tcp_keepalive", "probes"),
+            postgresql_enabled=config.getboolean("postgresql", "enabled"),
+            postgresql_required=config.getboolean("postgresql", "required"),
+            postgresql_dsn=config.get("postgresql", "dsn"),
+            postgresql_table=config.get("postgresql", "table"),
+            postgresql_connect_timeout=config.getfloat(
+                "postgresql",
+                "connect_timeout",
+            ),
+            postgresql_retry_interval=config.getfloat("postgresql", "retry_interval"),
+        )
+    except (configparser.Error, ValueError) as exc:
+        raise ValueError(f"invalid config file {config_path}: {exc}") from exc
+
+
 def enable_tcp_keepalive(
     conn: socket.socket,
     idle_seconds: int,
@@ -262,6 +406,149 @@ def enable_tcp_keepalive(
             )
 
 
+class PostgreSQLScanLogger:
+    def __init__(
+        self,
+        dsn: str = DEFAULT_POSTGRESQL_DSN,
+        table_name: str = DEFAULT_POSTGRESQL_TABLE,
+        connect_timeout: float = DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS,
+        retry_interval: float = DEFAULT_POSTGRESQL_RETRY_INTERVAL_SECONDS,
+        required: bool = False,
+    ):
+        self.dsn = dsn
+        self.schema_name, self.relation_name = parse_postgresql_table(table_name)
+        self.connect_timeout = validate_positive_float(
+            connect_timeout,
+            "postgresql_connect_timeout",
+        )
+        self.retry_interval = validate_nonnegative_float(
+            retry_interval,
+            "postgresql_retry_interval",
+        )
+        self.required = required
+        self.conn = None
+        self.insert_sql = None
+        self.next_retry_time = 0.0
+        self.driver_unavailable = False
+        self._psycopg = None
+        self._sql = None
+
+    @property
+    def table_name(self) -> str:
+        return f"{self.schema_name}.{self.relation_name}"
+
+    def _load_driver(self):
+        if self.driver_unavailable:
+            return False
+
+        if self._psycopg is not None and self._sql is not None:
+            return True
+
+        try:
+            import psycopg
+            from psycopg import sql
+        except ImportError as exc:
+            self.driver_unavailable = True
+            message = (
+                "PostgreSQL logging requires the psycopg package. "
+                "Install the project dependencies or reinstall the service."
+            )
+
+            if self.required:
+                raise RuntimeError(message) from exc
+
+            SCRIPT_LOGGER.error(message)
+            return False
+
+        self._psycopg = psycopg
+        self._sql = sql
+        self.insert_sql = sql.SQL(
+            "INSERT INTO {}.{} "
+            "(scan_date, scan_time, scanner_id, tracking_number) "
+            "VALUES (%s, %s, %s, %s)"
+        ).format(
+            sql.Identifier(self.schema_name),
+            sql.Identifier(self.relation_name),
+        )
+        return True
+
+    def _mark_unavailable(self, action: str, exc: Exception):
+        self.close()
+        self.next_retry_time = time.monotonic() + self.retry_interval
+
+        message = (
+            f"PostgreSQL scan logging {action} failed table={self.table_name} "
+            f"retry_interval={self.retry_interval}s error={exc}"
+        )
+
+        if self.required:
+            raise RuntimeError(message) from exc
+
+        SCRIPT_LOGGER.error(message)
+
+    def _connect(self) -> bool:
+        if self.conn is not None:
+            return True
+
+        if time.monotonic() < self.next_retry_time:
+            return False
+
+        if not self._load_driver():
+            return False
+
+        try:
+            self.conn = self._psycopg.connect(
+                self.dsn,
+                autocommit=True,
+                connect_timeout=max(1, int(round(self.connect_timeout))),
+            )
+        except Exception as exc:
+            self._mark_unavailable("connect", exc)
+            return False
+
+        SCRIPT_LOGGER.info("PostgreSQL scan logging connected table=%s", self.table_name)
+        return True
+
+    def verify_connection(self):
+        if not self._connect():
+            raise RuntimeError("PostgreSQL scan logging is unavailable")
+
+    def write_scan_event(
+        self,
+        tracking_number: str,
+        scanner_id: str,
+        scan_date: str,
+        scan_time: str,
+    ) -> bool:
+        if not self._connect():
+            return False
+
+        db_scanner_id = scanner_id_for_postgresql(scanner_id)
+
+        try:
+            with self.conn.cursor() as cursor:
+                cursor.execute(
+                    self.insert_sql,
+                    (scan_date, scan_time, db_scanner_id, tracking_number),
+                )
+        except Exception as exc:
+            self._mark_unavailable("insert", exc)
+            return False
+
+        return True
+
+    def close(self):
+        if self.conn is None:
+            return
+
+        try:
+            self.conn.close()
+        except Exception as exc:
+            SCRIPT_LOGGER.warning("PostgreSQL close failed: %s", exc)
+        finally:
+            self.conn = None
+
+
 class DailyCsvLogger:
     def __init__(
         self,
@@ -272,6 +559,7 @@ class DailyCsvLogger:
         max_barcode_chars: int = DEFAULT_MAX_BARCODE_CHARS,
         scan_data_log_dir=None,
         scan_data_log_prefix: str = DEFAULT_SCAN_DATA_LOG_PREFIX,
+        postgresql_logger=None,
     ):
         self.output_dir = output_dir
         self.file_prefix = validate_file_prefix(file_prefix)
@@ -298,6 +586,7 @@ class DailyCsvLogger:
 
         self.scan_data_log_dir = Path(scan_data_log_dir)
         self.scan_data_log_prefix = validate_file_prefix(scan_data_log_prefix)
+        self.postgresql_logger = postgresql_logger
         self.lock = threading.Lock()
 
         self.current_date = None
@@ -939,9 +1228,17 @@ class DailyCsvLogger:
                 )
                 self.scan_data_log_error_reported = True
 
+    def close(self):
+        if self.postgresql_logger is not None:
+            close = getattr(self.postgresql_logger, "close", None)
+
+            if close is not None:
+                close()
+
     def write_scan_event(self, raw_barcode: str, scanner_id: str = UNKNOWN_SCANNER_ID):
         scanner_id = normalize_scanner_id(scanner_id)
         barcode = self._normalize_barcode_for_storage(clean_barcode(raw_barcode))
+        postgresql_event = None
 
         if not barcode:
             return
@@ -1005,6 +1302,11 @@ class DailyCsvLogger:
                 f"Time:{time_str} "
                 f"Barcode:{truncate_for_log(barcode)}"
             )
+
+            postgresql_event = (barcode, scanner_id, date_str, time_str)
+
+        if self.postgresql_logger is not None and postgresql_event is not None:
+            self.postgresql_logger.write_scan_event(*postgresql_event)
 
 
 def address_label(addr) -> str:
@@ -1221,124 +1523,18 @@ def main():
         help="Show the receiver version and exit",
     )
 
-    parser.add_argument("--host", default="0.0.0.0", help="IP address to listen on")
-    parser.add_argument("--port", type=int, default=55256, help="TCP port to listen on")
-
     parser.add_argument(
-        "--output-dir",
-        default="/scanner-logs",
-        help="Folder where dated CSV files, scan_totals.csv, and failed_scans.csv will be created",
+        "--config",
+        default=DEFAULT_CONFIG_FILE,
+        help=f"Path to receiver config file [{DEFAULT_CONFIG_FILE}]",
     )
 
-    parser.add_argument(
-        "--prefix",
-        default="Site_Shipped_Tracking",
-        help="Daily CSV filename prefix",
-    )
+    cli_args = parser.parse_args()
 
-    parser.add_argument(
-        "--no-read-message",
-        default="__NO_READ__",
-        help="Exact scanner No Read Message text to treat as FAILED",
-    )
-
-    parser.add_argument(
-        "--success-length",
-        type=int,
-        default=34,
-        help="Required numeric tracking length for SUCCESS",
-    )
-
-    parser.add_argument(
-        "--max-barcode-chars",
-        type=int,
-        default=DEFAULT_MAX_BARCODE_CHARS,
-        help=(
-            "Maximum accepted characters in one scanner frame before the frame "
-            "is logged as oversized and the client is disconnected"
-        ),
-    )
-
-    parser.add_argument(
-        "--max-clients",
-        type=int,
-        default=DEFAULT_MAX_CLIENTS,
-        help="Maximum simultaneous scanner TCP clients",
-    )
-
-    parser.add_argument(
-        "--frame-idle-timeout",
-        type=float,
-        default=DEFAULT_FRAME_IDLE_TIMEOUT_SECONDS,
-        help="Seconds of read idleness before a partial barcode frame is flushed",
-    )
-
-    parser.add_argument(
-        "--client-idle-timeout",
-        type=float,
-        default=DEFAULT_CLIENT_IDLE_TIMEOUT_SECONDS,
-        help=(
-            "Seconds before disconnecting an idle client with no buffered barcode. "
-            "Use 0 to keep idle scanner connections open indefinitely"
-        ),
-    )
-
-    parser.add_argument(
-        "--shutdown-timeout",
-        type=float,
-        default=DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
-        help="Seconds to wait for connected scanner threads during shutdown",
-    )
-
-    parser.add_argument(
-        "--log-file",
-        default=DEFAULT_LOG_FILE,
-        help=(
-            "Troubleshooting log file for script events. Use an empty value to "
-            "disable file logging."
-        ),
-    )
-
-    parser.add_argument(
-        "--scan-data-log-dir",
-        default=DEFAULT_SCAN_DATA_LOG_DIR,
-        help="Directory for daily raw scan event logs",
-    )
-
-    parser.add_argument(
-        "--scan-data-log-prefix",
-        default=DEFAULT_SCAN_DATA_LOG_PREFIX,
-        help="Filename prefix for daily raw scan event logs",
-    )
-
-    parser.add_argument(
-        "--disable-tcp-keepalive",
-        action="store_true",
-        help="Disable TCP keepalive probes on scanner connections",
-    )
-
-    parser.add_argument(
-        "--tcp-keepalive-idle",
-        type=int,
-        default=DEFAULT_TCP_KEEPALIVE_IDLE_SECONDS,
-        help="Idle seconds before TCP keepalive probes start",
-    )
-
-    parser.add_argument(
-        "--tcp-keepalive-interval",
-        type=int,
-        default=DEFAULT_TCP_KEEPALIVE_INTERVAL_SECONDS,
-        help="Seconds between TCP keepalive probes",
-    )
-
-    parser.add_argument(
-        "--tcp-keepalive-probes",
-        type=int,
-        default=DEFAULT_TCP_KEEPALIVE_PROBES,
-        help="Failed TCP keepalive probes before the connection is considered dead",
-    )
-
-    args = parser.parse_args()
+    try:
+        args = load_receiver_config(cli_args.config)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     configure_script_logging(args.log_file)
 
@@ -1355,6 +1551,15 @@ def main():
         validate_positive_int(args.tcp_keepalive_idle, "tcp_keepalive_idle")
         validate_positive_int(args.tcp_keepalive_interval, "tcp_keepalive_interval")
         validate_positive_int(args.tcp_keepalive_probes, "tcp_keepalive_probes")
+        parse_postgresql_table(args.postgresql_table)
+        validate_positive_float(
+            args.postgresql_connect_timeout,
+            "postgresql_connect_timeout",
+        )
+        validate_nonnegative_float(
+            args.postgresql_retry_interval,
+            "postgresql_retry_interval",
+        )
 
         if args.port > 65535:
             raise ValueError("port must be between 1 and 65535")
@@ -1374,6 +1579,45 @@ def main():
         parser.error(str(exc))
 
     SCRIPT_LOGGER.info("Industrial Scanner Logger v%s", __version__)
+    SCRIPT_LOGGER.info("Config file: %s", args.config_file)
+
+    if not args.config_loaded:
+        SCRIPT_LOGGER.warning(
+            "Config file was not found; using built-in defaults: %s",
+            args.config_file,
+        )
+
+    postgresql_logger = None
+
+    if args.postgresql_enabled:
+        postgresql_logger = PostgreSQLScanLogger(
+            dsn=args.postgresql_dsn,
+            table_name=args.postgresql_table,
+            connect_timeout=args.postgresql_connect_timeout,
+            retry_interval=args.postgresql_retry_interval,
+            required=args.postgresql_required,
+        )
+
+        SCRIPT_LOGGER.info(
+            "PostgreSQL scan logging enabled table=%s required=%s",
+            postgresql_logger.table_name,
+            args.postgresql_required,
+        )
+
+        try:
+            postgresql_logger.verify_connection()
+        except RuntimeError as exc:
+            if args.postgresql_required:
+                SCRIPT_LOGGER.error("%s", exc)
+                return 1
+
+            SCRIPT_LOGGER.warning(
+                "PostgreSQL scan logging unavailable at startup; CSV logging "
+                "will continue and PostgreSQL will be retried: %s",
+                exc,
+            )
+    else:
+        SCRIPT_LOGGER.info("PostgreSQL scan logging disabled.")
 
     logger = DailyCsvLogger(
         output_dir=Path(args.output_dir),
@@ -1383,6 +1627,7 @@ def main():
         max_barcode_chars=args.max_barcode_chars,
         scan_data_log_dir=Path(args.scan_data_log_dir),
         scan_data_log_prefix=args.scan_data_log_prefix,
+        postgresql_logger=postgresql_logger,
     )
 
     SCRIPT_LOGGER.info("Listening on %s:%s", args.host, args.port)
@@ -1418,6 +1663,7 @@ def main():
             exc,
         )
         server.close()
+        logger.close()
         return 1
 
     server.settimeout(0.5)
@@ -1500,6 +1746,8 @@ def main():
 
         for thread in threads_to_join:
             thread.join(timeout=args.shutdown_timeout)
+
+        logger.close()
 
     if fatal_event.is_set():
         SCRIPT_LOGGER.error("Stopping listener after fatal logging error.")

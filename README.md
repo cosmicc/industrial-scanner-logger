@@ -1,6 +1,7 @@
 # Industrial Scanner Logger
 
-Python 3 TCP receiver and CSV logger for a Honeywell HF811 industrial scanner.
+Python 3 TCP receiver, CSV logger, and optional PostgreSQL scan event logger for
+a Honeywell HF811 industrial scanner.
 
 Current release: `v1.1.2`
 
@@ -12,6 +13,8 @@ The current receiver listens for scanner TCP connections, classifies scan events
 - Writes one dated scan CSV per day.
 - Writes failed scans to `failed_scans.csv`.
 - Writes completed daily totals per scanner and per day to `scan_totals.csv`.
+- Can also write accepted scan events to PostgreSQL for query/API use while
+  retaining all CSV logging.
 - Writes troubleshooting events to `/var/log/industrial-scanner-logger.log` when installed as a service.
 - Writes raw per-scan event lines to daily logs under `/var/log/industrial-scanner-logger/`.
 - Treats a scan as `SUCCESS` only when the barcode is exactly 34 numeric digits.
@@ -23,7 +26,8 @@ The current receiver listens for scanner TCP connections, classifies scan events
 ## Requirements
 
 - Python 3.9 or newer
-- No runtime third-party Python packages
+- Runtime Python packages listed in `requirements.txt`
+- The service installer installs `requirements.txt` automatically
 
 ## Quick Start
 
@@ -32,43 +36,61 @@ From the project folder:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install -r requirements.txt
 python -m pip install -e .
-scanner-tcp-receiver \
-  --output-dir ./scanner-logs \
-  --log-file ./scanner-logs/industrial-scanner-logger.log \
-  --scan-data-log-dir ./scanner-logs
+cp config/industrial-scanner-logger.conf ./industrial-scanner-logger.conf
+nano ./industrial-scanner-logger.conf
+scanner-tcp-receiver --config ./industrial-scanner-logger.conf
 ```
 
 You can also run the compatibility script directly:
 
 ```bash
-python3 scanner_tcp_receiver.py \
-  --output-dir ./scanner-logs \
-  --log-file ./scanner-logs/industrial-scanner-logger.log \
-  --scan-data-log-dir ./scanner-logs
+python3 scanner_tcp_receiver.py --config ./industrial-scanner-logger.conf
 ```
 
-## Common Options
+## Config File
 
-```bash
-scanner-tcp-receiver \
-  --host 0.0.0.0 \
-  --port 55256 \
-  --output-dir /scanner-logs \
-  --prefix Site_Shipped_Tracking \
-  --no-read-message __NO_READ__ \
-  --success-length 34 \
-  --max-barcode-chars 256 \
-  --max-clients 8 \
-  --frame-idle-timeout 0.25 \
-  --client-idle-timeout 0 \
-  --shutdown-timeout 5 \
-  --log-file /var/log/industrial-scanner-logger.log \
-  --scan-data-log-dir /var/log/industrial-scanner-logger \
-  --scan-data-log-prefix scanner-log-data \
-  --tcp-keepalive-idle 60 \
-  --tcp-keepalive-interval 15 \
-  --tcp-keepalive-probes 4
+The service runs the receiver with no runtime options. Receiver settings live in:
+
+```text
+/etc/industrial-scanner-logger.conf
+```
+
+The same INI format is used for manual runs with `--config`:
+
+```ini
+[receiver]
+host = 0.0.0.0
+port = 55256
+output_dir = /scanner-logs
+prefix = Site_Shipped_Tracking
+no_read_message = __NO_READ__
+success_length = 34
+max_barcode_chars = 256
+max_clients = 8
+frame_idle_timeout = 0.25
+client_idle_timeout = 0
+shutdown_timeout = 5
+
+[logging]
+log_file = /var/log/industrial-scanner-logger.log
+scan_data_log_dir = /var/log/industrial-scanner-logger
+scan_data_log_prefix = scanner-log-data
+
+[tcp_keepalive]
+enabled = true
+idle = 60
+interval = 15
+probes = 4
+
+[postgresql]
+enabled = true
+required = false
+dsn = postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger
+table = scanner_logger.scan_events
+connect_timeout = 3
+retry_interval = 30
 ```
 
 Check the installed receiver version:
@@ -85,18 +107,23 @@ Install the receiver as a systemd service:
 sudo scripts/install_service.sh
 ```
 
-The installer copies the project to `/opt/industrial-scanner-logger`, creates a Python virtual environment, creates a dedicated `scannerlogger` system user, installs a systemd unit, and starts the service.
+The installer copies the project to `/opt/industrial-scanner-logger`, creates a
+Python virtual environment, installs the Python package dependencies, creates a
+dedicated `scannerlogger` system user, installs a systemd unit, and starts the
+service.
 
-Receiver options are service-level configuration in:
+Receiver options are in:
 
 ```text
-/etc/default/industrial-scanner-logger
+/etc/industrial-scanner-logger.conf
 ```
 
-Edit that file to change the bind address, TCP port, output directory, CSV prefix, no-read text, success length, receiver safety limits, or troubleshooting log path:
+Edit that file to change the bind address, TCP port, output directory, CSV
+prefix, no-read text, success length, receiver safety limits, troubleshooting
+log path, or PostgreSQL options:
 
 ```bash
-sudo nano /etc/default/industrial-scanner-logger
+sudo nano /etc/industrial-scanner-logger.conf
 sudo systemctl restart industrial-scanner-logger
 ```
 
@@ -127,14 +154,57 @@ to go to the service console. The CSV outputs remain the primary structured
 record.
 
 For service installs, idle scanner disconnects are disabled by default with
-`--client-idle-timeout 0`. A scanner can sit connected with no boxes moving
+`client_idle_timeout = 0`. A scanner can sit connected with no boxes moving
 without being disconnected by the receiver. TCP keepalive stays enabled so dead
 network connections can still be detected without treating normal scanner idle
-time as a failure. Existing installs keep their current defaults file, so set
-`--client-idle-timeout 0` in `/etc/default/industrial-scanner-logger` or rerun
-the installer with `--overwrite-config` to pick up this default.
+time as a failure. Existing installs keep their current config file, so set
+`client_idle_timeout = 0` in `/etc/industrial-scanner-logger.conf` or rerun the
+installer with `--overwrite-config` to pick up this default.
 
-Uninstall the service and service defaults while preserving the app directory,
+## PostgreSQL Logging
+
+The receiver can insert each accepted scan event into:
+
+```text
+scanner_logger.scan_events
+```
+
+The table schema is in:
+
+```text
+db/schema.sql
+```
+
+Python inserts `scan_date`, `scan_time`, `scanner_id`, and `tracking_number`.
+The date and time come from the receiver script at the same point where the CSV
+row is written; PostgreSQL does not assign the scan event timestamp. PostgreSQL
+generated columns and views provide success/failure classification, failed scan
+queries, daily totals, and duplicate scan queries.
+
+The service installer enables PostgreSQL logging by default with local Unix
+socket peer authentication:
+
+```text
+postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger
+```
+
+That default expects the Linux service user and PostgreSQL role to both be named
+`scannerlogger`, and the database to be named `scannerlogger`. Disable
+PostgreSQL logging during service install if the database is not ready yet:
+
+```bash
+sudo scripts/install_service.sh --disable-postgresql
+```
+
+Existing service installs keep their current config file. To add PostgreSQL
+logging to an existing service, edit `/etc/industrial-scanner-logger.conf` and
+set `enabled = true` under `[postgresql]`, or rerun the installer with
+`--overwrite-config`.
+
+PostgreSQL write failures are logged to the troubleshooting log. CSV and raw
+daily scan logs continue to be written unless `--postgresql-required` is set.
+
+Uninstall the service and config file while preserving the app directory,
 CSV logs, script logs, raw scan data logs, and service user/group:
 
 ```bash

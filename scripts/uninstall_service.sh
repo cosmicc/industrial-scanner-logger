@@ -5,7 +5,8 @@ SERVICE_NAME="${SERVICE_NAME:-industrial-scanner-logger}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
 SERVICE_USER="${SERVICE_USER:-scannerlogger}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
-ENV_FILE="${ENV_FILE:-/etc/default/${SERVICE_NAME}}"
+CONFIG_FILE="/etc/industrial-scanner-logger.conf"
+LEGACY_ENV_FILE="${LEGACY_ENV_FILE:-/etc/default/${SERVICE_NAME}}"
 OUTPUT_DIR="${OUTPUT_DIR:-/scanner-logs}"
 LOG_FILE="${LOG_FILE:-/var/log/industrial-scanner-logger.log}"
 SCAN_DATA_LOG_DIR="${SCAN_DATA_LOG_DIR:-/var/log/industrial-scanner-logger}"
@@ -22,14 +23,14 @@ Options:
   --install-dir DIR      application install directory [${INSTALL_DIR}]
   --user USER            service user name to preserve [${SERVICE_USER}]
   --group GROUP          service group name to preserve [${SERVICE_GROUP}]
-  --env-file PATH        service defaults file [${ENV_FILE}]
   --output-dir DIR       scanner CSV output directory [${OUTPUT_DIR}]
   --log-file PATH        troubleshooting log file [${LOG_FILE}]
   --scan-data-log-dir DIR daily raw scan event log directory [${SCAN_DATA_LOG_DIR}]
   --remove-app           also remove application directory [${INSTALL_DIR}]
   -h, --help             show this help
 
-The service defaults file is always removed.
+The receiver config file is always removed.
+The old /etc/default service defaults file is removed if present.
 The application directory is preserved unless --remove-app is provided.
 The service user and group are always preserved for future installs.
 Scanner CSV logs, script logs, and raw scan data logs are always preserved.
@@ -40,7 +41,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --service-name)
             SERVICE_NAME="$2"
-            ENV_FILE="/etc/default/${SERVICE_NAME}"
+            LEGACY_ENV_FILE="/etc/default/${SERVICE_NAME}"
             shift 2
             ;;
         --install-dir)
@@ -53,10 +54,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --group)
             SERVICE_GROUP="$2"
-            shift 2
-            ;;
-        --env-file)
-            ENV_FILE="$2"
             shift 2
             ;;
         --output-dir)
@@ -93,9 +90,9 @@ if [[ "${EUID}" -ne 0 ]]; then
         exit 1
     fi
 
-    export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP ENV_FILE OUTPUT_DIR LOG_FILE
-    export SCAN_DATA_LOG_DIR REMOVE_APP
-    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,REMOVE_APP "$0"
+    export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP LEGACY_ENV_FILE
+    export OUTPUT_DIR LOG_FILE SCAN_DATA_LOG_DIR REMOVE_APP
+    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,LEGACY_ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,REMOVE_APP "$0"
 fi
 
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
@@ -105,7 +102,8 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 
 rm -f "${UNIT_FILE}"
-rm -f "${ENV_FILE}"
+rm -f "${CONFIG_FILE}"
+rm -f "${LEGACY_ENV_FILE}"
 
 if [[ "${REMOVE_APP}" -eq 1 ]]; then
     rm -rf "${INSTALL_DIR}"
@@ -121,7 +119,8 @@ Uninstalled ${SERVICE_NAME}.service
 
 Removed:
   ${UNIT_FILE}
-  ${ENV_FILE}
+  ${CONFIG_FILE}
+  ${LEGACY_ENV_FILE}
 DONE
 
 if [[ "${REMOVE_APP}" -eq 1 ]]; then

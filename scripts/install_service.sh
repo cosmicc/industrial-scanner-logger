@@ -5,7 +5,8 @@ SERVICE_NAME="${SERVICE_NAME:-industrial-scanner-logger}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
 SERVICE_USER="${SERVICE_USER:-scannerlogger}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
-ENV_FILE="${ENV_FILE:-/etc/default/${SERVICE_NAME}}"
+CONFIG_FILE="/etc/industrial-scanner-logger.conf"
+LEGACY_ENV_FILE="${LEGACY_ENV_FILE:-/etc/default/${SERVICE_NAME}}"
 OUTPUT_DIR="${OUTPUT_DIR:-/scanner-logs}"
 LOG_FILE="${LOG_FILE:-/var/log/industrial-scanner-logger.log}"
 SCAN_DATA_LOG_DIR="${SCAN_DATA_LOG_DIR:-/var/log/industrial-scanner-logger}"
@@ -23,6 +24,12 @@ SHUTDOWN_TIMEOUT="${SHUTDOWN_TIMEOUT:-5}"
 TCP_KEEPALIVE_IDLE="${TCP_KEEPALIVE_IDLE:-60}"
 TCP_KEEPALIVE_INTERVAL="${TCP_KEEPALIVE_INTERVAL:-15}"
 TCP_KEEPALIVE_PROBES="${TCP_KEEPALIVE_PROBES:-4}"
+POSTGRESQL_ENABLED="${POSTGRESQL_ENABLED:-1}"
+POSTGRESQL_DSN="${POSTGRESQL_DSN:-postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger}"
+POSTGRESQL_TABLE="${POSTGRESQL_TABLE:-scanner_logger.scan_events}"
+POSTGRESQL_CONNECT_TIMEOUT="${POSTGRESQL_CONNECT_TIMEOUT:-3}"
+POSTGRESQL_RETRY_INTERVAL="${POSTGRESQL_RETRY_INTERVAL:-30}"
+POSTGRESQL_REQUIRED="${POSTGRESQL_REQUIRED:-0}"
 START_SERVICE="${START_SERVICE:-1}"
 OVERWRITE_CONFIG="${OVERWRITE_CONFIG:-0}"
 
@@ -37,7 +44,6 @@ Options:
   --install-dir DIR         application install directory [${INSTALL_DIR}]
   --user USER               system user that runs the service [${SERVICE_USER}]
   --group GROUP             system group that runs the service [${SERVICE_GROUP}]
-  --env-file PATH           service defaults file [${ENV_FILE}]
   --output-dir DIR          scanner CSV output directory [${OUTPUT_DIR}]
   --log-file PATH           troubleshooting log file [${LOG_FILE}]
   --scan-data-log-dir DIR   daily raw scan event log directory [${SCAN_DATA_LOG_DIR}]
@@ -55,12 +61,19 @@ Options:
   --tcp-keepalive-idle SEC  idle seconds before TCP keepalive probes start [${TCP_KEEPALIVE_IDLE}]
   --tcp-keepalive-interval SEC seconds between TCP keepalive probes [${TCP_KEEPALIVE_INTERVAL}]
   --tcp-keepalive-probes NUM failed probes before a socket is considered dead [${TCP_KEEPALIVE_PROBES}]
-  --overwrite-config        replace an existing defaults file
+  --enable-postgresql      enable PostgreSQL scan event logging [default]
+  --disable-postgresql     disable PostgreSQL scan event logging
+  --postgresql-dsn DSN     PostgreSQL URI/DSN with no shell spaces [${POSTGRESQL_DSN}]
+  --postgresql-table NAME  PostgreSQL table in schema.table format [${POSTGRESQL_TABLE}]
+  --postgresql-connect-timeout SEC PostgreSQL connection timeout [${POSTGRESQL_CONNECT_TIMEOUT}]
+  --postgresql-retry-interval SEC  retry delay after PostgreSQL failures [${POSTGRESQL_RETRY_INTERVAL}]
+  --postgresql-required    stop the receiver if PostgreSQL logging is unavailable
+  --overwrite-config        replace an existing config file
   --no-start                install and enable the service, but do not start it now
   -h, --help                show this help
 
 After install, edit receiver options in:
-  ${ENV_FILE}
+  ${CONFIG_FILE}
 USAGE
 }
 
@@ -123,7 +136,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --service-name)
             SERVICE_NAME="$2"
-            ENV_FILE="/etc/default/${SERVICE_NAME}"
+            LEGACY_ENV_FILE="/etc/default/${SERVICE_NAME}"
             shift 2
             ;;
         --install-dir)
@@ -136,10 +149,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --group)
             SERVICE_GROUP="$2"
-            shift 2
-            ;;
-        --env-file)
-            ENV_FILE="$2"
             shift 2
             ;;
         --output-dir)
@@ -210,6 +219,34 @@ while [[ $# -gt 0 ]]; do
             TCP_KEEPALIVE_PROBES="$2"
             shift 2
             ;;
+        --enable-postgresql)
+            POSTGRESQL_ENABLED=1
+            shift
+            ;;
+        --disable-postgresql)
+            POSTGRESQL_ENABLED=0
+            shift
+            ;;
+        --postgresql-dsn)
+            POSTGRESQL_DSN="$2"
+            shift 2
+            ;;
+        --postgresql-table)
+            POSTGRESQL_TABLE="$2"
+            shift 2
+            ;;
+        --postgresql-connect-timeout)
+            POSTGRESQL_CONNECT_TIMEOUT="$2"
+            shift 2
+            ;;
+        --postgresql-retry-interval)
+            POSTGRESQL_RETRY_INTERVAL="$2"
+            shift 2
+            ;;
+        --postgresql-required)
+            POSTGRESQL_REQUIRED=1
+            shift
+            ;;
         --overwrite-config)
             OVERWRITE_CONFIG=1
             shift
@@ -236,12 +273,15 @@ if [[ "${EUID}" -ne 0 ]]; then
         exit 1
     fi
 
-    export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP ENV_FILE START_SERVICE OVERWRITE_CONFIG
+    export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP LEGACY_ENV_FILE
+    export START_SERVICE OVERWRITE_CONFIG
     export OUTPUT_DIR LOG_FILE SCAN_DATA_LOG_DIR SCAN_DATA_LOG_PREFIX
     export HOST PORT PREFIX NO_READ_MESSAGE SUCCESS_LENGTH
     export MAX_BARCODE_CHARS MAX_CLIENTS FRAME_IDLE_TIMEOUT CLIENT_IDLE_TIMEOUT SHUTDOWN_TIMEOUT
     export TCP_KEEPALIVE_IDLE TCP_KEEPALIVE_INTERVAL TCP_KEEPALIVE_PROBES
-    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,SCAN_DATA_LOG_PREFIX,HOST,PORT,PREFIX,NO_READ_MESSAGE,SUCCESS_LENGTH,MAX_BARCODE_CHARS,MAX_CLIENTS,FRAME_IDLE_TIMEOUT,CLIENT_IDLE_TIMEOUT,SHUTDOWN_TIMEOUT,TCP_KEEPALIVE_IDLE,TCP_KEEPALIVE_INTERVAL,TCP_KEEPALIVE_PROBES,START_SERVICE,OVERWRITE_CONFIG "$0"
+    export POSTGRESQL_ENABLED POSTGRESQL_DSN POSTGRESQL_TABLE
+    export POSTGRESQL_CONNECT_TIMEOUT POSTGRESQL_RETRY_INTERVAL POSTGRESQL_REQUIRED
+    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,LEGACY_ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,SCAN_DATA_LOG_PREFIX,HOST,PORT,PREFIX,NO_READ_MESSAGE,SUCCESS_LENGTH,MAX_BARCODE_CHARS,MAX_CLIENTS,FRAME_IDLE_TIMEOUT,CLIENT_IDLE_TIMEOUT,SHUTDOWN_TIMEOUT,TCP_KEEPALIVE_IDLE,TCP_KEEPALIVE_INTERVAL,TCP_KEEPALIVE_PROBES,POSTGRESQL_ENABLED,POSTGRESQL_DSN,POSTGRESQL_TABLE,POSTGRESQL_CONNECT_TIMEOUT,POSTGRESQL_RETRY_INTERVAL,POSTGRESQL_REQUIRED,START_SERVICE,OVERWRITE_CONFIG "$0"
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -321,6 +361,10 @@ else
 fi
 
 python3 -m venv "${INSTALL_DIR}/.venv"
+if [[ -f "${INSTALL_DIR_REAL}/requirements.txt" ]]; then
+    "${PYTHON_BIN}" -m pip install -r "${INSTALL_DIR_REAL}/requirements.txt"
+fi
+"${PYTHON_BIN}" -m pip install --no-deps "${INSTALL_DIR_REAL}"
 chown -R root:root "${INSTALL_DIR}"
 chmod -R u=rwX,go=rX "${INSTALL_DIR}"
 
@@ -330,29 +374,71 @@ install -d -o root -g root -m 0755 "$(dirname -- "${LOG_FILE}")"
 touch "${LOG_FILE}"
 chown "${SERVICE_USER}:${SERVICE_GROUP}" "${LOG_FILE}"
 chmod 0640 "${LOG_FILE}"
-install -d -o root -g root -m 0755 "$(dirname -- "${ENV_FILE}")"
+install -d -o root -g root -m 0755 "$(dirname -- "${CONFIG_FILE}")"
 
-if [[ ! -f "${ENV_FILE}" || "${OVERWRITE_CONFIG}" -eq 1 ]]; then
-    cat >"${ENV_FILE}" <<CONFIG
+POSTGRESQL_ENABLED_TEXT="false"
+if [[ "${POSTGRESQL_ENABLED}" -eq 1 ]]; then
+    POSTGRESQL_ENABLED_TEXT="true"
+fi
+
+POSTGRESQL_REQUIRED_TEXT="false"
+if [[ "${POSTGRESQL_REQUIRED}" -eq 1 ]]; then
+    POSTGRESQL_REQUIRED_TEXT="true"
+fi
+
+if [[ ! -f "${CONFIG_FILE}" || "${OVERWRITE_CONFIG}" -eq 1 ]]; then
+    cat >"${CONFIG_FILE}" <<CONFIG
 # Runtime options for ${SERVICE_NAME}.service.
 #
 # Edit this file, then restart the service:
 #   sudo systemctl restart ${SERVICE_NAME}
-#
-# Keep this as one quoted value. systemd expands it into individual arguments
-# because the service uses \$SCANNER_RECEIVER_ARGS as a separate ExecStart word.
-SCANNER_RECEIVER_ARGS="--host ${HOST} --port ${PORT} --output-dir ${OUTPUT_DIR} --prefix ${PREFIX} --no-read-message ${NO_READ_MESSAGE} --success-length ${SUCCESS_LENGTH} --max-barcode-chars ${MAX_BARCODE_CHARS} --max-clients ${MAX_CLIENTS} --frame-idle-timeout ${FRAME_IDLE_TIMEOUT} --client-idle-timeout ${CLIENT_IDLE_TIMEOUT} --shutdown-timeout ${SHUTDOWN_TIMEOUT} --log-file ${LOG_FILE} --scan-data-log-dir ${SCAN_DATA_LOG_DIR} --scan-data-log-prefix ${SCAN_DATA_LOG_PREFIX} --tcp-keepalive-idle ${TCP_KEEPALIVE_IDLE} --tcp-keepalive-interval ${TCP_KEEPALIVE_INTERVAL} --tcp-keepalive-probes ${TCP_KEEPALIVE_PROBES}"
+
+[receiver]
+host = ${HOST}
+port = ${PORT}
+output_dir = ${OUTPUT_DIR}
+prefix = ${PREFIX}
+no_read_message = ${NO_READ_MESSAGE}
+success_length = ${SUCCESS_LENGTH}
+max_barcode_chars = ${MAX_BARCODE_CHARS}
+max_clients = ${MAX_CLIENTS}
+frame_idle_timeout = ${FRAME_IDLE_TIMEOUT}
+client_idle_timeout = ${CLIENT_IDLE_TIMEOUT}
+shutdown_timeout = ${SHUTDOWN_TIMEOUT}
+
+[logging]
+log_file = ${LOG_FILE}
+scan_data_log_dir = ${SCAN_DATA_LOG_DIR}
+scan_data_log_prefix = ${SCAN_DATA_LOG_PREFIX}
+
+[tcp_keepalive]
+enabled = true
+idle = ${TCP_KEEPALIVE_IDLE}
+interval = ${TCP_KEEPALIVE_INTERVAL}
+probes = ${TCP_KEEPALIVE_PROBES}
+
+[postgresql]
+enabled = ${POSTGRESQL_ENABLED_TEXT}
+required = ${POSTGRESQL_REQUIRED_TEXT}
+dsn = ${POSTGRESQL_DSN}
+table = ${POSTGRESQL_TABLE}
+connect_timeout = ${POSTGRESQL_CONNECT_TIMEOUT}
+retry_interval = ${POSTGRESQL_RETRY_INTERVAL}
 CONFIG
-    chmod 0644 "${ENV_FILE}"
+    chmod 0644 "${CONFIG_FILE}"
 else
-    echo "Keeping existing defaults file: ${ENV_FILE}"
+    echo "Keeping existing config file: ${CONFIG_FILE}"
+fi
+
+if [[ -f "${LEGACY_ENV_FILE}" ]]; then
+    rm -f "${LEGACY_ENV_FILE}"
+    echo "Removed legacy service defaults file: ${LEGACY_ENV_FILE}"
 fi
 
 sed \
     -e "s|@INSTALL_DIR@|$(escape_sed_replacement "${INSTALL_DIR}")|g" \
     -e "s|@SERVICE_USER@|$(escape_sed_replacement "${SERVICE_USER}")|g" \
     -e "s|@SERVICE_GROUP@|$(escape_sed_replacement "${SERVICE_GROUP}")|g" \
-    -e "s|@ENV_FILE@|$(escape_sed_replacement "${ENV_FILE}")|g" \
     -e "s|@PYTHON_BIN@|$(escape_sed_replacement "${PYTHON_BIN}")|g" \
     "${SERVICE_TEMPLATE}" >"${UNIT_FILE}"
 
@@ -371,8 +457,8 @@ Installed ${SERVICE_NAME}.service
 Application directory:
   ${INSTALL_DIR}
 
-Receiver options:
-  ${ENV_FILE}
+Receiver config:
+  ${CONFIG_FILE}
 
 Scanner logs:
   ${OUTPUT_DIR}
@@ -383,10 +469,13 @@ Troubleshooting log:
 Daily raw scan data logs:
   ${SCAN_DATA_LOG_DIR}/${SCAN_DATA_LOG_PREFIX}-YYYY-MM-DD.log
 
+PostgreSQL scan logging:
+  $([[ "${POSTGRESQL_ENABLED}" -eq 1 ]] && echo "enabled (${POSTGRESQL_TABLE})" || echo "disabled")
+
 Useful commands:
   sudo systemctl status ${SERVICE_NAME}
   sudo journalctl -u ${SERVICE_NAME} -f
   sudo tail -f ${LOG_FILE}
-  sudo nano ${ENV_FILE}
+  sudo nano ${CONFIG_FILE}
   sudo systemctl restart ${SERVICE_NAME}
 DONE
