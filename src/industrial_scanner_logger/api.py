@@ -1,4 +1,7 @@
 import sys
+import shutil
+import subprocess
+from datetime import date, datetime
 from datetime import date
 from typing import Optional
 
@@ -20,6 +23,8 @@ DEFAULT_API_ROOT_PATH = "/api"
 API_VERSION_PREFIX = "/v1"
 MAX_LIMIT = 1000
 DEFAULT_LIMIT = 100
+SCANNER_SERVICE_UNIT = "industrial-scanner-logger.service"
+API_SERVICE_UNIT = "industrial-scanner-logger-api.service"
 
 SCAN_EVENT_COLUMNS = [
     "id",
@@ -107,6 +112,235 @@ VIEW_DEFINITIONS = {
     },
 }
 
+def build_dashboard_health(config):
+    services = {
+        "scanner": systemd_service_status(SCANNER_SERVICE_UNIT),
+        "api": systemd_service_status(API_SERVICE_UNIT),
+    }
+
+    connected_scanner_ids = connected_scanner_ids_from_ss(config.port)
+
+    database = {
+        "active": False,
+        "state": "unavailable",
+        "error": None,
+    }
+    last_received = None
+    recent_scans = []
+
+    try:
+        db = connect_db(config)
+        try:
+            last_received = fetch_one(
+                db,
+                """
+                SELECT
+                    id,
+                    scan_date,
+                    scan_time,
+                    scanner_id,
+                    barcode,
+                    barcode_length,
+                    is_success,
+                    failure_reason
+                FROM scanner_logger.scan_events
+                ORDER BY scan_date DESC, scan_time DESC, id DESC
+                LIMIT 1
+                """,
+                [],
+            )
+
+            recent_scans = fetch_all(
+                db,
+                """
+                SELECT
+                    id,
+                    scan_date,
+                    scan_time,
+                    scanner_id,
+                    barcode,
+                    barcode_length,
+                    is_success,
+                    failure_reason
+                FROM scanner_logger.scan_events
+                ORDER BY scan_date DESC, scan_time DESC, id DESC
+                LIMIT 10
+                """,
+                [],
+            )
+
+            database = {
+                "active": True,
+                "state": "ok",
+                "error": None,
+            }
+        finally:
+            db.close()
+
+    except Exception as exc:
+        database = {
+            "active": False,
+            "state": "unavailable",
+            "error": str(exc),
+        }
+
+    overall_ok = (
+        services["scanner"]["active"]
+        and services["api"]["active"]
+        and database["active"]
+    )
+
+    return {
+        "status": "ok" if overall_ok else "degraded",
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "services": services,
+        "database": database,
+        "connected_scanner_ids": connected_scanner_ids,
+        "last_received": last_received,
+        "recent_scans": recent_scans,
+    }
+
+
+def fetch_one(db, query, params):
+    with db.cursor() as cursor:
+        cursor.execute(query, params)
+        return cursor.fetchone()
+
+
+def systemd_service_status(unit_name: str) -> dict:
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", unit_name],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except Exception as exc:
+        return {
+            "unit": unit_name,
+            "active": False,
+            "state": "unknown",
+            "error": str(exc),
+        }
+
+    state = result.stdout.strip() or result.stderr.strip() or "unknown"
+
+    return {
+        "unit": unit_name,
+        "active": state == "active",
+        "state": state,
+        "error": None if result.returncode in (0, 3) else result.stderr.strip(),
+    }
+
+
+def connected_scanner_ids_from_ss(listen_port: int) -> list[int]:
+    ss_path = shutil.which("ss")
+    if ss_path is None:
+        return []
+
+    output = run_ss_for_port(ss_path, listen_port)
+    if output is None:
+        output = run_ss_all_established(ss_path)
+
+    scanner_ids = set()
+
+    for line in (output or "").splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+
+        # With ss -Htn, local and peer endpoints are normally the final two columns.
+        local_endpoint = parts[-2]
+        peer_endpoint = parts[-1]
+
+        _local_host, local_port = split_host_port(local_endpoint)
+        peer_host, _peer_port = split_host_port(peer_endpoint)
+
+        if local_port != str(listen_port):
+            continue
+
+        scanner_id = scanner_id_from_ipv4_host(peer_host)
+        if scanner_id is not None:
+            scanner_ids.add(scanner_id)
+
+    return sorted(scanner_ids)
+
+
+def run_ss_for_port(ss_path: str, listen_port: int) -> str | None:
+    try:
+        result = subprocess.run(
+            [
+                ss_path,
+                "-Htn",
+                "state",
+                "established",
+                f"( sport = :{listen_port} )",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    return result.stdout
+
+
+def run_ss_all_established(ss_path: str) -> str:
+    try:
+        result = subprocess.run(
+            [ss_path, "-Htn", "state", "established"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except Exception:
+        return ""
+
+    if result.returncode != 0:
+        return ""
+
+    return result.stdout
+
+
+def split_host_port(endpoint: str) -> tuple[str, str]:
+    endpoint = endpoint.strip()
+
+    if endpoint.startswith("[") and "]:" in endpoint:
+        host, _, port = endpoint[1:].rpartition("]:")
+        return host, port
+
+    host, separator, port = endpoint.rpartition(":")
+    if not separator:
+        return endpoint, ""
+
+    return host, port
+
+
+def scanner_id_from_ipv4_host(host: str) -> int | None:
+    host = host.strip("[]")
+
+    if host.startswith("::ffff:"):
+        host = host.removeprefix("::ffff:")
+
+    octets = host.split(".")
+    if len(octets) != 4:
+        return None
+
+    if not all(octet.isdigit() for octet in octets):
+        return None
+
+    values = [int(octet) for octet in octets]
+    if not all(0 <= value <= 255 for value in values):
+        return None
+
+    return values[-1]
 
 def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
     normalized_root_path = normalize_root_path(root_path)
@@ -207,6 +441,10 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             offset=offset,
         )
         return fetch_all(db, query, params)
+    
+    @app.get(f"{API_VERSION_PREFIX}/dashboard/health")
+    def dashboard_health(config=Depends(get_config)):
+        return build_dashboard_health(config)
 
     return app
 
