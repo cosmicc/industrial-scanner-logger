@@ -49,6 +49,12 @@
       </div>
 
       <div class="card">
+        <h2>Current Scan Rate</h2>
+        <div id="current-scan-rate" class="big-value">Checking...</div>
+        <div id="current-scan-rate-detail" class="detail"></div>
+      </div>
+
+      <div class="card">
         <h2>Currently Connected Scanner IDs</h2>
         <div id="scanner-list" class="scanner-list">Checking...</div>
       </div>
@@ -184,6 +190,23 @@
       renderDailyTotal("yesterday", totals?.yesterday);
     }
 
+    function renderCurrentScanRate(scanRate) {
+      const rateElement = document.getElementById("current-scan-rate");
+      const detailElement = document.getElementById("current-scan-rate-detail");
+
+      if (!scanRate) {
+        rateElement.textContent = "Unavailable";
+        detailElement.textContent = "";
+        return;
+      }
+
+      const windowSeconds = Number(scanRate.window_seconds || 60);
+
+      rateElement.textContent = `${formatRate(scanRate.scans_per_minute)} scans/min`;
+      detailElement.textContent =
+        `${formatCount(scanRate.scan_count)} scans in the last ${windowSeconds} seconds`;
+    }
+
     function renderDailyTotal(prefix, total) {
       const dateElement = document.getElementById(`${prefix}-date`);
       const successElement = document.getElementById(`${prefix}-success`);
@@ -203,6 +226,13 @@
 
     function formatCount(value) {
       return Number(value || 0).toLocaleString();
+    }
+
+    function formatRate(value) {
+      return Number(value || 0).toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 1
+      });
     }
 
     function escapeHtml(value) {
@@ -284,6 +314,7 @@
 
         renderScannerList(data.connected_scanner_ids);
         renderDailyTotals(database.active ? data.daily_totals : null);
+        renderCurrentScanRate(database.active ? data.current_scan_rate : null);
         renderRecentScans(data.recent_scans);
         renderScriptLog(data.script_log);
 
@@ -302,6 +333,7 @@
           "Unable to load scanner connection data.";
 
         renderDailyTotals(null);
+        renderCurrentScanRate(null);
 
         document.getElementById("recent-scans").innerHTML =
           `<tr><td colspan="6" class="error">Unable to load recent scan rows.</td></tr>`;

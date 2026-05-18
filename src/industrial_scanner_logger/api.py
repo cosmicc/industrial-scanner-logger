@@ -27,6 +27,7 @@ DEFAULT_LIMIT = 100
 SCANNER_SERVICE_UNIT = "industrial-scanner-logger.service"
 API_SERVICE_UNIT = "industrial-scanner-logger-api.service"
 SCANNER_SCRIPT_LOG_PATH = Path("/var/log/industrial-scanner-logger.log")
+CURRENT_SCAN_RATE_WINDOW_SECONDS = 60
 
 SCAN_EVENT_COLUMNS = [
     "id",
@@ -135,6 +136,7 @@ def build_dashboard_health(config):
     last_received = None
     recent_scans = []
     daily_totals = empty_daily_totals(current_day, previous_day)
+    current_scan_rate = empty_current_scan_rate()
 
     try:
         db = connect_db(config)
@@ -182,6 +184,7 @@ def build_dashboard_health(config):
                 current_day,
                 previous_day,
             )
+            current_scan_rate = fetch_current_scan_rate(db)
 
             database = {
                 "active": True,
@@ -213,6 +216,7 @@ def build_dashboard_health(config):
         "last_received": last_received,
         "recent_scans": recent_scans,
         "daily_totals": daily_totals,
+        "current_scan_rate": current_scan_rate,
         "script_log": script_log,
     }
 
@@ -257,6 +261,36 @@ def fetch_dashboard_daily_totals(
         "today": dashboard_total_row(current_day, rows_by_date.get(current_day)),
         "yesterday": dashboard_total_row(previous_day, rows_by_date.get(previous_day)),
     }
+
+
+def empty_current_scan_rate() -> dict:
+    return scan_rate_row(0)
+
+
+def scan_rate_row(scan_count: int) -> dict:
+    return {
+        "window_seconds": CURRENT_SCAN_RATE_WINDOW_SECONDS,
+        "scan_count": scan_count,
+        "scans_per_minute": round(
+            (scan_count / CURRENT_SCAN_RATE_WINDOW_SECONDS) * 60,
+            2,
+        ),
+    }
+
+
+def fetch_current_scan_rate(db) -> dict:
+    row = fetch_one(
+        db,
+        """
+        SELECT count(*) AS scan_count
+        FROM scanner_logger.scan_events
+        WHERE (scan_date + scan_time) >= (localtimestamp - %s)
+          AND (scan_date + scan_time) <= localtimestamp
+        """,
+        [timedelta(seconds=CURRENT_SCAN_RATE_WINDOW_SECONDS)],
+    )
+
+    return scan_rate_row(int(row.get("scan_count") or 0))
 
 
 def fetch_one(db, query, params):

@@ -1,6 +1,6 @@
 import importlib.util
 import unittest
-from datetime import date
+from datetime import date, timedelta
 
 
 HAS_API_DEPS = all(
@@ -133,6 +133,51 @@ class ApiQueryTests(unittest.TestCase):
                     "successful_scans": 0,
                     "failed_scans": 0,
                 },
+            },
+        )
+
+    def test_current_scan_rate_uses_rolling_one_minute_window(self):
+        from industrial_scanner_logger.api import (
+            CURRENT_SCAN_RATE_WINDOW_SECONDS,
+            fetch_current_scan_rate,
+        )
+
+        class FakeCursor:
+            def __init__(self):
+                self.params = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return None
+
+            def execute(self, _query, params):
+                self.params = params
+
+            def fetchone(self):
+                return {"scan_count": 7}
+
+        class FakeDb:
+            def __init__(self):
+                self.cursor_instance = FakeCursor()
+
+            def cursor(self):
+                return self.cursor_instance
+
+        db = FakeDb()
+        scan_rate = fetch_current_scan_rate(db)
+
+        self.assertEqual(
+            db.cursor_instance.params,
+            [timedelta(seconds=CURRENT_SCAN_RATE_WINDOW_SECONDS)],
+        )
+        self.assertEqual(
+            scan_rate,
+            {
+                "window_seconds": 60,
+                "scan_count": 7,
+                "scans_per_minute": 7.0,
             },
         )
 
