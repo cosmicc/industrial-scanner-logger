@@ -601,52 +601,139 @@ if [[ ! -f "${CONFIG_FILE}" || "${OVERWRITE_CONFIG}" -eq 1 ]]; then
 #   sudo systemctl restart ${SERVICE_NAME}
 
 [receiver]
+# TCP address the scanner receiver listens on.
+# Default: 0.0.0.0. Examples: 0.0.0.0 for all interfaces, 127.0.0.1 for local-only testing.
 host = ${HOST}
+
+# TCP port the scanner receiver listens on.
+# Default: 55256. Range: 1-65535. This port must also be allowed through the firewall.
 port = ${PORT}
+
+# Directory where daily CSV files are written.
+# Default: /scanner-logs. Example: /data/scanner-logs. The service user must be able to write here.
 output_dir = ${OUTPUT_DIR}
+
+# Filename prefix for daily CSV output files.
+# Default: Site_Shipped_Tracking. Allowed: letters, numbers, underscore, dash, and dot; must start with a letter or number.
 prefix = ${PREFIX}
+
+# Exact scanner message used when a barcode could not be read.
+# Default: __NO_READ__. Matching values are recorded as failed scans and must not be longer than max_barcode_chars.
 no_read_message = ${NO_READ_MESSAGE}
+
+# Required numeric barcode length for a successful scan.
+# Default: 34. Range: greater than 0 and no larger than max_barcode_chars.
 success_length = ${SUCCESS_LENGTH}
+
+# Maximum accepted scanner frame length before the scan is treated as oversized.
+# Default: 256. Minimum: 64. Increase only if scanners can send longer valid data.
 max_barcode_chars = ${MAX_BARCODE_CHARS}
+
+# Maximum simultaneous scanner TCP connections.
+# Default: 8. Range: greater than 0. Example: 16 for a larger conveyor system.
 max_clients = ${MAX_CLIENTS}
+
+# Seconds to wait before flushing a partial scanner frame when no line ending is received.
+# Default: 0.25. Range: greater than 0. Examples: 0.25, 0.5, 1.0.
 frame_idle_timeout = ${FRAME_IDLE_TIMEOUT}
+
+# Seconds before disconnecting an idle scanner client.
+# Default: 0, which disables application-level idle disconnects. Range: 0 or greater.
 client_idle_timeout = ${CLIENT_IDLE_TIMEOUT}
+
+# Seconds to wait for active scanner threads to stop during service shutdown.
+# Default: 5. Range: greater than 0.
 shutdown_timeout = ${SHUTDOWN_TIMEOUT}
 
 [logging]
+# Main troubleshooting log file for receiver startup, connections, and errors.
+# Default: /var/log/industrial-scanner-logger.log. Raw barcode data is not written here.
 log_file = ${LOG_FILE}
+
+# Directory for daily raw scan event logs used for audit/troubleshooting.
+# Default: /var/log/industrial-scanner-logger. The service user must be able to write here.
 scan_data_log_dir = ${SCAN_DATA_LOG_DIR}
+
+# Filename prefix for daily raw scan event logs.
+# Default: scanner-log-data. Uses the same safe filename rules as receiver.prefix.
 scan_data_log_prefix = ${SCAN_DATA_LOG_PREFIX}
 
 [tcp_keepalive]
+# Enables OS TCP keepalive on scanner sockets so dead connections are detected.
+# Default: true. Values: true or false.
 enabled = true
+
+# Idle seconds before TCP keepalive probes begin.
+# Default: 60. Range: greater than 0.
 idle = ${TCP_KEEPALIVE_IDLE}
+
+# Seconds between TCP keepalive probes after the idle period.
+# Default: 15. Range: greater than 0.
 interval = ${TCP_KEEPALIVE_INTERVAL}
+
+# Number of failed keepalive probes before the connection is considered dead.
+# Default: 4. Range: greater than 0.
 probes = ${TCP_KEEPALIVE_PROBES}
 
 [postgresql]
+# Enables PostgreSQL scan event logging for API views and dashboard data.
+# Default: true in the installed config. Built-in fallback when omitted: false.
+# Set false to run CSV/raw-log only.
 enabled = ${POSTGRESQL_ENABLED_TEXT}
+
+# Controls whether the receiver must stop when PostgreSQL logging is unavailable.
+# Default: false. Set true only when database logging is mandatory for operations.
 required = ${POSTGRESQL_REQUIRED_TEXT}
+
+# PostgreSQL connection string used by the receiver and API.
+# Default: postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger.
+# Example TCP DSN: postgresql://scannerlogger:password@127.0.0.1:5432/scannerlogger
 dsn = ${POSTGRESQL_DSN}
+
+# Destination PostgreSQL table for scan events.
+# Default: scanner_logger.scan_events. Format: schema.table using letters, numbers, and underscores.
 table = ${POSTGRESQL_TABLE}
+
+# Seconds to wait while opening a PostgreSQL connection.
+# Default: 3. Range: greater than 0.
 connect_timeout = ${POSTGRESQL_CONNECT_TIMEOUT}
+
+# Seconds to wait before retrying PostgreSQL after a connection or write failure.
+# Default: 30. Range: 0 or greater. Use 0 for immediate retry attempts.
 retry_interval = ${POSTGRESQL_RETRY_INTERVAL}
 
 [scanners]
-# Last scanner is the final outbound scanner before boxes are loaded.
-# Leave blank until the final scanner IP last octet is known.
+# Scanner ID for the final outbound scanner before boxes are loaded.
+# Default: blank, which disables last-scanner matching. Range when set: 0-255.
+# Example: if the final scanner IP is 10.10.10.21, set last_scanner_id = 21.
 last_scanner_id = ${LAST_SCANNER_ID}
 
 [scanner_names]
-# Map scanner IP last octets to friendly names.
-# 20 = Lane 1 Scanner
-# 21 = Last Scanner
+# Optional scanner ID to friendly-name mapping.
+# Default: no entries, so scanners display by ID. Add one line per scanner using the scanner IP last octet as the key.
+# Format: <0-255> = <display name>. Examples:
+#   20 = Lane 1 Scanner
+#   21 = Last Scanner
 
 [api]
+# Enables the REST API systemd service installed alongside the receiver.
+# Default: true. Set false to disable API startup.
 enabled = ${API_ENABLED_TEXT}
+
+# REST API bind address.
+# Default: 127.0.0.1 so nginx can proxy it locally. Example: 0.0.0.0 for direct network access.
 host = ${API_HOST}
+
+# REST API TCP port.
+# Default: 8000. Range: 1-65535. Keep this different from receiver.port.
 port = ${API_PORT}
+
+# URL prefix where nginx exposes the API.
+# Default: /api. Must start with / and should not be / when nginx is enabled. Example: /scanner-api.
 root_path = ${API_ROOT_PATH}
+
+# Uvicorn API log verbosity.
+# Default: info. Common values: critical, error, warning, info, debug, trace.
 log_level = ${API_LOG_LEVEL}
 CONFIG
     chmod 0644 "${CONFIG_FILE}"

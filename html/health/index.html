@@ -264,6 +264,80 @@
       });
     }
 
+    function formatElapsedTime(scanDate, scanTime, now = new Date()) {
+      if (!scanDate || !scanTime) {
+        return "Unknown";
+      }
+
+      const scanDateTime = new Date(`${scanDate}T${scanTime}`);
+
+      if (Number.isNaN(scanDateTime.getTime())) {
+        return "Unknown";
+      }
+
+      const elapsedSeconds = Math.max(
+        0,
+        Math.floor((now.getTime() - scanDateTime.getTime()) / 1000)
+      );
+
+      const units = [
+        {
+          label: "Week",
+          seconds: 7 * 24 * 60 * 60,
+          thresholdSeconds: 4 * 7 * 24 * 60 * 60
+        },
+        {
+          label: "Day",
+          seconds: 24 * 60 * 60,
+          thresholdSeconds: 24 * 60 * 60
+        },
+        {
+          label: "Hour",
+          seconds: 60 * 60,
+          thresholdSeconds: 60 * 60
+        },
+        {
+          label: "Minute",
+          seconds: 60,
+          thresholdSeconds: 60
+        },
+        {
+          label: "Second",
+          seconds: 1,
+          thresholdSeconds: 0
+        }
+      ];
+
+      for (let index = 0; index < units.length; index += 1) {
+        const primary = units[index];
+
+        if (elapsedSeconds < primary.thresholdSeconds) {
+          continue;
+        }
+
+        const primaryValue = Math.floor(elapsedSeconds / primary.seconds);
+        const parts = [formatElapsedPart(primaryValue, primary.label)];
+        const secondary = units[index + 1];
+
+        if (secondary && primary.label !== "Second") {
+          const remainder = elapsedSeconds % primary.seconds;
+          const secondaryValue = Math.floor(remainder / secondary.seconds);
+
+          if (secondaryValue > 0) {
+            parts.push(formatElapsedPart(secondaryValue, secondary.label));
+          }
+        }
+
+        return parts.join(", ");
+      }
+
+      return "0 Seconds";
+    }
+
+    function formatElapsedPart(value, label) {
+      return `${value.toLocaleString()} ${label}${value === 1 ? "" : "s"}`;
+    }
+
     function escapeHtml(value) {
       return String(value)
         .replaceAll("&", "&amp;")
@@ -335,7 +409,10 @@
 
         if (data.last_received) {
           document.getElementById("last-received").textContent =
-            `${data.last_received.scan_date} ${data.last_received.scan_time}`;
+            formatElapsedTime(
+              data.last_received.scan_date,
+              data.last_received.scan_time
+            );
         } else {
           document.getElementById("last-received").textContent =
             "No scan rows found.";
