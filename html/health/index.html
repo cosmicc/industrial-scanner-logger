@@ -50,7 +50,10 @@
 
       <div class="card">
         <h2>Current Scan Rate</h2>
-        <div id="current-scan-rate" class="big-value">Checking...</div>
+        <div class="status-row">
+          <span id="current-scan-rate-dot" class="dot"></span>
+          <span id="current-scan-rate-status">Checking...</span>
+        </div>
         <div id="current-scan-rate-detail" class="detail"></div>
       </div>
 
@@ -218,17 +221,19 @@
     }
 
     function renderCurrentScanRate(scanRate) {
-      const rateElement = document.getElementById("current-scan-rate");
-      const detailElement = document.getElementById("current-scan-rate-detail");
-
       if (!scanRate) {
-        rateElement.textContent = "Unavailable";
-        detailElement.textContent = "";
+        setIndicator("current-scan-rate", false, "Unavailable", "");
         return;
       }
 
-      rateElement.textContent = `${formatRate(scanRate.scans_per_minute)} scans/min`;
-      detailElement.textContent = `${formatRate(scanRate.scans_per_hour)} Scans per hour`;
+      const scansPerMinute = Number(scanRate.scans_per_minute || 0);
+
+      setIndicator(
+        "current-scan-rate",
+        scansPerMinute > 0,
+        `${formatRate(scansPerMinute)} scans/min`,
+        `${formatRate(scanRate.scans_per_hour)} Scans per hour`
+      );
     }
 
     function renderDailyTotal(prefix, total) {
