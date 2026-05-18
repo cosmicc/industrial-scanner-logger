@@ -3,7 +3,7 @@ from datetime import date
 from typing import Optional
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from psycopg import sql
 from psycopg.rows import dict_row
 
@@ -16,6 +16,8 @@ from industrial_scanner_logger.receiver import (
 
 
 API_TITLE = "Industrial Scanner Logger API"
+DEFAULT_API_ROOT_PATH = "/api"
+API_VERSION_PREFIX = "/v1"
 MAX_LIMIT = 1000
 DEFAULT_LIMIT = 100
 
@@ -106,28 +108,32 @@ VIEW_DEFINITIONS = {
 }
 
 
-def create_app() -> FastAPI:
+def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
+    normalized_root_path = normalize_root_path(root_path)
     app = FastAPI(
         title=API_TITLE,
         version=__version__,
         description="Read-only REST API for industrial scanner PostgreSQL data.",
+        root_path=normalized_root_path,
     )
 
     @app.get("/")
-    def root():
+    def root(request: Request):
+        request_root_path = request.scope.get("root_path") or normalized_root_path
         return {
             "service": "industrial-scanner-logger-api",
             "version": __version__,
+            "root_path": request_root_path,
             "endpoints": [
-                "/api/v1/health",
-                "/api/v1/scans",
-                "/api/v1/scans/{scan_id}",
-                "/api/v1/views",
-                "/api/v1/views/{view_name}",
+                external_path(request_root_path, f"{API_VERSION_PREFIX}/health"),
+                external_path(request_root_path, f"{API_VERSION_PREFIX}/scans"),
+                external_path(request_root_path, f"{API_VERSION_PREFIX}/scans/{{scan_id}}"),
+                external_path(request_root_path, f"{API_VERSION_PREFIX}/views"),
+                external_path(request_root_path, f"{API_VERSION_PREFIX}/views/{{view_name}}"),
             ],
         }
 
-    @app.get("/api/v1/health")
+    @app.get(f"{API_VERSION_PREFIX}/health")
     def health(db=Depends(get_db)):
         try:
             with db.cursor() as cursor:
@@ -141,7 +147,7 @@ def create_app() -> FastAPI:
 
         return {"status": "ok", "version": __version__}
 
-    @app.get("/api/v1/scans")
+    @app.get(f"{API_VERSION_PREFIX}/scans")
     def list_scans(
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
@@ -163,7 +169,7 @@ def create_app() -> FastAPI:
         )
         return fetch_all(db, query, params)
 
-    @app.get("/api/v1/scans/{scan_id}")
+    @app.get(f"{API_VERSION_PREFIX}/scans/{{scan_id}}")
     def get_scan(scan_id: int, db=Depends(get_db)):
         query = sql.SQL("SELECT {} FROM scanner_logger.scan_events WHERE id = %s").format(
             column_list(SCAN_EVENT_COLUMNS)
@@ -176,11 +182,11 @@ def create_app() -> FastAPI:
 
         return rows[0]
 
-    @app.get("/api/v1/views")
+    @app.get(f"{API_VERSION_PREFIX}/views")
     def list_views():
         return {"views": sorted(VIEW_DEFINITIONS)}
 
-    @app.get("/api/v1/views/{view_name}")
+    @app.get(f"{API_VERSION_PREFIX}/views/{{view_name}}")
     def get_view_rows(
         view_name: str,
         start_date: Optional[date] = None,
@@ -203,6 +209,27 @@ def create_app() -> FastAPI:
         return fetch_all(db, query, params)
 
     return app
+
+
+def normalize_root_path(root_path: str) -> str:
+    normalized = (root_path or "").strip()
+
+    if normalized in ("", "/"):
+        return ""
+
+    if not normalized.startswith("/"):
+        raise ValueError("api.root_path must be empty or start with /")
+
+    return normalized.rstrip("/")
+
+
+def external_path(root_path: str, path: str) -> str:
+    normalized_root_path = normalize_root_path(root_path)
+
+    if not path.startswith("/"):
+        path = f"/{path}"
+
+    return f"{normalized_root_path}{path}"
 
 
 def get_config():
@@ -372,6 +399,7 @@ def main():
 
     try:
         validate_positive_int(config.api_port, "api.port")
+        api_root_path = normalize_root_path(config.api_root_path)
 
         if config.api_port > 65535:
             raise ValueError("api.port must be between 1 and 65535")
@@ -380,10 +408,11 @@ def main():
         return 1
 
     uvicorn.run(
-        "industrial_scanner_logger.api:app",
+        create_app(root_path=api_root_path),
         host=config.api_host,
         port=config.api_port,
         log_level=config.api_log_level,
+        root_path=api_root_path,
     )
     return 0
 

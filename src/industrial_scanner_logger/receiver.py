@@ -117,6 +117,7 @@ CONFIG_DEFAULTS = {
         "enabled": "true",
         "host": "127.0.0.1",
         "port": "8000",
+        "root_path": "/api",
         "log_level": "info",
     },
 }
@@ -372,6 +373,7 @@ def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
             api_enabled=config.getboolean("api", "enabled"),
             api_host=config.get("api", "host"),
             api_port=config.getint("api", "port"),
+            api_root_path=config.get("api", "root_path"),
             api_log_level=config.get("api", "log_level"),
         )
     except (configparser.Error, ValueError) as exc:

@@ -146,6 +146,7 @@ retry_interval = 12
 enabled = true
 host = 0.0.0.0
 port = 8080
+root_path = /api
 log_level = warning
 """.strip(),
                 encoding="utf-8",
@@ -180,6 +181,7 @@ log_level = warning
             self.assertTrue(config.api_enabled)
             self.assertEqual(config.api_host, "0.0.0.0")
             self.assertEqual(config.api_port, 8080)
+            self.assertEqual(config.api_root_path, "/api")
             self.assertEqual(config.api_log_level, "warning")
 
     def test_classify_scan_accepts_only_expected_numeric_length(self):

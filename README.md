@@ -28,7 +28,9 @@ The current receiver listens for scanner TCP connections, classifies scan events
 
 - Python 3.9 or newer
 - Runtime Python packages listed in `requirements.txt`
-- The service installer installs `requirements.txt` automatically
+- Ubuntu systemd host for the installer
+- PostgreSQL, if PostgreSQL logging or the REST API will be used
+- Nginx is installed automatically by `scripts/install.sh` when the API proxy is enabled
 
 ## Quick Start
 
@@ -97,6 +99,7 @@ retry_interval = 30
 enabled = true
 host = 127.0.0.1
 port = 8000
+root_path = /api
 log_level = info
 ```
 
@@ -106,18 +109,47 @@ Check the installed receiver version:
 scanner-tcp-receiver --version
 ```
 
-## Ubuntu Systemd Service
+## Ubuntu Install
 
-Install the receiver as a systemd service:
+Install the receiver services and nginx API proxy:
 
 ```bash
-sudo scripts/install_service.sh
+sudo scripts/install.sh
 ```
 
 The installer copies the project to `/opt/industrial-scanner-logger`, creates a
 Python virtual environment, installs the Python package dependencies, creates a
-dedicated `scannerlogger` system user, installs a systemd unit, and starts the
-service.
+dedicated `scannerlogger` system user, installs the receiver and API systemd
+units, installs nginx if needed, enables an nginx site for `/api`, and starts
+the services.
+
+The nginx site template is:
+
+```text
+nginx/industrial-scanner-logger.conf
+```
+
+By default, the installer writes it to:
+
+```text
+/etc/nginx/sites-available/industrial-scanner-logger.conf
+/etc/nginx/sites-enabled/industrial-scanner-logger.conf
+```
+
+It uses `/api` for the REST API and leaves `/` for the web interface document
+root:
+
+```text
+/var/www/industrial-scanner-logger
+```
+
+The default nginx listen value is `80 default_server`, so the installer disables
+Ubuntu's packaged default site symlink if it exists. If you are merging this
+into an existing nginx site, install with options such as:
+
+```bash
+sudo scripts/install.sh --nginx-listen 80 --keep-nginx-default-site
+```
 
 Receiver options are in:
 
@@ -133,6 +165,7 @@ log path, PostgreSQL options, or REST API bind settings:
 sudo nano /etc/industrial-scanner-logger.conf
 sudo systemctl restart industrial-scanner-logger
 sudo systemctl restart industrial-scanner-logger-api
+sudo systemctl reload nginx
 ```
 
 Useful service commands:
@@ -140,13 +173,16 @@ Useful service commands:
 ```bash
 sudo systemctl status industrial-scanner-logger
 sudo systemctl status industrial-scanner-logger-api
+sudo systemctl status nginx
 sudo journalctl -u industrial-scanner-logger -f
 sudo journalctl -u industrial-scanner-logger-api -f
 scripts/live-scanner-log
 sudo tail -f /var/log/industrial-scanner-logger.log
 sudo tail -f /var/log/industrial-scanner-logger/scanner-log-data-$(date +%F).log
+sudo nginx -t
 sudo systemctl restart industrial-scanner-logger
 sudo systemctl restart industrial-scanner-logger-api
+sudo systemctl reload nginx
 sudo systemctl stop industrial-scanner-logger
 ```
 
@@ -192,8 +228,8 @@ row is written; PostgreSQL does not assign the scan event timestamp. PostgreSQL
 generated columns and views provide success/failure classification, failed scan
 queries, daily totals, and duplicate scan queries.
 
-The service installer enables PostgreSQL logging by default with local Unix
-socket peer authentication:
+The installer enables PostgreSQL logging by default with local Unix socket peer
+authentication:
 
 ```text
 postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger
@@ -204,7 +240,7 @@ That default expects the Linux service user and PostgreSQL role to both be named
 PostgreSQL logging during service install if the database is not ready yet:
 
 ```bash
-sudo scripts/install_service.sh --disable-postgresql
+sudo scripts/install.sh --disable-postgresql
 ```
 
 Existing service installs keep their current config file. To add PostgreSQL
@@ -223,14 +259,15 @@ The installer creates a separate API service:
 industrial-scanner-logger-api.service
 ```
 
-The API reads PostgreSQL connection settings and bind settings from
-`/etc/industrial-scanner-logger.conf`. By default it binds locally:
+The API reads PostgreSQL connection settings, bind settings, and its proxy root
+path from `/etc/industrial-scanner-logger.conf`. By default it binds locally
+and treats `/api` as its public root path:
 
 ```text
-http://127.0.0.1:8000
+http://127.0.0.1:8000 with root_path = /api
 ```
 
-Core endpoints:
+Core public endpoints behind nginx:
 
 ```text
 GET /api/v1/health
@@ -248,23 +285,38 @@ The list endpoints support common filters such as `start_date`, `end_date`,
 `scanner_id`, `barcode`, `limit`, and `offset` where those fields exist.
 `/api/v1/scans` also supports `is_success`.
 
-Interactive API docs are available from FastAPI:
+Interactive API docs are available through nginx:
 
 ```text
-http://127.0.0.1:8000/docs
+/api/docs
 ```
 
-Uninstall the service and config file while preserving the app directory,
-CSV logs, script logs, raw scan data logs, and service user/group:
+The uvicorn app routes are `/v1/...` internally. The installed nginx site strips
+the `/api` prefix before proxying to uvicorn, while `/` serves the web root for
+the separate web interface:
 
-```bash
-sudo scripts/uninstall_service.sh
+```nginx
+location = /api {
+    return 308 /api/;
+}
+
+location /api/ {
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Prefix /api;
+    proxy_redirect off;
+    proxy_pass http://127.0.0.1:8000/;
+}
 ```
 
-Only remove the installed application directory when you explicitly want to:
+Uninstall the runtime, service files, config file, nginx site, and installed app
+directory while preserving CSV logs, script logs, raw scan data logs, the nginx
+package, and the service user/group:
 
 ```bash
-sudo scripts/uninstall_service.sh --remove-app
+sudo scripts/uninstall.sh
 ```
 
 ## CSV Outputs

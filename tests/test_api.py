@@ -11,6 +11,23 @@ HAS_API_DEPS = all(
 
 @unittest.skipUnless(HAS_API_DEPS, "FastAPI API dependencies are not installed")
 class ApiQueryTests(unittest.TestCase):
+    def test_app_uses_api_root_path_as_proxy_prefix(self):
+        from industrial_scanner_logger.api import create_app
+
+        app = create_app(root_path="/api")
+        route_paths = {route.path for route in app.routes}
+
+        self.assertEqual(app.root_path, "/api")
+        self.assertIn("/v1/health", route_paths)
+        self.assertIn("/v1/scans", route_paths)
+        self.assertNotIn("/api/v1/health", route_paths)
+
+    def test_normalize_root_path_rejects_relative_paths(self):
+        from industrial_scanner_logger.api import normalize_root_path
+
+        with self.assertRaises(ValueError):
+            normalize_root_path("api")
+
     def test_build_scan_events_query_collects_filters_and_pagination(self):
         from industrial_scanner_logger.api import build_scan_events_query
 

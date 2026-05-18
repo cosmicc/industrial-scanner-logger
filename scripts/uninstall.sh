@@ -11,13 +11,14 @@ LEGACY_ENV_FILE="${LEGACY_ENV_FILE:-/etc/default/${SERVICE_NAME}}"
 OUTPUT_DIR="${OUTPUT_DIR:-/scanner-logs}"
 LOG_FILE="${LOG_FILE:-/var/log/industrial-scanner-logger.log}"
 SCAN_DATA_LOG_DIR="${SCAN_DATA_LOG_DIR:-/var/log/industrial-scanner-logger}"
-REMOVE_APP="${REMOVE_APP:-0}"
+NGINX_SITE_NAME="${NGINX_SITE_NAME:-industrial-scanner-logger}"
+NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/industrial-scanner-logger}"
 
 usage() {
     cat <<USAGE
-Usage: sudo scripts/uninstall_service.sh [options]
+Usage: sudo scripts/uninstall.sh [options]
 
-Uninstall the Industrial Scanner Logger systemd service.
+Uninstall the Industrial Scanner Logger runtime, services, and nginx site.
 
 Options:
   --service-name NAME    systemd service name [${SERVICE_NAME}]
@@ -28,14 +29,16 @@ Options:
   --output-dir DIR       scanner CSV output directory [${OUTPUT_DIR}]
   --log-file PATH        troubleshooting log file [${LOG_FILE}]
   --scan-data-log-dir DIR daily raw scan event log directory [${SCAN_DATA_LOG_DIR}]
-  --remove-app           also remove application directory [${INSTALL_DIR}]
+  --nginx-site-name NAME nginx site file name [${NGINX_SITE_NAME}]
+  --nginx-web-root DIR   document root to remove if empty [${NGINX_WEB_ROOT}]
   -h, --help             show this help
 
 The receiver config file is always removed.
 The old /etc/default service defaults file is removed if present.
-The application directory is preserved unless --remove-app is provided.
+The installed application directory is removed.
 The service user and group are always preserved for future installs.
 Scanner CSV logs, script logs, and raw scan data logs are always preserved.
+The nginx package is preserved because it may serve other sites.
 USAGE
 }
 
@@ -75,9 +78,13 @@ while [[ $# -gt 0 ]]; do
             SCAN_DATA_LOG_DIR="$2"
             shift 2
             ;;
-        --remove-app)
-            REMOVE_APP=1
-            shift
+        --nginx-site-name)
+            NGINX_SITE_NAME="$2"
+            shift 2
+            ;;
+        --nginx-web-root)
+            NGINX_WEB_ROOT="$2"
+            shift 2
             ;;
         -h|--help)
             usage
@@ -98,47 +105,51 @@ if [[ "${EUID}" -ne 0 ]]; then
     fi
 
     export SERVICE_NAME API_SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP LEGACY_ENV_FILE
-    export OUTPUT_DIR LOG_FILE SCAN_DATA_LOG_DIR REMOVE_APP
-    exec sudo --preserve-env=SERVICE_NAME,API_SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,LEGACY_ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,REMOVE_APP "$0"
+    export OUTPUT_DIR LOG_FILE SCAN_DATA_LOG_DIR NGINX_SITE_NAME NGINX_WEB_ROOT
+    exec sudo --preserve-env=SERVICE_NAME,API_SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,LEGACY_ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,NGINX_SITE_NAME,NGINX_WEB_ROOT "$0"
 fi
 
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 API_UNIT_FILE="/etc/systemd/system/${API_SERVICE_NAME}.service"
+NGINX_SITE_FILE="/etc/nginx/sites-available/${NGINX_SITE_NAME}.conf"
+NGINX_SITE_LINK="/etc/nginx/sites-enabled/${NGINX_SITE_NAME}.conf"
 
 if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
     systemctl disable --now "${API_SERVICE_NAME}.service" >/dev/null 2>&1 || true
 fi
 
+rm -f "${NGINX_SITE_LINK}"
+rm -f "${NGINX_SITE_FILE}"
 rm -f "${UNIT_FILE}"
 rm -f "${API_UNIT_FILE}"
 rm -f "${CONFIG_FILE}"
 rm -f "${LEGACY_ENV_FILE}"
-
-if [[ "${REMOVE_APP}" -eq 1 ]]; then
-    rm -rf "${INSTALL_DIR}"
-fi
+rm -rf "${INSTALL_DIR}"
+rmdir "${NGINX_WEB_ROOT}" >/dev/null 2>&1 || true
 
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload
     systemctl reset-failed "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+    systemctl reset-failed "${API_SERVICE_NAME}.service" >/dev/null 2>&1 || true
+
+    if command -v nginx >/dev/null 2>&1; then
+        nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
+    fi
 fi
 
 cat <<DONE
 Uninstalled ${SERVICE_NAME}.service
 
 Removed:
+  ${INSTALL_DIR}
   ${UNIT_FILE}
   ${API_UNIT_FILE}
   ${CONFIG_FILE}
   ${LEGACY_ENV_FILE}
+  ${NGINX_SITE_FILE}
+  ${NGINX_SITE_LINK}
 DONE
-
-if [[ "${REMOVE_APP}" -eq 1 ]]; then
-    cat <<REMOVED_APP
-  ${INSTALL_DIR}
-REMOVED_APP
-fi
 
 cat <<KEPT
 
@@ -146,18 +157,9 @@ Preserved:
   ${OUTPUT_DIR}
   ${LOG_FILE}
   ${SCAN_DATA_LOG_DIR}
-
+  ${NGINX_WEB_ROOT} (if it contains files)
+  nginx package
 KEPT
-
-if [[ "${REMOVE_APP}" -eq 0 ]]; then
-    cat <<KEPT_APP
-
-Preserved:
-  ${INSTALL_DIR}
-
-Add --remove-app only when you also want to remove the application directory.
-KEPT_APP
-fi
 
 cat <<USER_GROUP
 

@@ -34,15 +34,22 @@ POSTGRESQL_REQUIRED="${POSTGRESQL_REQUIRED:-0}"
 API_ENABLED="${API_ENABLED:-1}"
 API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-8000}"
+API_ROOT_PATH="${API_ROOT_PATH:-/api}"
 API_LOG_LEVEL="${API_LOG_LEVEL:-info}"
+NGINX_ENABLED="${NGINX_ENABLED:-1}"
+NGINX_SITE_NAME="${NGINX_SITE_NAME:-industrial-scanner-logger}"
+NGINX_LISTEN="${NGINX_LISTEN:-80 default_server}"
+NGINX_SERVER_NAME="${NGINX_SERVER_NAME:-_}"
+NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/industrial-scanner-logger}"
+NGINX_DISABLE_DEFAULT_SITE="${NGINX_DISABLE_DEFAULT_SITE:-1}"
 START_SERVICE="${START_SERVICE:-1}"
 OVERWRITE_CONFIG="${OVERWRITE_CONFIG:-0}"
 
 usage() {
     cat <<USAGE
-Usage: sudo scripts/install_service.sh [options]
+Usage: sudo scripts/install.sh [options]
 
-Install the Industrial Scanner Logger as an Ubuntu systemd service.
+Install the Industrial Scanner Logger runtime, services, and nginx API proxy.
 
 Options:
   --service-name NAME       systemd service name [${SERVICE_NAME}]
@@ -78,7 +85,15 @@ Options:
   --disable-api            install but disable the REST API service
   --api-host HOST          REST API bind address [${API_HOST}]
   --api-port PORT          REST API TCP port [${API_PORT}]
+  --api-root-path PATH     proxy root path for the REST API [${API_ROOT_PATH}]
   --api-log-level LEVEL    uvicorn log level [${API_LOG_LEVEL}]
+  --enable-nginx           install and enable the nginx API proxy [default]
+  --disable-nginx          skip nginx package and site configuration
+  --nginx-site-name NAME   nginx site file name [${NGINX_SITE_NAME}]
+  --nginx-listen VALUE     nginx listen value [${NGINX_LISTEN}]
+  --nginx-server-name NAME nginx server_name value [${NGINX_SERVER_NAME}]
+  --nginx-web-root DIR     document root for the future web interface [${NGINX_WEB_ROOT}]
+  --keep-nginx-default-site keep Ubuntu's default nginx site enabled
   --overwrite-config        replace an existing config file
   --no-start                install and enable the service, but do not start it now
   -h, --help                show this help
@@ -141,6 +156,28 @@ PY
 
 escape_sed_replacement() {
     printf "%s" "$1" | sed "s/[&|]/\\\\&/g"
+}
+
+validate_api_root_path() {
+    if [[ "${API_ROOT_PATH}" != /* || "${API_ROOT_PATH}" == "/" ]]; then
+        echo "--api-root-path must start with / and must not be / when nginx is enabled." >&2
+        exit 1
+    fi
+
+    API_ROOT_PATH="${API_ROOT_PATH%/}"
+}
+
+install_nginx_package() {
+    if command -v nginx >/dev/null 2>&1; then
+        return
+    fi
+
+    require_command apt-get
+
+    echo "Installing nginx..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y nginx
 }
 
 while [[ $# -gt 0 ]]; do
@@ -269,6 +306,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --disable-api)
             API_ENABLED=0
+            NGINX_ENABLED=0
             shift
             ;;
         --api-host)
@@ -279,9 +317,41 @@ while [[ $# -gt 0 ]]; do
             API_PORT="$2"
             shift 2
             ;;
+        --api-root-path)
+            API_ROOT_PATH="$2"
+            shift 2
+            ;;
         --api-log-level)
             API_LOG_LEVEL="$2"
             shift 2
+            ;;
+        --enable-nginx)
+            NGINX_ENABLED=1
+            shift
+            ;;
+        --disable-nginx)
+            NGINX_ENABLED=0
+            shift
+            ;;
+        --nginx-site-name)
+            NGINX_SITE_NAME="$2"
+            shift 2
+            ;;
+        --nginx-listen)
+            NGINX_LISTEN="$2"
+            shift 2
+            ;;
+        --nginx-server-name)
+            NGINX_SERVER_NAME="$2"
+            shift 2
+            ;;
+        --nginx-web-root)
+            NGINX_WEB_ROOT="$2"
+            shift 2
+            ;;
+        --keep-nginx-default-site)
+            NGINX_DISABLE_DEFAULT_SITE=0
+            shift
             ;;
         --overwrite-config)
             OVERWRITE_CONFIG=1
@@ -303,6 +373,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ "${API_ENABLED}" -eq 0 ]]; then
+    NGINX_ENABLED=0
+fi
+
 if [[ "${EUID}" -ne 0 ]]; then
     if ! command -v sudo >/dev/null 2>&1; then
         echo "This installer must run as root, and sudo was not found." >&2
@@ -317,16 +391,24 @@ if [[ "${EUID}" -ne 0 ]]; then
     export TCP_KEEPALIVE_IDLE TCP_KEEPALIVE_INTERVAL TCP_KEEPALIVE_PROBES
     export POSTGRESQL_ENABLED POSTGRESQL_DSN POSTGRESQL_TABLE
     export POSTGRESQL_CONNECT_TIMEOUT POSTGRESQL_RETRY_INTERVAL POSTGRESQL_REQUIRED
-    export API_ENABLED API_HOST API_PORT API_LOG_LEVEL
-    exec sudo --preserve-env=SERVICE_NAME,API_SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,LEGACY_ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,SCAN_DATA_LOG_PREFIX,HOST,PORT,PREFIX,NO_READ_MESSAGE,SUCCESS_LENGTH,MAX_BARCODE_CHARS,MAX_CLIENTS,FRAME_IDLE_TIMEOUT,CLIENT_IDLE_TIMEOUT,SHUTDOWN_TIMEOUT,TCP_KEEPALIVE_IDLE,TCP_KEEPALIVE_INTERVAL,TCP_KEEPALIVE_PROBES,POSTGRESQL_ENABLED,POSTGRESQL_DSN,POSTGRESQL_TABLE,POSTGRESQL_CONNECT_TIMEOUT,POSTGRESQL_RETRY_INTERVAL,POSTGRESQL_REQUIRED,API_ENABLED,API_HOST,API_PORT,API_LOG_LEVEL,START_SERVICE,OVERWRITE_CONFIG "$0"
+    export API_ENABLED API_HOST API_PORT API_ROOT_PATH API_LOG_LEVEL
+    export NGINX_ENABLED NGINX_SITE_NAME NGINX_LISTEN NGINX_SERVER_NAME NGINX_WEB_ROOT
+    export NGINX_DISABLE_DEFAULT_SITE
+    exec sudo --preserve-env=SERVICE_NAME,API_SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,LEGACY_ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,SCAN_DATA_LOG_PREFIX,HOST,PORT,PREFIX,NO_READ_MESSAGE,SUCCESS_LENGTH,MAX_BARCODE_CHARS,MAX_CLIENTS,FRAME_IDLE_TIMEOUT,CLIENT_IDLE_TIMEOUT,SHUTDOWN_TIMEOUT,TCP_KEEPALIVE_IDLE,TCP_KEEPALIVE_INTERVAL,TCP_KEEPALIVE_PROBES,POSTGRESQL_ENABLED,POSTGRESQL_DSN,POSTGRESQL_TABLE,POSTGRESQL_CONNECT_TIMEOUT,POSTGRESQL_RETRY_INTERVAL,POSTGRESQL_REQUIRED,API_ENABLED,API_HOST,API_PORT,API_ROOT_PATH,API_LOG_LEVEL,NGINX_ENABLED,NGINX_SITE_NAME,NGINX_LISTEN,NGINX_SERVER_NAME,NGINX_WEB_ROOT,NGINX_DISABLE_DEFAULT_SITE,START_SERVICE,OVERWRITE_CONFIG "$0"
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 SERVICE_TEMPLATE="${PROJECT_ROOT}/systemd/industrial-scanner-logger.service"
 API_SERVICE_TEMPLATE="${PROJECT_ROOT}/systemd/industrial-scanner-logger-api.service"
+NGINX_TEMPLATE="${PROJECT_ROOT}/nginx/industrial-scanner-logger.conf"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 API_UNIT_FILE="/etc/systemd/system/${API_SERVICE_NAME}.service"
+NGINX_AVAILABLE_DIR="/etc/nginx/sites-available"
+NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
+NGINX_SITE_FILE="${NGINX_AVAILABLE_DIR}/${NGINX_SITE_NAME}.conf"
+NGINX_SITE_LINK="${NGINX_ENABLED_DIR}/${NGINX_SITE_NAME}.conf"
+NGINX_DEFAULT_SITE_LINK="${NGINX_ENABLED_DIR}/default"
 PYTHON_BIN="${INSTALL_DIR}/.venv/bin/python"
 
 require_command python3
@@ -357,6 +439,16 @@ fi
 if [[ ! -f "${API_SERVICE_TEMPLATE}" ]]; then
     echo "Missing API service template: ${API_SERVICE_TEMPLATE}" >&2
     exit 1
+fi
+
+if [[ "${NGINX_ENABLED}" -eq 1 && ! -f "${NGINX_TEMPLATE}" ]]; then
+    echo "Missing nginx site template: ${NGINX_TEMPLATE}" >&2
+    exit 1
+fi
+
+if [[ "${NGINX_ENABLED}" -eq 1 ]]; then
+    validate_api_root_path
+    install_nginx_package
 fi
 
 if [[ -r /etc/os-release ]]; then
@@ -478,6 +570,7 @@ retry_interval = ${POSTGRESQL_RETRY_INTERVAL}
 enabled = ${API_ENABLED_TEXT}
 host = ${API_HOST}
 port = ${API_PORT}
+root_path = ${API_ROOT_PATH}
 log_level = ${API_LOG_LEVEL}
 CONFIG
     chmod 0644 "${CONFIG_FILE}"
@@ -508,6 +601,32 @@ sed \
 
 chmod 0644 "${API_UNIT_FILE}"
 
+if [[ "${NGINX_ENABLED}" -eq 1 ]]; then
+    install -d -o root -g root -m 0755 "${NGINX_AVAILABLE_DIR}"
+    install -d -o root -g root -m 0755 "${NGINX_ENABLED_DIR}"
+    install -d -o root -g root -m 0755 "${NGINX_WEB_ROOT}"
+
+    sed \
+        -e "s|@NGINX_LISTEN@|$(escape_sed_replacement "${NGINX_LISTEN}")|g" \
+        -e "s|@NGINX_SERVER_NAME@|$(escape_sed_replacement "${NGINX_SERVER_NAME}")|g" \
+        -e "s|@NGINX_WEB_ROOT@|$(escape_sed_replacement "${NGINX_WEB_ROOT}")|g" \
+        -e "s|@API_ROOT_PATH@|$(escape_sed_replacement "${API_ROOT_PATH}")|g" \
+        -e "s|@API_HOST@|$(escape_sed_replacement "${API_HOST}")|g" \
+        -e "s|@API_PORT@|$(escape_sed_replacement "${API_PORT}")|g" \
+        "${NGINX_TEMPLATE}" >"${NGINX_SITE_FILE}"
+
+    chmod 0644 "${NGINX_SITE_FILE}"
+
+    if [[ "${NGINX_DISABLE_DEFAULT_SITE}" -eq 1 && -L "${NGINX_DEFAULT_SITE_LINK}" ]]; then
+        rm -f "${NGINX_DEFAULT_SITE_LINK}"
+        echo "Disabled Ubuntu default nginx site: ${NGINX_DEFAULT_SITE_LINK}"
+    fi
+
+    ln -sfn "${NGINX_SITE_FILE}" "${NGINX_SITE_LINK}"
+    nginx -t
+    systemctl enable nginx
+fi
+
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}.service"
 
@@ -522,6 +641,10 @@ if [[ "${START_SERVICE}" -eq 1 ]]; then
 
     if [[ "${API_ENABLED}" -eq 1 ]]; then
         systemctl restart "${API_SERVICE_NAME}.service"
+    fi
+
+    if [[ "${NGINX_ENABLED}" -eq 1 ]]; then
+        systemctl restart nginx
     fi
 fi
 
@@ -547,15 +670,24 @@ PostgreSQL scan logging:
   $([[ "${POSTGRESQL_ENABLED}" -eq 1 ]] && echo "enabled (${POSTGRESQL_TABLE})" || echo "disabled")
 
 REST API service:
-  $([[ "${API_ENABLED}" -eq 1 ]] && echo "enabled (${API_SERVICE_NAME}.service on ${API_HOST}:${API_PORT})" || echo "disabled (${API_SERVICE_NAME}.service installed)")
+  $([[ "${API_ENABLED}" -eq 1 ]] && echo "enabled (${API_SERVICE_NAME}.service on ${API_HOST}:${API_PORT}${API_ROOT_PATH})" || echo "disabled (${API_SERVICE_NAME}.service installed)")
+
+Nginx API proxy:
+  $([[ "${NGINX_ENABLED}" -eq 1 ]] && echo "enabled (${NGINX_SITE_FILE}, public path ${API_ROOT_PATH})" || echo "disabled")
+
+Web root:
+  ${NGINX_WEB_ROOT}
 
 Useful commands:
   sudo systemctl status ${SERVICE_NAME}
   sudo systemctl status ${API_SERVICE_NAME}
+  sudo systemctl status nginx
   sudo journalctl -u ${SERVICE_NAME} -f
   sudo journalctl -u ${API_SERVICE_NAME} -f
   sudo tail -f ${LOG_FILE}
   sudo nano ${CONFIG_FILE}
+  sudo nano ${NGINX_SITE_FILE}
   sudo systemctl restart ${SERVICE_NAME}
   sudo systemctl restart ${API_SERVICE_NAME}
+  sudo systemctl reload nginx
 DONE
