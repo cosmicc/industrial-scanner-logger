@@ -17,6 +17,7 @@ The current receiver listens for scanner TCP connections, classifies scan events
   retaining all CSV logging.
 - Writes troubleshooting events to `/var/log/industrial-scanner-logger.log` when installed as a service.
 - Writes raw per-scan event lines to daily logs under `/var/log/industrial-scanner-logger/`.
+- Runs an optional REST API service for querying PostgreSQL scan data.
 - Treats a scan as `SUCCESS` only when the barcode is exactly 34 numeric digits.
 - Treats blank scans, the configured no-read message, wrong lengths, and non-numeric values as `FAILED`.
 - Identifies each scanner by the last octet of its IPv4 address.
@@ -91,6 +92,12 @@ dsn = postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger
 table = scanner_logger.scan_events
 connect_timeout = 3
 retry_interval = 30
+
+[api]
+enabled = true
+host = 127.0.0.1
+port = 8000
+log_level = info
 ```
 
 Check the installed receiver version:
@@ -120,22 +127,26 @@ Receiver options are in:
 
 Edit that file to change the bind address, TCP port, output directory, CSV
 prefix, no-read text, success length, receiver safety limits, troubleshooting
-log path, or PostgreSQL options:
+log path, PostgreSQL options, or REST API bind settings:
 
 ```bash
 sudo nano /etc/industrial-scanner-logger.conf
 sudo systemctl restart industrial-scanner-logger
+sudo systemctl restart industrial-scanner-logger-api
 ```
 
 Useful service commands:
 
 ```bash
 sudo systemctl status industrial-scanner-logger
+sudo systemctl status industrial-scanner-logger-api
 sudo journalctl -u industrial-scanner-logger -f
+sudo journalctl -u industrial-scanner-logger-api -f
 scripts/live-scanner-log
 sudo tail -f /var/log/industrial-scanner-logger.log
 sudo tail -f /var/log/industrial-scanner-logger/scanner-log-data-$(date +%F).log
 sudo systemctl restart industrial-scanner-logger
+sudo systemctl restart industrial-scanner-logger-api
 sudo systemctl stop industrial-scanner-logger
 ```
 
@@ -203,6 +214,45 @@ set `enabled = true` under `[postgresql]`, or rerun the installer with
 
 PostgreSQL write failures are logged to the troubleshooting log. CSV and raw
 daily scan logs continue to be written unless `--postgresql-required` is set.
+
+## REST API
+
+The installer creates a separate API service:
+
+```text
+industrial-scanner-logger-api.service
+```
+
+The API reads PostgreSQL connection settings and bind settings from
+`/etc/industrial-scanner-logger.conf`. By default it binds locally:
+
+```text
+http://127.0.0.1:8000
+```
+
+Core endpoints:
+
+```text
+GET /api/v1/health
+GET /api/v1/scans
+GET /api/v1/scans/{scan_id}
+GET /api/v1/views
+GET /api/v1/views/daily-scan-totals
+GET /api/v1/views/daily-scan-totals-all-scanners
+GET /api/v1/views/failed-scans
+GET /api/v1/views/successful-scans
+GET /api/v1/views/duplicate-successful-scans
+```
+
+The list endpoints support common filters such as `start_date`, `end_date`,
+`scanner_id`, `barcode`, `limit`, and `offset` where those fields exist.
+`/api/v1/scans` also supports `is_success`.
+
+Interactive API docs are available from FastAPI:
+
+```text
+http://127.0.0.1:8000/docs
+```
 
 Uninstall the service and config file while preserving the app directory,
 CSV logs, script logs, raw scan data logs, and service user/group:

@@ -36,6 +36,7 @@ dev = ["ruff>=0.8"]
 
 [project.scripts]
 scanner-tcp-receiver = "industrial_scanner_logger.receiver:main"
+scanner-rest-api = "industrial_scanner_logger.api:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

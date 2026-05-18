@@ -141,6 +141,12 @@ dsn = postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger
 table = scanner_logger.scan_events
 connect_timeout = 4
 retry_interval = 12
+
+[api]
+enabled = true
+host = 0.0.0.0
+port = 8080
+log_level = warning
 """.strip(),
                 encoding="utf-8",
             )
@@ -171,6 +177,10 @@ retry_interval = 12
             self.assertEqual(config.postgresql_table, "scanner_logger.scan_events")
             self.assertEqual(config.postgresql_connect_timeout, 4)
             self.assertEqual(config.postgresql_retry_interval, 12)
+            self.assertTrue(config.api_enabled)
+            self.assertEqual(config.api_host, "0.0.0.0")
+            self.assertEqual(config.api_port, 8080)
+            self.assertEqual(config.api_log_level, "warning")
 
     def test_classify_scan_accepts_only_expected_numeric_length(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):

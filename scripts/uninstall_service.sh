@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SERVICE_NAME="${SERVICE_NAME:-industrial-scanner-logger}"
+API_SERVICE_NAME="${API_SERVICE_NAME:-${SERVICE_NAME}-api}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
 SERVICE_USER="${SERVICE_USER:-scannerlogger}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
@@ -20,6 +21,7 @@ Uninstall the Industrial Scanner Logger systemd service.
 
 Options:
   --service-name NAME    systemd service name [${SERVICE_NAME}]
+  --api-service-name NAME REST API service name [${API_SERVICE_NAME}]
   --install-dir DIR      application install directory [${INSTALL_DIR}]
   --user USER            service user name to preserve [${SERVICE_USER}]
   --group GROUP          service group name to preserve [${SERVICE_GROUP}]
@@ -41,7 +43,12 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --service-name)
             SERVICE_NAME="$2"
+            API_SERVICE_NAME="${SERVICE_NAME}-api"
             LEGACY_ENV_FILE="/etc/default/${SERVICE_NAME}"
+            shift 2
+            ;;
+        --api-service-name)
+            API_SERVICE_NAME="$2"
             shift 2
             ;;
         --install-dir)
@@ -90,18 +97,21 @@ if [[ "${EUID}" -ne 0 ]]; then
         exit 1
     fi
 
-    export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP LEGACY_ENV_FILE
+    export SERVICE_NAME API_SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP LEGACY_ENV_FILE
     export OUTPUT_DIR LOG_FILE SCAN_DATA_LOG_DIR REMOVE_APP
-    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,LEGACY_ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,REMOVE_APP "$0"
+    exec sudo --preserve-env=SERVICE_NAME,API_SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,LEGACY_ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,REMOVE_APP "$0"
 fi
 
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+API_UNIT_FILE="/etc/systemd/system/${API_SERVICE_NAME}.service"
 
 if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+    systemctl disable --now "${API_SERVICE_NAME}.service" >/dev/null 2>&1 || true
 fi
 
 rm -f "${UNIT_FILE}"
+rm -f "${API_UNIT_FILE}"
 rm -f "${CONFIG_FILE}"
 rm -f "${LEGACY_ENV_FILE}"
 
@@ -119,6 +129,7 @@ Uninstalled ${SERVICE_NAME}.service
 
 Removed:
   ${UNIT_FILE}
+  ${API_UNIT_FILE}
   ${CONFIG_FILE}
   ${LEGACY_ENV_FILE}
 DONE

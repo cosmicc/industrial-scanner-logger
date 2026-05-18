@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SERVICE_NAME="${SERVICE_NAME:-industrial-scanner-logger}"
+API_SERVICE_NAME="${API_SERVICE_NAME:-${SERVICE_NAME}-api}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
 SERVICE_USER="${SERVICE_USER:-scannerlogger}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
@@ -30,6 +31,10 @@ POSTGRESQL_TABLE="${POSTGRESQL_TABLE:-scanner_logger.scan_events}"
 POSTGRESQL_CONNECT_TIMEOUT="${POSTGRESQL_CONNECT_TIMEOUT:-3}"
 POSTGRESQL_RETRY_INTERVAL="${POSTGRESQL_RETRY_INTERVAL:-30}"
 POSTGRESQL_REQUIRED="${POSTGRESQL_REQUIRED:-0}"
+API_ENABLED="${API_ENABLED:-1}"
+API_HOST="${API_HOST:-127.0.0.1}"
+API_PORT="${API_PORT:-8000}"
+API_LOG_LEVEL="${API_LOG_LEVEL:-info}"
 START_SERVICE="${START_SERVICE:-1}"
 OVERWRITE_CONFIG="${OVERWRITE_CONFIG:-0}"
 
@@ -41,6 +46,7 @@ Install the Industrial Scanner Logger as an Ubuntu systemd service.
 
 Options:
   --service-name NAME       systemd service name [${SERVICE_NAME}]
+  --api-service-name NAME   REST API systemd service name [${API_SERVICE_NAME}]
   --install-dir DIR         application install directory [${INSTALL_DIR}]
   --user USER               system user that runs the service [${SERVICE_USER}]
   --group GROUP             system group that runs the service [${SERVICE_GROUP}]
@@ -68,6 +74,11 @@ Options:
   --postgresql-connect-timeout SEC PostgreSQL connection timeout [${POSTGRESQL_CONNECT_TIMEOUT}]
   --postgresql-retry-interval SEC  retry delay after PostgreSQL failures [${POSTGRESQL_RETRY_INTERVAL}]
   --postgresql-required    stop the receiver if PostgreSQL logging is unavailable
+  --enable-api             enable and start the REST API service [default]
+  --disable-api            install but disable the REST API service
+  --api-host HOST          REST API bind address [${API_HOST}]
+  --api-port PORT          REST API TCP port [${API_PORT}]
+  --api-log-level LEVEL    uvicorn log level [${API_LOG_LEVEL}]
   --overwrite-config        replace an existing config file
   --no-start                install and enable the service, but do not start it now
   -h, --help                show this help
@@ -136,7 +147,12 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --service-name)
             SERVICE_NAME="$2"
+            API_SERVICE_NAME="${SERVICE_NAME}-api"
             LEGACY_ENV_FILE="/etc/default/${SERVICE_NAME}"
+            shift 2
+            ;;
+        --api-service-name)
+            API_SERVICE_NAME="$2"
             shift 2
             ;;
         --install-dir)
@@ -247,6 +263,26 @@ while [[ $# -gt 0 ]]; do
             POSTGRESQL_REQUIRED=1
             shift
             ;;
+        --enable-api)
+            API_ENABLED=1
+            shift
+            ;;
+        --disable-api)
+            API_ENABLED=0
+            shift
+            ;;
+        --api-host)
+            API_HOST="$2"
+            shift 2
+            ;;
+        --api-port)
+            API_PORT="$2"
+            shift 2
+            ;;
+        --api-log-level)
+            API_LOG_LEVEL="$2"
+            shift 2
+            ;;
         --overwrite-config)
             OVERWRITE_CONFIG=1
             shift
@@ -273,7 +309,7 @@ if [[ "${EUID}" -ne 0 ]]; then
         exit 1
     fi
 
-    export SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP LEGACY_ENV_FILE
+    export SERVICE_NAME API_SERVICE_NAME INSTALL_DIR SERVICE_USER SERVICE_GROUP LEGACY_ENV_FILE
     export START_SERVICE OVERWRITE_CONFIG
     export OUTPUT_DIR LOG_FILE SCAN_DATA_LOG_DIR SCAN_DATA_LOG_PREFIX
     export HOST PORT PREFIX NO_READ_MESSAGE SUCCESS_LENGTH
@@ -281,13 +317,16 @@ if [[ "${EUID}" -ne 0 ]]; then
     export TCP_KEEPALIVE_IDLE TCP_KEEPALIVE_INTERVAL TCP_KEEPALIVE_PROBES
     export POSTGRESQL_ENABLED POSTGRESQL_DSN POSTGRESQL_TABLE
     export POSTGRESQL_CONNECT_TIMEOUT POSTGRESQL_RETRY_INTERVAL POSTGRESQL_REQUIRED
-    exec sudo --preserve-env=SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,LEGACY_ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,SCAN_DATA_LOG_PREFIX,HOST,PORT,PREFIX,NO_READ_MESSAGE,SUCCESS_LENGTH,MAX_BARCODE_CHARS,MAX_CLIENTS,FRAME_IDLE_TIMEOUT,CLIENT_IDLE_TIMEOUT,SHUTDOWN_TIMEOUT,TCP_KEEPALIVE_IDLE,TCP_KEEPALIVE_INTERVAL,TCP_KEEPALIVE_PROBES,POSTGRESQL_ENABLED,POSTGRESQL_DSN,POSTGRESQL_TABLE,POSTGRESQL_CONNECT_TIMEOUT,POSTGRESQL_RETRY_INTERVAL,POSTGRESQL_REQUIRED,START_SERVICE,OVERWRITE_CONFIG "$0"
+    export API_ENABLED API_HOST API_PORT API_LOG_LEVEL
+    exec sudo --preserve-env=SERVICE_NAME,API_SERVICE_NAME,INSTALL_DIR,SERVICE_USER,SERVICE_GROUP,LEGACY_ENV_FILE,OUTPUT_DIR,LOG_FILE,SCAN_DATA_LOG_DIR,SCAN_DATA_LOG_PREFIX,HOST,PORT,PREFIX,NO_READ_MESSAGE,SUCCESS_LENGTH,MAX_BARCODE_CHARS,MAX_CLIENTS,FRAME_IDLE_TIMEOUT,CLIENT_IDLE_TIMEOUT,SHUTDOWN_TIMEOUT,TCP_KEEPALIVE_IDLE,TCP_KEEPALIVE_INTERVAL,TCP_KEEPALIVE_PROBES,POSTGRESQL_ENABLED,POSTGRESQL_DSN,POSTGRESQL_TABLE,POSTGRESQL_CONNECT_TIMEOUT,POSTGRESQL_RETRY_INTERVAL,POSTGRESQL_REQUIRED,API_ENABLED,API_HOST,API_PORT,API_LOG_LEVEL,START_SERVICE,OVERWRITE_CONFIG "$0"
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 SERVICE_TEMPLATE="${PROJECT_ROOT}/systemd/industrial-scanner-logger.service"
+API_SERVICE_TEMPLATE="${PROJECT_ROOT}/systemd/industrial-scanner-logger-api.service"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+API_UNIT_FILE="/etc/systemd/system/${API_SERVICE_NAME}.service"
 PYTHON_BIN="${INSTALL_DIR}/.venv/bin/python"
 
 require_command python3
@@ -312,6 +351,11 @@ fi
 
 if [[ ! -f "${SERVICE_TEMPLATE}" ]]; then
     echo "Missing service template: ${SERVICE_TEMPLATE}" >&2
+    exit 1
+fi
+
+if [[ ! -f "${API_SERVICE_TEMPLATE}" ]]; then
+    echo "Missing API service template: ${API_SERVICE_TEMPLATE}" >&2
     exit 1
 fi
 
@@ -386,6 +430,11 @@ if [[ "${POSTGRESQL_REQUIRED}" -eq 1 ]]; then
     POSTGRESQL_REQUIRED_TEXT="true"
 fi
 
+API_ENABLED_TEXT="false"
+if [[ "${API_ENABLED}" -eq 1 ]]; then
+    API_ENABLED_TEXT="true"
+fi
+
 if [[ ! -f "${CONFIG_FILE}" || "${OVERWRITE_CONFIG}" -eq 1 ]]; then
     cat >"${CONFIG_FILE}" <<CONFIG
 # Runtime options for ${SERVICE_NAME}.service.
@@ -424,6 +473,12 @@ dsn = ${POSTGRESQL_DSN}
 table = ${POSTGRESQL_TABLE}
 connect_timeout = ${POSTGRESQL_CONNECT_TIMEOUT}
 retry_interval = ${POSTGRESQL_RETRY_INTERVAL}
+
+[api]
+enabled = ${API_ENABLED_TEXT}
+host = ${API_HOST}
+port = ${API_PORT}
+log_level = ${API_LOG_LEVEL}
 CONFIG
     chmod 0644 "${CONFIG_FILE}"
 else
@@ -444,11 +499,30 @@ sed \
 
 chmod 0644 "${UNIT_FILE}"
 
+sed \
+    -e "s|@INSTALL_DIR@|$(escape_sed_replacement "${INSTALL_DIR}")|g" \
+    -e "s|@SERVICE_USER@|$(escape_sed_replacement "${SERVICE_USER}")|g" \
+    -e "s|@SERVICE_GROUP@|$(escape_sed_replacement "${SERVICE_GROUP}")|g" \
+    -e "s|@PYTHON_BIN@|$(escape_sed_replacement "${PYTHON_BIN}")|g" \
+    "${API_SERVICE_TEMPLATE}" >"${API_UNIT_FILE}"
+
+chmod 0644 "${API_UNIT_FILE}"
+
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}.service"
 
+if [[ "${API_ENABLED}" -eq 1 ]]; then
+    systemctl enable "${API_SERVICE_NAME}.service"
+else
+    systemctl disable --now "${API_SERVICE_NAME}.service" >/dev/null 2>&1 || true
+fi
+
 if [[ "${START_SERVICE}" -eq 1 ]]; then
     systemctl restart "${SERVICE_NAME}.service"
+
+    if [[ "${API_ENABLED}" -eq 1 ]]; then
+        systemctl restart "${API_SERVICE_NAME}.service"
+    fi
 fi
 
 cat <<DONE
@@ -472,10 +546,16 @@ Daily raw scan data logs:
 PostgreSQL scan logging:
   $([[ "${POSTGRESQL_ENABLED}" -eq 1 ]] && echo "enabled (${POSTGRESQL_TABLE})" || echo "disabled")
 
+REST API service:
+  $([[ "${API_ENABLED}" -eq 1 ]] && echo "enabled (${API_SERVICE_NAME}.service on ${API_HOST}:${API_PORT})" || echo "disabled (${API_SERVICE_NAME}.service installed)")
+
 Useful commands:
   sudo systemctl status ${SERVICE_NAME}
+  sudo systemctl status ${API_SERVICE_NAME}
   sudo journalctl -u ${SERVICE_NAME} -f
+  sudo journalctl -u ${API_SERVICE_NAME} -f
   sudo tail -f ${LOG_FILE}
   sudo nano ${CONFIG_FILE}
   sudo systemctl restart ${SERVICE_NAME}
+  sudo systemctl restart ${API_SERVICE_NAME}
 DONE
