@@ -2,8 +2,9 @@ import sys
 import shutil
 import subprocess
 from datetime import date, datetime
-from datetime import date
 from typing import Optional
+from collections import deque
+from pathlib import Path
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -25,6 +26,7 @@ MAX_LIMIT = 1000
 DEFAULT_LIMIT = 100
 SCANNER_SERVICE_UNIT = "industrial-scanner-logger.service"
 API_SERVICE_UNIT = "industrial-scanner-logger-api.service"
+SCANNER_SCRIPT_LOG_PATH = Path("/var/log/industrial-scanner-logger.log")
 
 SCAN_EVENT_COLUMNS = [
     "id",
@@ -119,6 +121,7 @@ def build_dashboard_health(config):
     }
 
     connected_scanner_ids = connected_scanner_ids_from_ss(config.port)
+    script_log = read_last_log_lines(SCANNER_SCRIPT_LOG_PATH, line_count=10)
 
     database = {
         "active": False,
@@ -198,6 +201,7 @@ def build_dashboard_health(config):
         "connected_scanner_ids": connected_scanner_ids,
         "last_received": last_received,
         "recent_scans": recent_scans,
+        "script_log": script_log,
     }
 
 
@@ -341,6 +345,34 @@ def scanner_id_from_ipv4_host(host: str) -> int | None:
         return None
 
     return values[-1]
+
+def read_last_log_lines(log_path: Path, line_count: int = 10) -> dict:
+    try:
+        if not log_path.exists():
+            return {
+                "path": str(log_path),
+                "available": False,
+                "error": "log file does not exist",
+                "lines": [],
+            }
+
+        with log_path.open("r", encoding="utf-8", errors="replace") as log_file:
+            lines = list(deque(log_file, maxlen=line_count))
+
+        return {
+            "path": str(log_path),
+            "available": True,
+            "error": None,
+            "lines": [line.rstrip("\n") for line in lines],
+        }
+
+    except Exception as exc:
+        return {
+            "path": str(log_path),
+            "available": False,
+            "error": str(exc),
+            "lines": [],
+        }
 
 def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
     normalized_root_path = normalize_root_path(root_path)
