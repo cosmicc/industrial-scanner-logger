@@ -11,6 +11,14 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
 
     scanner_id SMALLINT NOT NULL CHECK (scanner_id BETWEEN 0 AND 255),
 
+    scanner_name TEXT,
+
+    scanner_role TEXT NOT NULL DEFAULT 'standard',
+
+    last_scanner_id SMALLINT CHECK (last_scanner_id BETWEEN 0 AND 255),
+
+    is_cross_scanner_duplicate BOOLEAN NOT NULL DEFAULT false,
+
     tracking_number TEXT NOT NULL CHECK (btrim(tracking_number, E' \t\r\n') <> ''),
 
     barcode TEXT GENERATED ALWAYS AS (
@@ -42,6 +50,43 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
     ) STORED
 );
 
+ALTER TABLE scanner_logger.scan_events
+    ADD COLUMN IF NOT EXISTS scanner_name TEXT;
+
+ALTER TABLE scanner_logger.scan_events
+    ADD COLUMN IF NOT EXISTS scanner_role TEXT NOT NULL DEFAULT 'standard';
+
+ALTER TABLE scanner_logger.scan_events
+    ADD COLUMN IF NOT EXISTS last_scanner_id SMALLINT;
+
+ALTER TABLE scanner_logger.scan_events
+    ADD COLUMN IF NOT EXISTS is_cross_scanner_duplicate BOOLEAN NOT NULL DEFAULT false;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'ck_scan_events_scanner_role'
+          AND conrelid = 'scanner_logger.scan_events'::regclass
+    ) THEN
+        ALTER TABLE scanner_logger.scan_events
+            ADD CONSTRAINT ck_scan_events_scanner_role
+            CHECK (scanner_role IN ('standard', 'last'));
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'ck_scan_events_last_scanner_id'
+          AND conrelid = 'scanner_logger.scan_events'::regclass
+    ) THEN
+        ALTER TABLE scanner_logger.scan_events
+            ADD CONSTRAINT ck_scan_events_last_scanner_id
+            CHECK (last_scanner_id BETWEEN 0 AND 255);
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_scan_events_scan_date_time
     ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC);
 
@@ -66,10 +111,28 @@ CREATE INDEX IF NOT EXISTS idx_scan_events_scanner_barcode_scan_date_time
     ON scanner_logger.scan_events (scanner_id, barcode, scan_date DESC, scan_time DESC, id DESC)
     WHERE is_success = true;
 
+CREATE INDEX IF NOT EXISTS idx_scan_events_cross_scanner_duplicate
+    ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC)
+    WHERE is_cross_scanner_duplicate = true;
+
+CREATE INDEX IF NOT EXISTS idx_scan_events_last_scanner_tracking
+    ON scanner_logger.scan_events (scan_date, barcode, last_scanner_id, scanner_id)
+    WHERE is_success = true AND last_scanner_id IS NOT NULL;
+
+DROP VIEW IF EXISTS scanner_logger.successful_scans_missing_last_scanner;
+DROP VIEW IF EXISTS scanner_logger.successful_scan_progression;
+DROP VIEW IF EXISTS scanner_logger.duplicate_successful_scans;
+DROP VIEW IF EXISTS scanner_logger.successful_scans;
+DROP VIEW IF EXISTS scanner_logger.failed_scans;
+DROP VIEW IF EXISTS scanner_logger.daily_scan_totals_all_scanners;
+DROP VIEW IF EXISTS scanner_logger.daily_scan_totals;
+
 CREATE OR REPLACE VIEW scanner_logger.daily_scan_totals AS
 SELECT
     scan_date,
     scanner_id,
+    scanner_name,
+    scanner_role,
     count(*) AS total_scan_events,
     count(*) FILTER (WHERE is_success) AS successful_scans,
     count(*) FILTER (WHERE is_success = false) AS failed_scans,
@@ -77,7 +140,9 @@ SELECT
 FROM scanner_logger.scan_events
 GROUP BY
     scan_date,
-    scanner_id;
+    scanner_id,
+    scanner_name,
+    scanner_role;
 
 CREATE OR REPLACE VIEW scanner_logger.daily_scan_totals_all_scanners AS
 SELECT
@@ -96,6 +161,10 @@ SELECT
     scan_date,
     scan_time,
     scanner_id,
+    scanner_name,
+    scanner_role,
+    last_scanner_id,
+    is_cross_scanner_duplicate,
     tracking_number,
     barcode,
     barcode_length,
@@ -109,6 +178,10 @@ SELECT
     scan_date,
     scan_time,
     scanner_id,
+    scanner_name,
+    scanner_role,
+    last_scanner_id,
+    is_cross_scanner_duplicate,
     tracking_number,
     barcode,
     barcode_length
@@ -120,12 +193,78 @@ SELECT
     barcode,
     count(*) AS scan_count,
     count(DISTINCT scanner_id) AS scanner_count,
+    array_agg(DISTINCT scanner_id ORDER BY scanner_id) AS scanner_ids,
+    array_agg(DISTINCT scanner_name ORDER BY scanner_name)
+        FILTER (WHERE scanner_name IS NOT NULL) AS scanner_names,
     min(scan_date + scan_time) AS first_seen_at,
     max(scan_date + scan_time) AS last_seen_at
 FROM scanner_logger.scan_events
 WHERE is_success = true
 GROUP BY barcode
-HAVING count(*) > 1;
+HAVING count(DISTINCT scanner_id) > 1;
+
+CREATE OR REPLACE VIEW scanner_logger.successful_scan_progression AS
+WITH scanner_counts AS (
+    SELECT
+        scan_date,
+        barcode,
+        count(DISTINCT scanner_id) AS scanner_count
+    FROM scanner_logger.scan_events
+    WHERE is_success = true
+    GROUP BY
+        scan_date,
+        barcode
+)
+SELECT
+    events.id,
+    events.scan_date,
+    events.scan_time,
+    events.scanner_id,
+    events.scanner_name,
+    events.scanner_role,
+    events.last_scanner_id,
+    events.barcode,
+    row_number() OVER (
+        PARTITION BY events.scan_date, events.barcode
+        ORDER BY events.scan_date, events.scan_time, events.id
+    ) AS scan_sequence,
+    scanner_counts.scanner_count,
+    scanner_counts.scanner_count > 1 AS has_cross_scanner_duplicate,
+    events.is_cross_scanner_duplicate
+FROM scanner_logger.scan_events AS events
+JOIN scanner_counts
+  ON scanner_counts.scan_date = events.scan_date
+ AND scanner_counts.barcode = events.barcode
+WHERE events.is_success = true;
+
+CREATE OR REPLACE VIEW scanner_logger.successful_scans_missing_last_scanner AS
+SELECT
+    source.scan_date,
+    source.barcode,
+    source.last_scanner_id,
+    min(source.scan_date + source.scan_time) AS first_seen_at,
+    max(source.scan_date + source.scan_time) AS last_seen_at,
+    count(*) AS scan_count,
+    count(DISTINCT source.scanner_id) AS scanner_count,
+    array_agg(DISTINCT source.scanner_id ORDER BY source.scanner_id) AS scanner_ids,
+    array_agg(DISTINCT source.scanner_name ORDER BY source.scanner_name)
+        FILTER (WHERE source.scanner_name IS NOT NULL) AS scanner_names
+FROM scanner_logger.scan_events AS source
+WHERE source.is_success = true
+  AND source.last_scanner_id IS NOT NULL
+  AND source.scanner_id <> source.last_scanner_id
+  AND NOT EXISTS (
+      SELECT 1
+      FROM scanner_logger.scan_events AS last_scan
+      WHERE last_scan.is_success = true
+        AND last_scan.scan_date = source.scan_date
+        AND last_scan.barcode = source.barcode
+        AND last_scan.scanner_id = source.last_scanner_id
+  )
+GROUP BY
+    source.scan_date,
+    source.barcode,
+    source.last_scanner_id;
 
 DO $$
 BEGIN

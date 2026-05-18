@@ -138,6 +138,7 @@ class ApiQueryTests(unittest.TestCase):
 
     def test_current_scan_rate_uses_rolling_one_minute_window(self):
         from industrial_scanner_logger.api import (
+            CURRENT_SCAN_HOUR_WINDOW_SECONDS,
             CURRENT_SCAN_RATE_WINDOW_SECONDS,
             fetch_current_scan_rate,
         )
@@ -156,7 +157,10 @@ class ApiQueryTests(unittest.TestCase):
                 self.params = params
 
             def fetchone(self):
-                return {"scan_count": 7}
+                return {
+                    "scan_count": 7,
+                    "hour_scan_count": 450,
+                }
 
         class FakeDb:
             def __init__(self):
@@ -170,15 +174,20 @@ class ApiQueryTests(unittest.TestCase):
 
         self.assertEqual(
             db.cursor_instance.params,
-            [timedelta(seconds=CURRENT_SCAN_RATE_WINDOW_SECONDS)],
+            [
+                timedelta(seconds=CURRENT_SCAN_RATE_WINDOW_SECONDS),
+                timedelta(seconds=CURRENT_SCAN_HOUR_WINDOW_SECONDS),
+            ],
         )
         self.assertEqual(
             scan_rate,
             {
                 "window_seconds": 60,
+                "hour_window_seconds": 3600,
                 "scan_count": 7,
+                "hour_scan_count": 450,
                 "scans_per_minute": 7.0,
-                "scans_per_hour": 420.0,
+                "scans_per_hour": 450,
             },
         )
 

@@ -28,12 +28,17 @@ SCANNER_SERVICE_UNIT = "industrial-scanner-logger.service"
 API_SERVICE_UNIT = "industrial-scanner-logger-api.service"
 SCANNER_SCRIPT_LOG_PATH = Path("/var/log/industrial-scanner-logger.log")
 CURRENT_SCAN_RATE_WINDOW_SECONDS = 60
+CURRENT_SCAN_HOUR_WINDOW_SECONDS = 3600
 
 SCAN_EVENT_COLUMNS = [
     "id",
     "scan_date",
     "scan_time",
     "scanner_id",
+    "scanner_name",
+    "scanner_role",
+    "last_scanner_id",
+    "is_cross_scanner_duplicate",
     "tracking_number",
     "barcode",
     "barcode_length",
@@ -47,6 +52,8 @@ VIEW_DEFINITIONS = {
         "columns": [
             "scan_date",
             "scanner_id",
+            "scanner_name",
+            "scanner_role",
             "total_scan_events",
             "successful_scans",
             "failed_scans",
@@ -75,6 +82,10 @@ VIEW_DEFINITIONS = {
             "scan_date",
             "scan_time",
             "scanner_id",
+            "scanner_name",
+            "scanner_role",
+            "last_scanner_id",
+            "is_cross_scanner_duplicate",
             "tracking_number",
             "barcode",
             "barcode_length",
@@ -92,6 +103,10 @@ VIEW_DEFINITIONS = {
             "scan_date",
             "scan_time",
             "scanner_id",
+            "scanner_name",
+            "scanner_role",
+            "last_scanner_id",
+            "is_cross_scanner_duplicate",
             "tracking_number",
             "barcode",
             "barcode_length",
@@ -107,11 +122,51 @@ VIEW_DEFINITIONS = {
             "barcode",
             "scan_count",
             "scanner_count",
+            "scanner_ids",
+            "scanner_names",
             "first_seen_at",
             "last_seen_at",
         ],
         "barcode_column": "barcode",
         "order": ["last_seen_at DESC", "barcode ASC"],
+    },
+    "successful-scan-progression": {
+        "relation": "successful_scan_progression",
+        "columns": [
+            "id",
+            "scan_date",
+            "scan_time",
+            "scanner_id",
+            "scanner_name",
+            "scanner_role",
+            "last_scanner_id",
+            "barcode",
+            "scan_sequence",
+            "scanner_count",
+            "has_cross_scanner_duplicate",
+            "is_cross_scanner_duplicate",
+        ],
+        "date_column": "scan_date",
+        "scanner_column": "scanner_id",
+        "barcode_column": "barcode",
+        "order": ["scan_date DESC", "scan_time DESC", "id DESC"],
+    },
+    "successful-scans-missing-last-scanner": {
+        "relation": "successful_scans_missing_last_scanner",
+        "columns": [
+            "scan_date",
+            "barcode",
+            "last_scanner_id",
+            "first_seen_at",
+            "last_seen_at",
+            "scan_count",
+            "scanner_count",
+            "scanner_ids",
+            "scanner_names",
+        ],
+        "date_column": "scan_date",
+        "barcode_column": "barcode",
+        "order": ["scan_date DESC", "last_seen_at DESC", "barcode ASC"],
     },
 }
 
@@ -126,6 +181,7 @@ def build_dashboard_health(config):
     }
 
     connected_scanner_ids = connected_scanner_ids_from_ss(config.port)
+    connected_scanners = dashboard_connected_scanners(config, connected_scanner_ids)
     script_log = read_last_log_lines(SCANNER_SCRIPT_LOG_PATH, line_count=10)
 
     database = {
@@ -149,6 +205,10 @@ def build_dashboard_health(config):
                     scan_date,
                     scan_time,
                     scanner_id,
+                    scanner_name,
+                    scanner_role,
+                    last_scanner_id,
+                    is_cross_scanner_duplicate,
                     barcode,
                     barcode_length,
                     is_success,
@@ -168,6 +228,10 @@ def build_dashboard_health(config):
                     scan_date,
                     scan_time,
                     scanner_id,
+                    scanner_name,
+                    scanner_role,
+                    last_scanner_id,
+                    is_cross_scanner_duplicate,
                     barcode,
                     barcode_length,
                     is_success,
@@ -213,6 +277,7 @@ def build_dashboard_health(config):
         "services": services,
         "database": database,
         "connected_scanner_ids": connected_scanner_ids,
+        "connected_scanners": connected_scanners,
         "last_received": last_received,
         "recent_scans": recent_scans,
         "daily_totals": daily_totals,
@@ -226,6 +291,27 @@ def empty_daily_totals(current_day: date, previous_day: date) -> dict:
         "today": dashboard_total_row(current_day),
         "yesterday": dashboard_total_row(previous_day),
     }
+
+
+def dashboard_connected_scanners(config, connected_scanner_ids: list[int]) -> list[dict]:
+    scanners = []
+
+    for scanner_id in connected_scanner_ids:
+        scanner_id_text = str(scanner_id)
+        scanner_name = config.scanner_names.get(scanner_id_text, "")
+        scanner_role = (
+            "last"
+            if config.last_scanner_id and scanner_id_text == config.last_scanner_id
+            else "standard"
+        )
+
+        scanners.append({
+            "scanner_id": scanner_id,
+            "scanner_name": scanner_name,
+            "scanner_role": scanner_role,
+        })
+
+    return scanners
 
 
 def dashboard_total_row(scan_date: date, row: Optional[dict] = None) -> dict:
@@ -264,17 +350,19 @@ def fetch_dashboard_daily_totals(
 
 
 def empty_current_scan_rate() -> dict:
-    return scan_rate_row(0)
+    return scan_rate_row(0, 0)
 
 
-def scan_rate_row(scan_count: int) -> dict:
-    scans_per_minute = (scan_count / CURRENT_SCAN_RATE_WINDOW_SECONDS) * 60
+def scan_rate_row(minute_scan_count: int, hour_scan_count: int) -> dict:
+    scans_per_minute = (minute_scan_count / CURRENT_SCAN_RATE_WINDOW_SECONDS) * 60
 
     return {
         "window_seconds": CURRENT_SCAN_RATE_WINDOW_SECONDS,
-        "scan_count": scan_count,
+        "hour_window_seconds": CURRENT_SCAN_HOUR_WINDOW_SECONDS,
+        "scan_count": minute_scan_count,
+        "hour_scan_count": hour_scan_count,
         "scans_per_minute": round(scans_per_minute, 2),
-        "scans_per_hour": round(scans_per_minute * 60, 2),
+        "scans_per_hour": hour_scan_count,
     }
 
 
@@ -282,15 +370,27 @@ def fetch_current_scan_rate(db) -> dict:
     row = fetch_one(
         db,
         """
-        SELECT count(*) AS scan_count
+        SELECT
+            count(*) FILTER (
+                WHERE (scan_date + scan_time) >= (localtimestamp - %s)
+                  AND (scan_date + scan_time) <= localtimestamp
+            ) AS scan_count,
+            count(*) FILTER (
+                WHERE (scan_date + scan_time) >= (localtimestamp - %s)
+                  AND (scan_date + scan_time) <= localtimestamp
+            ) AS hour_scan_count
         FROM scanner_logger.scan_events
-        WHERE (scan_date + scan_time) >= (localtimestamp - %s)
-          AND (scan_date + scan_time) <= localtimestamp
         """,
-        [timedelta(seconds=CURRENT_SCAN_RATE_WINDOW_SECONDS)],
+        [
+            timedelta(seconds=CURRENT_SCAN_RATE_WINDOW_SECONDS),
+            timedelta(seconds=CURRENT_SCAN_HOUR_WINDOW_SECONDS),
+        ],
     )
 
-    return scan_rate_row(int(row.get("scan_count") or 0))
+    return scan_rate_row(
+        int(row.get("scan_count") or 0),
+        int(row.get("hour_scan_count") or 0),
+    )
 
 
 def fetch_one(db, query, params):

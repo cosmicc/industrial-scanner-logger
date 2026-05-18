@@ -96,6 +96,13 @@ table = scanner_logger.scan_events
 connect_timeout = 3
 retry_interval = 30
 
+[scanners]
+last_scanner_id =
+
+[scanner_names]
+# 20 = Lane 1 Scanner
+# 21 = Last Scanner
+
 [api]
 enabled = true
 host = 127.0.0.1
@@ -233,11 +240,29 @@ The table schema is in:
 db/schema.sql
 ```
 
-Python inserts `scan_date`, `scan_time`, `scanner_id`, and `tracking_number`.
-The date and time come from the receiver script at the same point where the CSV
-row is written; PostgreSQL does not assign the scan event timestamp. PostgreSQL
-generated columns and views provide success/failure classification, failed scan
-queries, daily totals, and duplicate scan queries.
+Python inserts scan timing, scanner metadata, duplicate flags, and the tracking
+number. The date and time come from the receiver script at the same point where
+the CSV row is written; PostgreSQL does not assign the scan event timestamp.
+PostgreSQL generated columns and views provide success/failure classification,
+failed scan queries, daily totals, package progression, cross-scanner duplicate
+queries, and successful packages missing the configured last scanner.
+
+Use `[scanners] last_scanner_id` for the final outbound scanner before boxes
+are loaded. Use `[scanner_names]` to map IP last-octet scanner IDs to readable
+names:
+
+```ini
+[scanners]
+last_scanner_id = 21
+
+[scanner_names]
+20 = Lane 1 Scanner
+21 = Last Scanner
+```
+
+Same-scanner duplicate successful scans are still silently ignored. Successful
+scans are marked as cross-scanner duplicates only when the same barcode was
+already accepted from a different scanner on the same day.
 
 The installer enables PostgreSQL logging by default with local Unix socket peer
 authentication:
@@ -258,6 +283,9 @@ Existing service installs keep their current config file. To add PostgreSQL
 logging to an existing service, edit `/etc/industrial-scanner-logger.conf` and
 set `enabled = true` under `[postgresql]`, or rerun the installer with
 `--overwrite-config`.
+
+After pulling schema changes, reapply `db/schema.sql` to the PostgreSQL database
+before restarting PostgreSQL-backed logging or API queries.
 
 PostgreSQL write failures are logged to the troubleshooting log. CSV and raw
 daily scan logs continue to be written unless `--postgresql-required` is set.
@@ -290,6 +318,8 @@ GET /api/v1/views/daily-scan-totals-all-scanners
 GET /api/v1/views/failed-scans
 GET /api/v1/views/successful-scans
 GET /api/v1/views/duplicate-successful-scans
+GET /api/v1/views/successful-scan-progression
+GET /api/v1/views/successful-scans-missing-last-scanner
 ```
 
 The list endpoints support common filters such as `start_date`, `end_date`,
@@ -341,7 +371,7 @@ Site_Shipped_Tracking_2026-05-16.csv
 Daily scan CSV columns:
 
 ```text
-date,time,scanner_id,status,tracking
+date,time,scanner_id,scanner_name,scanner_role,status,is_cross_scanner_duplicate,tracking
 ```
 
 Failed scan CSV columns:
@@ -359,6 +389,10 @@ date,scanner_id,total_events,successful_scans,failed_scans
 The `scanner_id` is the last octet of the scanner IP address. For example,
 scanner `10.10.10.20` is recorded as scanner `20`. `scan_totals.csv` includes
 one row per scanner plus an `ALL` row for the full day.
+
+`scanner_role` is `last` only for the configured final outbound scanner.
+`is_cross_scanner_duplicate` is `true` only for successful scans whose barcode
+was already accepted from another scanner that day.
 
 ## Development
 

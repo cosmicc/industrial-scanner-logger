@@ -32,8 +32,27 @@ class FakePostgreSQLLogger:
         self.rows = []
         self.closed = False
 
-    def write_scan_event(self, tracking_number, scanner_id, scan_date, scan_time):
-        self.rows.append((scan_date, scan_time, scanner_id, tracking_number))
+    def write_scan_event(
+        self,
+        tracking_number,
+        scanner_id,
+        scanner_name,
+        scanner_role,
+        last_scanner_id,
+        is_cross_scanner_duplicate,
+        scan_date,
+        scan_time,
+    ):
+        self.rows.append({
+            "scan_date": scan_date,
+            "scan_time": scan_time,
+            "scanner_id": scanner_id,
+            "scanner_name": scanner_name,
+            "scanner_role": scanner_role,
+            "last_scanner_id": last_scanner_id,
+            "is_cross_scanner_duplicate": is_cross_scanner_duplicate,
+            "tracking_number": tracking_number,
+        })
         return True
 
     def close(self):
@@ -142,6 +161,13 @@ table = scanner_logger.scan_events
 connect_timeout = 4
 retry_interval = 12
 
+[scanners]
+last_scanner_id = 21
+
+[scanner_names]
+20 = Lane 1 Scanner
+21 = Last Scanner
+
 [api]
 enabled = true
 host = 0.0.0.0
@@ -178,6 +204,14 @@ log_level = warning
             self.assertEqual(config.postgresql_table, "scanner_logger.scan_events")
             self.assertEqual(config.postgresql_connect_timeout, 4)
             self.assertEqual(config.postgresql_retry_interval, 12)
+            self.assertEqual(config.last_scanner_id, "21")
+            self.assertEqual(
+                config.scanner_names,
+                {
+                    "20": "Lane 1 Scanner",
+                    "21": "Last Scanner",
+                },
+            )
             self.assertTrue(config.api_enabled)
             self.assertEqual(config.api_host, "0.0.0.0")
             self.assertEqual(config.api_port, 8080)
@@ -443,15 +477,67 @@ log_level = warning
             logger.write_scan_event("__NO_READ__", "20")
 
             self.assertEqual(len(postgresql_logger.rows), 2)
-            self.assertEqual(postgresql_logger.rows[0][0], logger.current_date)
-            self.assertRegex(postgresql_logger.rows[0][1], r"^\d{2}:\d{2}:\d{2}$")
-            self.assertEqual(postgresql_logger.rows[0][2:], ("20", valid_tracking))
-            self.assertEqual(postgresql_logger.rows[1][0], logger.current_date)
-            self.assertRegex(postgresql_logger.rows[1][1], r"^\d{2}:\d{2}:\d{2}$")
-            self.assertEqual(postgresql_logger.rows[1][2:], ("20", "__NO_READ__"))
+            self.assertEqual(postgresql_logger.rows[0]["scan_date"], logger.current_date)
+            self.assertRegex(
+                postgresql_logger.rows[0]["scan_time"],
+                r"^\d{2}:\d{2}:\d{2}$",
+            )
+            self.assertEqual(postgresql_logger.rows[0]["scanner_id"], "20")
+            self.assertEqual(postgresql_logger.rows[0]["tracking_number"], valid_tracking)
+            self.assertEqual(postgresql_logger.rows[1]["scan_date"], logger.current_date)
+            self.assertRegex(
+                postgresql_logger.rows[1]["scan_time"],
+                r"^\d{2}:\d{2}:\d{2}$",
+            )
+            self.assertEqual(postgresql_logger.rows[1]["scanner_id"], "20")
+            self.assertEqual(postgresql_logger.rows[1]["tracking_number"], "__NO_READ__")
 
             logger.close()
             self.assertTrue(postgresql_logger.closed)
+
+    def test_cross_scanner_duplicate_and_last_scanner_metadata_are_recorded(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            postgresql_logger = FakePostgreSQLLogger()
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                postgresql_logger=postgresql_logger,
+                last_scanner_id="21",
+                scanner_names={
+                    "20": "Lane 1 Scanner",
+                    "21": "Last Scanner",
+                },
+            )
+
+            valid_tracking = "6" * 34
+
+            logger.write_scan_event(valid_tracking, "20")
+            logger.write_scan_event(valid_tracking, "21")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(rows[0]["scanner_name"], "Lane 1 Scanner")
+            self.assertEqual(rows[0]["scanner_role"], "standard")
+            self.assertEqual(rows[0]["is_cross_scanner_duplicate"], "false")
+            self.assertEqual(rows[1]["scanner_name"], "Last Scanner")
+            self.assertEqual(rows[1]["scanner_role"], "last")
+            self.assertEqual(rows[1]["is_cross_scanner_duplicate"], "true")
+
+            self.assertEqual(postgresql_logger.rows[0]["scanner_name"], "Lane 1 Scanner")
+            self.assertEqual(postgresql_logger.rows[0]["scanner_role"], "standard")
+            self.assertEqual(postgresql_logger.rows[0]["last_scanner_id"], "21")
+            self.assertFalse(
+                postgresql_logger.rows[0]["is_cross_scanner_duplicate"],
+            )
+            self.assertEqual(postgresql_logger.rows[1]["scanner_name"], "Last Scanner")
+            self.assertEqual(postgresql_logger.rows[1]["scanner_role"], "last")
+            self.assertEqual(postgresql_logger.rows[1]["last_scanner_id"], "21")
+            self.assertTrue(
+                postgresql_logger.rows[1]["is_cross_scanner_duplicate"],
+            )
 
     def test_script_log_omits_scanner_barcode_data_and_daily_data_log_keeps_it(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):

@@ -106,14 +106,17 @@
             <th>Date</th>
             <th>Time</th>
             <th>Scanner ID</th>
+            <th>Scanner Name</th>
+            <th>Role</th>
             <th>Status</th>
+            <th>Duplicate</th>
             <th>Barcode</th>
             <th>Failure Reason</th>
           </tr>
         </thead>
         <tbody id="recent-scans">
           <tr>
-            <td colspan="6">Checking...</td>
+            <td colspan="9">Checking...</td>
           </tr>
         </tbody>
       </table>
@@ -156,13 +159,33 @@
       }
     }
 
+    function renderConnectedScanners(scanners, fallbackScannerIds) {
+      const container = document.getElementById("scanner-list");
+      container.innerHTML = "";
+
+      if (!scanners || scanners.length === 0) {
+        renderScannerList(fallbackScannerIds);
+        return;
+      }
+
+      for (const scanner of scanners) {
+        const badge = document.createElement("span");
+        const scannerName = scanner.scanner_name || `Scanner ${scanner.scanner_id}`;
+        const scannerRole = scanner.scanner_role === "last" ? "Last Scanner" : "Standard";
+
+        badge.className = "badge";
+        badge.textContent = `${scannerName} (${scannerRole})`;
+        container.appendChild(badge);
+      }
+    }
+
     function renderRecentScans(rows) {
       const tbody = document.getElementById("recent-scans");
       tbody.innerHTML = "";
 
       if (!rows || rows.length === 0) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="6">No scan rows found.</td>`;
+        tr.innerHTML = `<td colspan="9">No scan rows found.</td>`;
         tbody.appendChild(tr);
         return;
       }
@@ -171,12 +194,16 @@
         const tr = document.createElement("tr");
         const statusClass = row.is_success ? "success" : "failed";
         const statusText = row.is_success ? "SUCCESS" : "FAILED";
+        const duplicateText = row.is_cross_scanner_duplicate ? "Yes" : "No";
 
         tr.innerHTML = `
           <td>${row.scan_date ?? ""}</td>
           <td>${row.scan_time ?? ""}</td>
           <td>${row.scanner_id ?? ""}</td>
+          <td>${escapeHtml(row.scanner_name ?? "")}</td>
+          <td>${escapeHtml(row.scanner_role ?? "")}</td>
           <td class="${statusClass}">${statusText}</td>
+          <td>${duplicateText}</td>
           <td>${escapeHtml(row.barcode ?? "")}</td>
           <td>${escapeHtml(row.failure_reason ?? "")}</td>
         `;
@@ -201,7 +228,7 @@
       }
 
       rateElement.textContent = `${formatRate(scanRate.scans_per_minute)} scans/min`;
-      detailElement.textContent = `${formatRate(scanRate.scans_per_hour)} scans/hour`;
+      detailElement.textContent = `${formatRate(scanRate.scans_per_hour)} Scans per hour`;
     }
 
     function renderDailyTotal(prefix, total) {
@@ -309,7 +336,7 @@
             "No scan rows found.";
         }
 
-        renderScannerList(data.connected_scanner_ids);
+        renderConnectedScanners(data.connected_scanners, data.connected_scanner_ids);
         renderDailyTotals(database.active ? data.daily_totals : null);
         renderCurrentScanRate(database.active ? data.current_scan_rate : null);
         renderRecentScans(data.recent_scans);
@@ -333,7 +360,7 @@
         renderCurrentScanRate(null);
 
         document.getElementById("recent-scans").innerHTML =
-          `<tr><td colspan="6" class="error">Unable to load recent scan rows.</td></tr>`;
+          `<tr><td colspan="9" class="error">Unable to load recent scan rows.</td></tr>`;
 
         document.getElementById("script-log-meta").textContent =
           "Unable to load script log.";
