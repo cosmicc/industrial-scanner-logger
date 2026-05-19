@@ -543,8 +543,8 @@ class PostgreSQLScanLogger:
             "INSERT INTO {}.{} "
             "(scan_date, scan_time, scanner_id, scanner_name, scanner_role, "
             "last_scanner_id, is_cross_scanner_duplicate, is_repaired, "
-            "tracking_number) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "tracking_number, barcode) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         ).format(
             sql.Identifier(self.schema_name),
             sql.Identifier(self.relation_name),
@@ -595,6 +595,7 @@ class PostgreSQLScanLogger:
     def write_scan_event(
         self,
         tracking_number: str,
+        barcode: str,
         scanner_id: str,
         scanner_name: str,
         scanner_role: str,
@@ -627,6 +628,7 @@ class PostgreSQLScanLogger:
                         is_cross_scanner_duplicate,
                         is_repaired,
                         tracking_number,
+                        barcode,
                     ),
                 )
         except Exception as exc:
@@ -1450,6 +1452,7 @@ class DailyCsvLogger:
     def write_scan_event(self, raw_barcode: str, scanner_id: str = UNKNOWN_SCANNER_ID):
         scanner_id = normalize_scanner_id(scanner_id)
         barcode = self._normalize_barcode_for_storage(clean_barcode(raw_barcode))
+        tracking_number = barcode
         postgresql_event = None
 
         if not barcode:
@@ -1465,14 +1468,13 @@ class DailyCsvLogger:
             scanner_role = self._scanner_role(scanner_id)
             is_cross_scanner_duplicate = False
             is_repaired = False
-            original_barcode = barcode
 
             if status != "SUCCESS":
                 repaired_barcode = self._repair_tracking_number(barcode)
 
                 if repaired_barcode is not None:
-                    barcode = repaired_barcode
-                    status = self._classify_scan(barcode)
+                    tracking_number = repaired_barcode
+                    status = self._classify_scan(tracking_number)
                     is_repaired = status == "SUCCESS"
 
                     if is_repaired:
@@ -1480,19 +1482,22 @@ class DailyCsvLogger:
                             "Tracking number repaired scanner_id=%s "
                             "original=%s repaired=%s",
                             scanner_id,
-                            truncate_for_log(original_barcode),
                             truncate_for_log(barcode),
+                            truncate_for_log(tracking_number),
                         )
 
             if status == "SUCCESS":
-                if barcode in seen_success_barcodes and not LOG_DUPLICATE_SUCCESS_SCANS:
+                if (
+                    tracking_number in seen_success_barcodes
+                    and not LOG_DUPLICATE_SUCCESS_SCANS
+                ):
                     return
 
                 is_cross_scanner_duplicate = self._seen_success_on_other_scanner(
                     scanner_id,
-                    barcode,
+                    tracking_number,
                 )
-                seen_success_barcodes.add(barcode)
+                seen_success_barcodes.add(tracking_number)
                 scanner_counts["successful_scans"] += 1
                 self.success_count += 1
 
@@ -1509,7 +1514,11 @@ class DailyCsvLogger:
             # Daily CSV:
             # For scanner no-read, keep tracking blank.
             # For partial/invalid/short/long decodes, keep the decoded value for review.
-            csv_tracking = "" if barcode == self.no_read_message else barcode
+            csv_tracking = (
+                ""
+                if tracking_number == self.no_read_message
+                else tracking_number
+            )
 
             with self.current_csv_path.open("a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
@@ -1548,6 +1557,7 @@ class DailyCsvLogger:
             )
 
             postgresql_event = (
+                tracking_number,
                 barcode,
                 scanner_id,
                 scanner_name,

@@ -48,6 +48,7 @@ class ApiQueryTests(unittest.TestCase):
                 date(2026, 5, 18),
                 20,
                 "1" * 34,
+                "1" * 34,
                 True,
                 25,
                 50,

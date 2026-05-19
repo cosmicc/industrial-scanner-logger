@@ -114,13 +114,14 @@
             <th>Status</th>
             <th>Duplicate</th>
             <th>Repaired</th>
+            <th>Tracking Number</th>
             <th>Barcode</th>
             <th>Failure Reason</th>
           </tr>
         </thead>
         <tbody id="recent-scans">
           <tr>
-            <td colspan="10">Checking...</td>
+            <td colspan="11">Checking...</td>
           </tr>
         </tbody>
       </table>
@@ -189,7 +190,7 @@
 
       if (!rows || rows.length === 0) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="10">No scan rows found.</td>`;
+        tr.innerHTML = `<td colspan="11">No scan rows found.</td>`;
         tbody.appendChild(tr);
         return;
       }
@@ -210,6 +211,7 @@
           <td class="${statusClass}">${statusText}</td>
           <td>${duplicateText}</td>
           <td>${repairedText}</td>
+          <td>${escapeHtml(row.tracking_number ?? "")}</td>
           <td>${escapeHtml(row.barcode ?? "")}</td>
           <td>${escapeHtml(row.failure_reason ?? "")}</td>
         `;
@@ -445,7 +447,7 @@
         renderCurrentScanRate(null);
 
         document.getElementById("recent-scans").innerHTML =
-          `<tr><td colspan="10" class="error">Unable to load recent scan rows.</td></tr>`;
+          `<tr><td colspan="11" class="error">Unable to load recent scan rows.</td></tr>`;
 
         document.getElementById("script-log-meta").textContent =
           "Unable to load script log.";

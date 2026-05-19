@@ -263,14 +263,16 @@ last_scanner_id = 21
 ```
 
 Same-scanner duplicate successful scans are still silently ignored. Successful
-scans are marked as cross-scanner duplicates only when the same barcode was
-already accepted from a different scanner on the same day.
+scans are marked as cross-scanner duplicates only when the same tracking number
+was already accepted from a different scanner on the same day.
 
 Set `[receiver] tracking_repair_enabled = true` to allow conservative repair of
 short numeric failed scans. A short scan is repaired only when successful scans
 from the same day provide one unambiguous matching prefix; repaired rows are
 logged to `/var/log/industrial-scanner-logger.log` and marked with
-`is_repaired = true` in CSV and PostgreSQL output.
+`is_repaired = true` in CSV and PostgreSQL output. For repaired PostgreSQL rows,
+`barcode` keeps the short value received from the scanner, while
+`tracking_number` stores the repaired full tracking number.
 
 The installer enables PostgreSQL logging by default with local Unix socket peer
 authentication:
@@ -332,7 +334,9 @@ GET /api/v1/views/successful-scans-missing-last-scanner
 
 The list endpoints support common filters such as `start_date`, `end_date`,
 `scanner_id`, `barcode`, `limit`, and `offset` where those fields exist.
-`/api/v1/scans` also supports `is_success`.
+The `barcode` filter matches either the received barcode or repaired tracking
+number when both fields are available. `/api/v1/scans` also supports
+`is_success`.
 
 Interactive API docs are available through nginx:
 
@@ -399,8 +403,8 @@ scanner `10.10.10.20` is recorded as scanner `20`. `scan_totals.csv` includes
 one row per scanner plus an `ALL` row for the full day.
 
 `scanner_role` is `last` only for the configured final outbound scanner.
-`is_cross_scanner_duplicate` is `true` only for successful scans whose barcode
-was already accepted from another scanner that day.
+`is_cross_scanner_duplicate` is `true` only for successful scans whose tracking
+number was already accepted from another scanner that day.
 `is_repaired` is `true` only when tracking-number repair reconstructed a short
 numeric failed scan into a valid tracking number.
 

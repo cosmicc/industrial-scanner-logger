@@ -96,6 +96,7 @@ VIEW_DEFINITIONS = {
         "date_column": "scan_date",
         "scanner_column": "scanner_id",
         "barcode_column": "barcode",
+        "tracking_number_column": "tracking_number",
         "order": ["scan_date DESC", "scan_time DESC", "id DESC"],
     },
     "successful-scans": {
@@ -117,11 +118,13 @@ VIEW_DEFINITIONS = {
         "date_column": "scan_date",
         "scanner_column": "scanner_id",
         "barcode_column": "barcode",
+        "tracking_number_column": "tracking_number",
         "order": ["scan_date DESC", "scan_time DESC", "id DESC"],
     },
     "duplicate-successful-scans": {
         "relation": "duplicate_successful_scans",
         "columns": [
+            "tracking_number",
             "barcode",
             "scan_count",
             "scanner_count",
@@ -131,6 +134,7 @@ VIEW_DEFINITIONS = {
             "last_seen_at",
         ],
         "barcode_column": "barcode",
+        "tracking_number_column": "tracking_number",
         "order": ["last_seen_at DESC", "barcode ASC"],
     },
     "successful-scan-progression": {
@@ -143,6 +147,7 @@ VIEW_DEFINITIONS = {
             "scanner_name",
             "scanner_role",
             "last_scanner_id",
+            "tracking_number",
             "barcode",
             "scan_sequence",
             "scanner_count",
@@ -153,12 +158,14 @@ VIEW_DEFINITIONS = {
         "date_column": "scan_date",
         "scanner_column": "scanner_id",
         "barcode_column": "barcode",
+        "tracking_number_column": "tracking_number",
         "order": ["scan_date DESC", "scan_time DESC", "id DESC"],
     },
     "successful-scans-missing-last-scanner": {
         "relation": "successful_scans_missing_last_scanner",
         "columns": [
             "scan_date",
+            "tracking_number",
             "barcode",
             "last_scanner_id",
             "first_seen_at",
@@ -170,6 +177,7 @@ VIEW_DEFINITIONS = {
         ],
         "date_column": "scan_date",
         "barcode_column": "barcode",
+        "tracking_number_column": "tracking_number",
         "order": ["scan_date DESC", "last_seen_at DESC", "barcode ASC"],
     },
 }
@@ -214,6 +222,7 @@ def build_dashboard_health(config):
                     last_scanner_id,
                     is_cross_scanner_duplicate,
                     is_repaired,
+                    tracking_number,
                     barcode,
                     barcode_length,
                     is_success,
@@ -238,6 +247,7 @@ def build_dashboard_health(config):
                     last_scanner_id,
                     is_cross_scanner_duplicate,
                     is_repaired,
+                    tracking_number,
                     barcode,
                     barcode_length,
                     is_success,
@@ -754,6 +764,7 @@ def build_scan_events_query(
         end_date=end_date,
         scanner_id=scanner_id,
         barcode=barcode,
+        tracking_number_column="tracking_number",
     )
 
     if is_success is not None:
@@ -795,6 +806,7 @@ def build_view_query(
         date_column=view.get("date_column"),
         scanner_column=view.get("scanner_column"),
         barcode_column=view.get("barcode_column"),
+        tracking_number_column=view.get("tracking_number_column"),
     )
 
     query = sql.SQL("SELECT {} FROM scanner_logger.{}{} {} LIMIT %s OFFSET %s").format(
@@ -817,6 +829,7 @@ def add_common_filters(
     date_column: Optional[str] = "scan_date",
     scanner_column: Optional[str] = "scanner_id",
     barcode_column: Optional[str] = "barcode",
+    tracking_number_column: Optional[str] = None,
 ):
     if start_date is not None:
         if date_column is None:
@@ -837,10 +850,26 @@ def add_common_filters(
         params.append(scanner_id)
 
     if barcode is not None:
-        if barcode_column is None:
+        if barcode_column is None and tracking_number_column is None:
             raise HTTPException(status_code=400, detail="barcode is not supported")
-        conditions.append(sql.SQL("{} = %s").format(sql.Identifier(barcode_column)))
-        params.append(barcode)
+
+        barcode_filters = []
+
+        if barcode_column is not None:
+            barcode_filters.append(sql.Identifier(barcode_column))
+
+        if (
+            tracking_number_column is not None
+            and tracking_number_column != barcode_column
+        ):
+            barcode_filters.append(sql.Identifier(tracking_number_column))
+
+        filter_sql = sql.SQL(" OR ").join(
+            sql.SQL("{} = %s").format(column)
+            for column in barcode_filters
+        )
+        conditions.append(sql.SQL("(") + filter_sql + sql.SQL(")"))
+        params.extend([barcode] * len(barcode_filters))
 
 
 def where_clause(conditions):

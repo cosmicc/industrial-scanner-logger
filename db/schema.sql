@@ -23,12 +23,10 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
 
     tracking_number TEXT NOT NULL CHECK (btrim(tracking_number, E' \t\r\n') <> ''),
 
-    barcode TEXT GENERATED ALWAYS AS (
-        NULLIF(btrim(tracking_number, E' \t\r\n'), '')
-    ) STORED,
+    barcode TEXT NOT NULL CHECK (btrim(barcode, E' \t\r\n') <> ''),
 
     barcode_length INTEGER GENERATED ALWAYS AS (
-        char_length(NULLIF(btrim(tracking_number, E' \t\r\n'), ''))
+        char_length(NULLIF(btrim(barcode, E' \t\r\n'), ''))
     ) STORED,
 
     is_success BOOLEAN GENERATED ALWAYS AS (
@@ -52,6 +50,14 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
     ) STORED
 );
 
+DROP VIEW IF EXISTS scanner_logger.successful_scans_missing_last_scanner;
+DROP VIEW IF EXISTS scanner_logger.successful_scan_progression;
+DROP VIEW IF EXISTS scanner_logger.duplicate_successful_scans;
+DROP VIEW IF EXISTS scanner_logger.successful_scans;
+DROP VIEW IF EXISTS scanner_logger.failed_scans;
+DROP VIEW IF EXISTS scanner_logger.daily_scan_totals_all_scanners;
+DROP VIEW IF EXISTS scanner_logger.daily_scan_totals;
+
 ALTER TABLE scanner_logger.scan_events
     ADD COLUMN IF NOT EXISTS scanner_name TEXT;
 
@@ -66,6 +72,38 @@ ALTER TABLE scanner_logger.scan_events
 
 ALTER TABLE scanner_logger.scan_events
     ADD COLUMN IF NOT EXISTS is_repaired BOOLEAN NOT NULL DEFAULT false;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_attribute
+        WHERE attrelid = 'scanner_logger.scan_events'::regclass
+          AND attname = 'barcode'
+          AND attgenerated <> ''
+    ) THEN
+        ALTER TABLE scanner_logger.scan_events
+            ALTER COLUMN barcode DROP EXPRESSION;
+    END IF;
+END $$;
+
+ALTER TABLE scanner_logger.scan_events
+    ADD COLUMN IF NOT EXISTS barcode TEXT;
+
+UPDATE scanner_logger.scan_events
+SET barcode = NULLIF(btrim(tracking_number, E' \t\r\n'), '')
+WHERE barcode IS NULL;
+
+ALTER TABLE scanner_logger.scan_events
+    ALTER COLUMN barcode SET NOT NULL;
+
+ALTER TABLE scanner_logger.scan_events
+    DROP COLUMN IF EXISTS barcode_length;
+
+ALTER TABLE scanner_logger.scan_events
+    ADD COLUMN barcode_length INTEGER GENERATED ALWAYS AS (
+        char_length(NULLIF(btrim(barcode, E' \t\r\n'), ''))
+    ) STORED;
 
 DO $$
 BEGIN
@@ -90,6 +128,17 @@ BEGIN
             ADD CONSTRAINT ck_scan_events_last_scanner_id
             CHECK (last_scanner_id BETWEEN 0 AND 255);
     END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'ck_scan_events_barcode_present'
+          AND conrelid = 'scanner_logger.scan_events'::regclass
+    ) THEN
+        ALTER TABLE scanner_logger.scan_events
+            ADD CONSTRAINT ck_scan_events_barcode_present
+            CHECK (btrim(barcode, E' \t\r\n') <> '');
+    END IF;
 END $$;
 
 CREATE INDEX IF NOT EXISTS idx_scan_events_scan_date_time
@@ -101,6 +150,9 @@ CREATE INDEX IF NOT EXISTS idx_scan_events_scanner_scan_date_time
 CREATE INDEX IF NOT EXISTS idx_scan_events_barcode
     ON scanner_logger.scan_events (barcode);
 
+CREATE INDEX IF NOT EXISTS idx_scan_events_tracking_number
+    ON scanner_logger.scan_events (tracking_number);
+
 CREATE INDEX IF NOT EXISTS idx_scan_events_success_scan_date_time
     ON scanner_logger.scan_events (is_success, scan_date DESC, scan_time DESC, id DESC);
 
@@ -108,29 +160,27 @@ CREATE INDEX IF NOT EXISTS idx_scan_events_failed_scan_date_time
     ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC)
     WHERE is_success = false;
 
-CREATE INDEX IF NOT EXISTS idx_scan_events_success_barcode_scan_date_time
-    ON scanner_logger.scan_events (barcode, scan_date DESC, scan_time DESC, id DESC)
+DROP INDEX IF EXISTS scanner_logger.idx_scan_events_success_barcode_scan_date_time;
+
+CREATE INDEX IF NOT EXISTS idx_scan_events_success_tracking_scan_date_time
+    ON scanner_logger.scan_events (tracking_number, scan_date DESC, scan_time DESC, id DESC)
     WHERE is_success = true;
 
-CREATE INDEX IF NOT EXISTS idx_scan_events_scanner_barcode_scan_date_time
-    ON scanner_logger.scan_events (scanner_id, barcode, scan_date DESC, scan_time DESC, id DESC)
+DROP INDEX IF EXISTS scanner_logger.idx_scan_events_scanner_barcode_scan_date_time;
+
+CREATE INDEX IF NOT EXISTS idx_scan_events_scanner_tracking_scan_date_time
+    ON scanner_logger.scan_events (scanner_id, tracking_number, scan_date DESC, scan_time DESC, id DESC)
     WHERE is_success = true;
 
 CREATE INDEX IF NOT EXISTS idx_scan_events_cross_scanner_duplicate
     ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC)
     WHERE is_cross_scanner_duplicate = true;
 
-CREATE INDEX IF NOT EXISTS idx_scan_events_last_scanner_tracking
-    ON scanner_logger.scan_events (scan_date, barcode, last_scanner_id, scanner_id)
-    WHERE is_success = true AND last_scanner_id IS NOT NULL;
+DROP INDEX IF EXISTS scanner_logger.idx_scan_events_last_scanner_tracking;
 
-DROP VIEW IF EXISTS scanner_logger.successful_scans_missing_last_scanner;
-DROP VIEW IF EXISTS scanner_logger.successful_scan_progression;
-DROP VIEW IF EXISTS scanner_logger.duplicate_successful_scans;
-DROP VIEW IF EXISTS scanner_logger.successful_scans;
-DROP VIEW IF EXISTS scanner_logger.failed_scans;
-DROP VIEW IF EXISTS scanner_logger.daily_scan_totals_all_scanners;
-DROP VIEW IF EXISTS scanner_logger.daily_scan_totals;
+CREATE INDEX IF NOT EXISTS idx_scan_events_last_scanner_tracking
+    ON scanner_logger.scan_events (scan_date, tracking_number, last_scanner_id, scanner_id)
+    WHERE is_success = true AND last_scanner_id IS NOT NULL;
 
 CREATE OR REPLACE VIEW scanner_logger.daily_scan_totals AS
 SELECT
@@ -141,7 +191,7 @@ SELECT
     count(*) AS total_scan_events,
     count(*) FILTER (WHERE is_success) AS successful_scans,
     count(*) FILTER (WHERE is_success = false) AS failed_scans,
-    count(DISTINCT barcode) FILTER (WHERE is_success) AS unique_successful_barcodes
+    count(DISTINCT tracking_number) FILTER (WHERE is_success) AS unique_successful_barcodes
 FROM scanner_logger.scan_events
 GROUP BY
     scan_date,
@@ -155,7 +205,7 @@ SELECT
     count(*) AS total_scan_events,
     count(*) FILTER (WHERE is_success) AS successful_scans,
     count(*) FILTER (WHERE is_success = false) AS failed_scans,
-    count(DISTINCT barcode) FILTER (WHERE is_success) AS unique_successful_barcodes
+    count(DISTINCT tracking_number) FILTER (WHERE is_success) AS unique_successful_barcodes
 FROM scanner_logger.scan_events
 GROUP BY
     scan_date;
@@ -197,7 +247,8 @@ WHERE is_success = true;
 
 CREATE OR REPLACE VIEW scanner_logger.duplicate_successful_scans AS
 SELECT
-    barcode,
+    tracking_number,
+    tracking_number AS barcode,
     count(*) AS scan_count,
     count(DISTINCT scanner_id) AS scanner_count,
     array_agg(DISTINCT scanner_id ORDER BY scanner_id) AS scanner_ids,
@@ -207,20 +258,20 @@ SELECT
     max(scan_date + scan_time) AS last_seen_at
 FROM scanner_logger.scan_events
 WHERE is_success = true
-GROUP BY barcode
+GROUP BY tracking_number
 HAVING count(DISTINCT scanner_id) > 1;
 
 CREATE OR REPLACE VIEW scanner_logger.successful_scan_progression AS
 WITH scanner_counts AS (
     SELECT
         scan_date,
-        barcode,
+        tracking_number,
         count(DISTINCT scanner_id) AS scanner_count
     FROM scanner_logger.scan_events
     WHERE is_success = true
     GROUP BY
         scan_date,
-        barcode
+        tracking_number
 )
 SELECT
     events.id,
@@ -230,9 +281,10 @@ SELECT
     events.scanner_name,
     events.scanner_role,
     events.last_scanner_id,
+    events.tracking_number,
     events.barcode,
     row_number() OVER (
-        PARTITION BY events.scan_date, events.barcode
+        PARTITION BY events.scan_date, events.tracking_number
         ORDER BY events.scan_date, events.scan_time, events.id
     ) AS scan_sequence,
     scanner_counts.scanner_count,
@@ -242,13 +294,14 @@ SELECT
 FROM scanner_logger.scan_events AS events
 JOIN scanner_counts
   ON scanner_counts.scan_date = events.scan_date
- AND scanner_counts.barcode = events.barcode
+ AND scanner_counts.tracking_number = events.tracking_number
 WHERE events.is_success = true;
 
 CREATE OR REPLACE VIEW scanner_logger.successful_scans_missing_last_scanner AS
 SELECT
     source.scan_date,
-    source.barcode,
+    source.tracking_number,
+    source.tracking_number AS barcode,
     source.last_scanner_id,
     min(source.scan_date + source.scan_time) AS first_seen_at,
     max(source.scan_date + source.scan_time) AS last_seen_at,
@@ -266,12 +319,12 @@ WHERE source.is_success = true
       FROM scanner_logger.scan_events AS last_scan
       WHERE last_scan.is_success = true
         AND last_scan.scan_date = source.scan_date
-        AND last_scan.barcode = source.barcode
+        AND last_scan.tracking_number = source.tracking_number
         AND last_scan.scanner_id = source.last_scanner_id
   )
 GROUP BY
     source.scan_date,
-    source.barcode,
+    source.tracking_number,
     source.last_scanner_id;
 
 DO $$
