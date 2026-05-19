@@ -141,6 +141,27 @@ BEGIN
     END IF;
 END $$;
 
+CREATE TABLE IF NOT EXISTS scanner_logger.raw_scan_events (
+    LIKE scanner_logger.scan_events
+    INCLUDING DEFAULTS
+    INCLUDING GENERATED
+    INCLUDING IDENTITY
+    INCLUDING CONSTRAINTS
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'raw_scan_events_pkey'
+          AND conrelid = 'scanner_logger.raw_scan_events'::regclass
+    ) THEN
+        ALTER TABLE scanner_logger.raw_scan_events
+            ADD CONSTRAINT raw_scan_events_pkey PRIMARY KEY (id);
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_scan_events_scan_date_time
     ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC);
 
@@ -181,6 +202,18 @@ DROP INDEX IF EXISTS scanner_logger.idx_scan_events_last_scanner_tracking;
 CREATE INDEX IF NOT EXISTS idx_scan_events_last_scanner_tracking
     ON scanner_logger.scan_events (scan_date, tracking_number, last_scanner_id, scanner_id)
     WHERE is_success = true AND last_scanner_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_raw_scan_events_scan_date_time
+    ON scanner_logger.raw_scan_events (scan_date DESC, scan_time DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_raw_scan_events_scanner_scan_date_time
+    ON scanner_logger.raw_scan_events (scanner_id, scan_date DESC, scan_time DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_raw_scan_events_barcode
+    ON scanner_logger.raw_scan_events (barcode);
+
+CREATE INDEX IF NOT EXISTS idx_raw_scan_events_tracking_number
+    ON scanner_logger.raw_scan_events (tracking_number);
 
 CREATE OR REPLACE VIEW scanner_logger.daily_scan_totals AS
 SELECT
@@ -332,6 +365,7 @@ BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'scannerlogger') THEN
         EXECUTE 'GRANT USAGE ON SCHEMA scanner_logger TO scannerlogger';
         EXECUTE 'GRANT INSERT, SELECT ON scanner_logger.scan_events TO scannerlogger';
+        EXECUTE 'GRANT INSERT, SELECT ON scanner_logger.raw_scan_events TO scannerlogger';
         EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA scanner_logger TO scannerlogger';
     END IF;
 END $$;

@@ -229,10 +229,16 @@ installer with `--overwrite-config` to pick up this default.
 
 ## PostgreSQL Logging
 
-The receiver can insert each accepted scan event into:
+The receiver can insert final scan events into:
 
 ```text
 scanner_logger.scan_events
+```
+
+Every non-empty scanner output is also inserted into:
+
+```text
+scanner_logger.raw_scan_events
 ```
 
 The table schema is in:
@@ -241,13 +247,13 @@ The table schema is in:
 db/schema.sql
 ```
 
-Python inserts scan timing, scanner metadata, duplicate and repair flags, and
-the tracking number. The date and time come from the receiver script at the same
-point where the CSV row is written; PostgreSQL does not assign the scan event
-timestamp. PostgreSQL generated columns and views provide success/failure
-classification, failed scan queries, daily totals, package progression,
-cross-scanner duplicate queries, and successful packages missing the configured
-last scanner.
+Python inserts scan timing, scanner metadata, duplicate and repair flags, the
+received barcode, and the tracking number. The date and time come from the
+receiver script at the same point where the CSV row is written; PostgreSQL does
+not assign the scan event timestamp. PostgreSQL generated columns and views
+provide success/failure classification, failed scan queries, daily totals,
+package progression, cross-scanner duplicate queries, and successful packages
+missing the configured last scanner.
 
 Use `[scanners] last_scanner_id` for the final outbound scanner before boxes
 are loaded. Use `[scanner_names]` to map IP last-octet scanner IDs to readable
@@ -273,6 +279,10 @@ logged to `/var/log/industrial-scanner-logger.log` and marked with
 `is_repaired = true` in CSV and PostgreSQL output. For repaired PostgreSQL rows,
 `barcode` keeps the short value received from the scanner, while
 `tracking_number` stores the repaired full tracking number.
+
+`scanner_logger.raw_scan_events` stores the scanner value before repair. The
+normal `scanner_logger.scan_events` table skips failed nonnumeric scans such as
+no-read markers; those rows remain available in `raw_scan_events`.
 
 The installer enables PostgreSQL logging by default with local Unix socket peer
 authentication:

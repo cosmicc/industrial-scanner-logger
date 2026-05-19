@@ -32,6 +32,7 @@ from industrial_scanner_logger.receiver import (  # noqa: E402
 class FakePostgreSQLLogger:
     def __init__(self):
         self.rows = []
+        self.raw_rows = []
         self.closed = False
 
     def write_scan_event(
@@ -46,7 +47,27 @@ class FakePostgreSQLLogger:
         is_repaired,
         scan_date,
         scan_time,
+        raw_tracking_number=None,
+        raw_barcode=None,
+        raw_is_cross_scanner_duplicate=False,
+        write_scan_event=True,
     ):
+        self.raw_rows.append({
+            "scan_date": scan_date,
+            "scan_time": scan_time,
+            "scanner_id": scanner_id,
+            "scanner_name": scanner_name,
+            "scanner_role": scanner_role,
+            "last_scanner_id": last_scanner_id,
+            "is_cross_scanner_duplicate": raw_is_cross_scanner_duplicate,
+            "is_repaired": False,
+            "tracking_number": raw_tracking_number or barcode,
+            "barcode": raw_barcode or barcode,
+        })
+
+        if not write_scan_event:
+            return True
+
         self.rows.append({
             "scan_date": scan_date,
             "scan_time": scan_time,
@@ -506,7 +527,7 @@ log_level = warning
                 ],
             )
 
-    def test_postgresql_logger_receives_accepted_scan_events_after_dedup(self):
+    def test_postgresql_logger_receives_final_and_raw_scan_events(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
             postgresql_logger = FakePostgreSQLLogger()
             logger = DailyCsvLogger(
@@ -518,12 +539,15 @@ log_level = warning
             )
 
             valid_tracking = "4" * 34
+            numeric_short = "12345"
 
             logger.write_scan_event(valid_tracking, "20")
             logger.write_scan_event(valid_tracking, "20")
             logger.write_scan_event("__NO_READ__", "20")
+            logger.write_scan_event(numeric_short, "20")
 
             self.assertEqual(len(postgresql_logger.rows), 2)
+            self.assertEqual(len(postgresql_logger.raw_rows), 4)
             self.assertEqual(postgresql_logger.rows[0]["scan_date"], logger.current_date)
             self.assertRegex(
                 postgresql_logger.rows[0]["scan_time"],
@@ -533,15 +557,17 @@ log_level = warning
             self.assertEqual(postgresql_logger.rows[0]["tracking_number"], valid_tracking)
             self.assertEqual(postgresql_logger.rows[0]["barcode"], valid_tracking)
             self.assertFalse(postgresql_logger.rows[0]["is_repaired"])
-            self.assertEqual(postgresql_logger.rows[1]["scan_date"], logger.current_date)
-            self.assertRegex(
-                postgresql_logger.rows[1]["scan_time"],
-                r"^\d{2}:\d{2}:\d{2}$",
-            )
-            self.assertEqual(postgresql_logger.rows[1]["scanner_id"], "20")
-            self.assertEqual(postgresql_logger.rows[1]["tracking_number"], "__NO_READ__")
-            self.assertEqual(postgresql_logger.rows[1]["barcode"], "__NO_READ__")
+            self.assertEqual(postgresql_logger.rows[1]["tracking_number"], numeric_short)
+            self.assertEqual(postgresql_logger.rows[1]["barcode"], numeric_short)
             self.assertFalse(postgresql_logger.rows[1]["is_repaired"])
+            self.assertEqual(
+                [row["tracking_number"] for row in postgresql_logger.raw_rows],
+                [valid_tracking, valid_tracking, "__NO_READ__", numeric_short],
+            )
+            self.assertEqual(
+                [row["barcode"] for row in postgresql_logger.raw_rows],
+                [valid_tracking, valid_tracking, "__NO_READ__", numeric_short],
+            )
 
             logger.close()
             self.assertTrue(postgresql_logger.closed)
@@ -581,6 +607,9 @@ log_level = warning
             self.assertEqual(postgresql_logger.rows[1]["tracking_number"], repaired_tracking)
             self.assertEqual(postgresql_logger.rows[1]["barcode"], short_tracking)
             self.assertTrue(postgresql_logger.rows[1]["is_repaired"])
+            self.assertEqual(postgresql_logger.raw_rows[1]["tracking_number"], short_tracking)
+            self.assertEqual(postgresql_logger.raw_rows[1]["barcode"], short_tracking)
+            self.assertFalse(postgresql_logger.raw_rows[1]["is_repaired"])
 
             script_log = log_path.read_text(encoding="utf-8")
             self.assertIn("Tracking number repaired", script_log)

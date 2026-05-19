@@ -252,7 +252,7 @@ def build_dashboard_health(config):
                     barcode_length,
                     is_success,
                     failure_reason
-                FROM scanner_logger.scan_events
+                FROM scanner_logger.raw_scan_events
                 ORDER BY scan_date DESC, scan_time DESC, id DESC
                 LIMIT 10
                 """,

@@ -494,6 +494,8 @@ class PostgreSQLScanLogger:
     ):
         self.dsn = dsn
         self.schema_name, self.relation_name = parse_postgresql_table(table_name)
+        self.raw_schema_name = self.schema_name
+        self.raw_relation_name = f"raw_{self.relation_name}"
         self.connect_timeout = validate_positive_float(
             connect_timeout,
             "postgresql_connect_timeout",
@@ -505,6 +507,7 @@ class PostgreSQLScanLogger:
         self.required = required
         self.conn = None
         self.insert_sql = None
+        self.raw_insert_sql = None
         self.next_retry_time = 0.0
         self.driver_unavailable = False
         self._psycopg = None
@@ -513,6 +516,10 @@ class PostgreSQLScanLogger:
     @property
     def table_name(self) -> str:
         return f"{self.schema_name}.{self.relation_name}"
+
+    @property
+    def raw_table_name(self) -> str:
+        return f"{self.raw_schema_name}.{self.raw_relation_name}"
 
     def _load_driver(self):
         if self.driver_unavailable:
@@ -549,6 +556,16 @@ class PostgreSQLScanLogger:
             sql.Identifier(self.schema_name),
             sql.Identifier(self.relation_name),
         )
+        self.raw_insert_sql = sql.SQL(
+            "INSERT INTO {}.{} "
+            "(scan_date, scan_time, scanner_id, scanner_name, scanner_role, "
+            "last_scanner_id, is_cross_scanner_duplicate, is_repaired, "
+            "tracking_number, barcode) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        ).format(
+            sql.Identifier(self.raw_schema_name),
+            sql.Identifier(self.raw_relation_name),
+        )
         return True
 
     def _mark_unavailable(self, action: str, exc: Exception):
@@ -557,7 +574,8 @@ class PostgreSQLScanLogger:
 
         message = (
             f"PostgreSQL scan logging {action} failed table={self.table_name} "
-            f"retry_interval={self.retry_interval}s error={exc}"
+            f"raw_table={self.raw_table_name} retry_interval={self.retry_interval}s "
+            f"error={exc}"
         )
 
         if self.required:
@@ -585,12 +603,47 @@ class PostgreSQLScanLogger:
             self._mark_unavailable("connect", exc)
             return False
 
-        SCRIPT_LOGGER.info("PostgreSQL scan logging connected table=%s", self.table_name)
+        SCRIPT_LOGGER.info(
+            "PostgreSQL scan logging connected table=%s raw_table=%s",
+            self.table_name,
+            self.raw_table_name,
+        )
         return True
 
     def verify_connection(self):
         if not self._connect():
             raise RuntimeError("PostgreSQL scan logging is unavailable")
+
+    def _insert_scan_event(
+        self,
+        insert_sql,
+        tracking_number: str,
+        barcode: str,
+        scanner_id: int,
+        scanner_name: Optional[str],
+        scanner_role: str,
+        last_scanner_id: Optional[int],
+        is_cross_scanner_duplicate: bool,
+        is_repaired: bool,
+        scan_date: str,
+        scan_time: str,
+    ):
+        with self.conn.cursor() as cursor:
+            cursor.execute(
+                insert_sql,
+                (
+                    scan_date,
+                    scan_time,
+                    scanner_id,
+                    scanner_name,
+                    scanner_role,
+                    last_scanner_id,
+                    is_cross_scanner_duplicate,
+                    is_repaired,
+                    tracking_number,
+                    barcode,
+                ),
+            )
 
     def write_scan_event(
         self,
@@ -604,6 +657,10 @@ class PostgreSQLScanLogger:
         is_repaired: bool,
         scan_date: str,
         scan_time: str,
+        raw_tracking_number: Optional[str] = None,
+        raw_barcode: Optional[str] = None,
+        raw_is_cross_scanner_duplicate: bool = False,
+        write_scan_event: bool = True,
     ) -> bool:
         if not self._connect():
             return False
@@ -613,23 +670,37 @@ class PostgreSQLScanLogger:
             scanner_id_for_postgresql(last_scanner_id) if last_scanner_id else None
         )
         db_scanner_name = scanner_name or None
+        raw_tracking_number = raw_tracking_number or barcode
+        raw_barcode = raw_barcode or barcode
 
         try:
-            with self.conn.cursor() as cursor:
-                cursor.execute(
+            self._insert_scan_event(
+                self.raw_insert_sql,
+                raw_tracking_number,
+                raw_barcode,
+                db_scanner_id,
+                db_scanner_name,
+                scanner_role,
+                db_last_scanner_id,
+                raw_is_cross_scanner_duplicate,
+                False,
+                scan_date,
+                scan_time,
+            )
+
+            if write_scan_event:
+                self._insert_scan_event(
                     self.insert_sql,
-                    (
-                        scan_date,
-                        scan_time,
-                        db_scanner_id,
-                        db_scanner_name,
-                        scanner_role,
-                        db_last_scanner_id,
-                        is_cross_scanner_duplicate,
-                        is_repaired,
-                        tracking_number,
-                        barcode,
-                    ),
+                    tracking_number,
+                    barcode,
+                    db_scanner_id,
+                    db_scanner_name,
+                    scanner_role,
+                    db_last_scanner_id,
+                    is_cross_scanner_duplicate,
+                    is_repaired,
+                    scan_date,
+                    scan_time,
                 )
         except Exception as exc:
             self._mark_unavailable("insert", exc)
@@ -1462,12 +1533,22 @@ class DailyCsvLogger:
             self._rotate_if_needed()
 
             status = self._classify_scan(barcode)
+            raw_status = status
             scanner_counts = self._get_counts(scanner_id)
             seen_success_barcodes = self._get_seen_successes(scanner_id)
             scanner_name = self._scanner_name(scanner_id)
             scanner_role = self._scanner_role(scanner_id)
             is_cross_scanner_duplicate = False
+            raw_is_cross_scanner_duplicate = False
             is_repaired = False
+            date_str = self.current_date
+            time_str = self._time_string()
+
+            if raw_status == "SUCCESS":
+                raw_is_cross_scanner_duplicate = self._seen_success_on_other_scanner(
+                    scanner_id,
+                    barcode,
+                )
 
             if status != "SUCCESS":
                 repaired_barcode = self._repair_tracking_number(barcode)
@@ -1486,88 +1567,108 @@ class DailyCsvLogger:
                             truncate_for_log(tracking_number),
                         )
 
-            if status == "SUCCESS":
-                if (
-                    tracking_number in seen_success_barcodes
-                    and not LOG_DUPLICATE_SUCCESS_SCANS
-                ):
-                    return
-
-                is_cross_scanner_duplicate = self._seen_success_on_other_scanner(
-                    scanner_id,
-                    tracking_number,
-                )
-                seen_success_barcodes.add(tracking_number)
-                scanner_counts["successful_scans"] += 1
-                self.success_count += 1
-
-            else:
-                scanner_counts["failed_scans"] += 1
-                self.failed_count += 1
-
-            scanner_counts["total_events"] += 1
-            self.event_count += 1
-
-            date_str = self.current_date
-            time_str = self._time_string()
-
-            # Daily CSV:
-            # For scanner no-read, keep tracking blank.
-            # For partial/invalid/short/long decodes, keep the decoded value for review.
-            csv_tracking = (
-                ""
-                if tracking_number == self.no_read_message
-                else tracking_number
+            duplicate_success_ignored = (
+                status == "SUCCESS"
+                and tracking_number in seen_success_barcodes
+                and not LOG_DUPLICATE_SUCCESS_SCANS
             )
 
-            with self.current_csv_path.open("a", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    date_str,
-                    time_str,
+            if duplicate_success_ignored:
+                postgresql_event = (
+                    tracking_number,
+                    barcode,
                     scanner_id,
                     scanner_name,
                     scanner_role,
-                    status,
-                    str(is_cross_scanner_duplicate).lower(),
-                    str(is_repaired).lower(),
-                    csv_tracking,
-                ])
+                    self.last_scanner_id,
+                    False,
+                    False,
+                    date_str,
+                    time_str,
+                    barcode,
+                    barcode,
+                    raw_is_cross_scanner_duplicate,
+                    False,
+                )
 
-            # Forever-appended failed scan CSV:
-            # Keep the no-read message visible here so the failure is explicit.
-            if status == "FAILED":
-                self._append_failed_scan(date_str, time_str, scanner_id, barcode)
+            else:
+                if status == "SUCCESS":
+                    is_cross_scanner_duplicate = self._seen_success_on_other_scanner(
+                        scanner_id,
+                        tracking_number,
+                    )
+                    seen_success_barcodes.add(tracking_number)
+                    scanner_counts["successful_scans"] += 1
+                    self.success_count += 1
 
-            self._append_scan_data_log_line(
-                f"Event:{self.event_count} "
-                f"Success:{self.success_count} "
-                f"Failed:{self.failed_count} "
-                f"Scanner:{scanner_id} "
-                f"ScannerName:{scanner_name or 'unmapped'} "
-                f"ScannerRole:{scanner_role} "
-                f"ScannerEvent:{scanner_counts['total_events']} "
-                f"ScannerSuccess:{scanner_counts['successful_scans']} "
-                f"ScannerFailed:{scanner_counts['failed_scans']} "
-                f"Status:{status} "
-                f"CrossScannerDuplicate:{str(is_cross_scanner_duplicate).lower()} "
-                f"Repaired:{str(is_repaired).lower()} "
-                f"Time:{time_str} "
-                f"Barcode:{truncate_for_log(barcode)}"
-            )
+                else:
+                    scanner_counts["failed_scans"] += 1
+                    self.failed_count += 1
 
-            postgresql_event = (
-                tracking_number,
-                barcode,
-                scanner_id,
-                scanner_name,
-                scanner_role,
-                self.last_scanner_id,
-                is_cross_scanner_duplicate,
-                is_repaired,
-                date_str,
-                time_str,
-            )
+                scanner_counts["total_events"] += 1
+                self.event_count += 1
+
+                # Daily CSV:
+                # For scanner no-read, keep tracking blank.
+                # For partial/invalid/short/long decodes, keep the decoded value for review.
+                csv_tracking = (
+                    ""
+                    if tracking_number == self.no_read_message
+                    else tracking_number
+                )
+
+                with self.current_csv_path.open("a", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        date_str,
+                        time_str,
+                        scanner_id,
+                        scanner_name,
+                        scanner_role,
+                        status,
+                        str(is_cross_scanner_duplicate).lower(),
+                        str(is_repaired).lower(),
+                        csv_tracking,
+                    ])
+
+                # Forever-appended failed scan CSV:
+                # Keep the no-read message visible here so the failure is explicit.
+                if status == "FAILED":
+                    self._append_failed_scan(date_str, time_str, scanner_id, barcode)
+
+                self._append_scan_data_log_line(
+                    f"Event:{self.event_count} "
+                    f"Success:{self.success_count} "
+                    f"Failed:{self.failed_count} "
+                    f"Scanner:{scanner_id} "
+                    f"ScannerName:{scanner_name or 'unmapped'} "
+                    f"ScannerRole:{scanner_role} "
+                    f"ScannerEvent:{scanner_counts['total_events']} "
+                    f"ScannerSuccess:{scanner_counts['successful_scans']} "
+                    f"ScannerFailed:{scanner_counts['failed_scans']} "
+                    f"Status:{status} "
+                    f"CrossScannerDuplicate:{str(is_cross_scanner_duplicate).lower()} "
+                    f"Repaired:{str(is_repaired).lower()} "
+                    f"Time:{time_str} "
+                    f"Barcode:{truncate_for_log(barcode)}"
+                )
+
+                postgresql_event = (
+                    tracking_number,
+                    barcode,
+                    scanner_id,
+                    scanner_name,
+                    scanner_role,
+                    self.last_scanner_id,
+                    is_cross_scanner_duplicate,
+                    is_repaired,
+                    date_str,
+                    time_str,
+                    barcode,
+                    barcode,
+                    raw_is_cross_scanner_duplicate,
+                    not (status == "FAILED" and not barcode.isdigit()),
+                )
 
         if self.postgresql_logger is not None and postgresql_event is not None:
             self.postgresql_logger.write_scan_event(*postgresql_event)
