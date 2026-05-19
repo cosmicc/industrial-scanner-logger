@@ -613,8 +613,8 @@ log_level = warning
 
             script_log = log_path.read_text(encoding="utf-8")
             self.assertIn("Tracking number repaired", script_log)
-            self.assertIn(short_tracking, script_log)
-            self.assertIn(repaired_tracking, script_log)
+            self.assertIn(f"captured={short_tracking}", script_log)
+            self.assertIn(f"repaired_to={repaired_tracking}", script_log)
 
     def test_tracking_repair_leaves_nonmatching_short_scan_failed(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
@@ -715,6 +715,8 @@ log_level = warning
                     file_prefix="Test",
                     no_read_message="__NO_READ__",
                     success_length=34,
+                    last_scanner_id="20",
+                    scanner_names={"20": "Lane 1 Scanner"},
                 )
                 logger.write_scan_event(valid_tracking, "20")
 
@@ -737,6 +739,7 @@ log_level = warning
 
             self.assertIn("Now logging to:", script_log)
             self.assertIn("Scanner connected address=10.10.10.20:0", script_log)
+            self.assertIn("scanner_name=Lane 1 Scanner scanner_role=last", script_log)
             self.assertIn("Scanner disconnected address=10.10.10.20:0", script_log)
             self.assertNotIn("Scan event recorded", script_log)
             self.assertNotIn(valid_tracking, script_log)

@@ -1561,7 +1561,7 @@ class DailyCsvLogger:
                     if is_repaired:
                         SCRIPT_LOGGER.info(
                             "Tracking number repaired scanner_id=%s "
-                            "original=%s repaired=%s",
+                            "captured=%s repaired_to=%s",
                             scanner_id,
                             truncate_for_log(barcode),
                             truncate_for_log(tracking_number),
@@ -1681,6 +1681,13 @@ def address_label(addr) -> str:
         return str(addr)
 
 
+def scanner_log_metadata(logger: DailyCsvLogger, scanner_id: str) -> tuple[str, str]:
+    return (
+        logger._scanner_name(scanner_id) or "unmapped",
+        logger._scanner_role(scanner_id),
+    )
+
+
 def write_client_scan(
     logger: DailyCsvLogger,
     barcode: str,
@@ -1718,10 +1725,13 @@ def handle_client(
     tcp_keepalive_probes: int = DEFAULT_TCP_KEEPALIVE_PROBES,
 ):
     scanner_id = scanner_id_from_addr(addr)
+    scanner_name, scanner_role = scanner_log_metadata(logger, scanner_id)
     SCRIPT_LOGGER.info(
-        "Scanner connected address=%s scanner_id=%s",
+        "Scanner connected address=%s scanner_id=%s scanner_name=%s scanner_role=%s",
         address_label(addr),
         scanner_id,
+        scanner_name,
+        scanner_role,
     )
 
     buffer = ""
@@ -1780,9 +1790,12 @@ def handle_client(
                         return
 
                     SCRIPT_LOGGER.info(
-                        "Scanner disconnected address=%s scanner_id=%s",
+                        "Scanner disconnected address=%s scanner_id=%s "
+                        "scanner_name=%s scanner_role=%s",
                         address_label(addr),
                         scanner_id,
+                        scanner_name,
+                        scanner_role,
                     )
                     break
 
