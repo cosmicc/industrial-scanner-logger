@@ -285,6 +285,10 @@
         Math.floor((now.getTime() - scanDateTime.getTime()) / 1000)
       );
 
+      if (elapsedSeconds <= 10) {
+        return "Now";
+      }
+
       const units = [
         {
           label: "Week",
@@ -333,10 +337,10 @@
           }
         }
 
-        return parts.join(", ");
+        return `${parts.join(", ")} ago`;
       }
 
-      return "0 Seconds";
+      return "Now";
     }
 
     function formatElapsedPart(value, label) {

@@ -31,6 +31,11 @@
         </div>
       </form>
       <div id="search-status" class="detail">Enter a tracking number to search scan history.</div>
+      <div id="fedex-tracking-link" class="detail" hidden>
+        <a id="fedex-tracking-anchor" href="#" target="_blank" rel="noopener noreferrer">
+          Open FedEx Tracking
+        </a>
+      </div>
     </section>
 
     <section class="card">
@@ -79,6 +84,8 @@
     const form = document.getElementById("search-form");
     const input = document.getElementById("tracking-number");
     const statusElement = document.getElementById("search-status");
+    const fedexTrackingLink = document.getElementById("fedex-tracking-link");
+    const fedexTrackingAnchor = document.getElementById("fedex-tracking-anchor");
     const summaryElement = document.getElementById("result-summary");
     const resultsBody = document.getElementById("search-results");
 
@@ -93,6 +100,7 @@
       window.clearTimeout(inputDebounceTimer);
       activeSearchToken += 1;
       const queuedSearchToken = activeSearchToken;
+      updateFedExTrackingLink(input.value.trim());
       inputDebounceTimer = window.setTimeout(
         () => runSearch(input.value, queuedSearchToken),
         350
@@ -104,11 +112,13 @@
 
       if (!trackingNumber) {
         statusElement.textContent = "Enter a tracking number to search scan history.";
+        updateFedExTrackingLink("");
         summaryElement.textContent = "No search has been run.";
         renderEmptyResults("Search results will appear here.");
         return;
       }
 
+      updateFedExTrackingLink(trackingNumber);
       statusElement.textContent = `Searching for ${trackingNumber}...`;
       summaryElement.textContent = "Loading results...";
       renderEmptyResults("Loading...");
@@ -205,6 +215,20 @@
 
         resultsBody.appendChild(tr);
       }
+    }
+
+    function updateFedExTrackingLink(trackingNumber) {
+      if (!trackingNumber) {
+        fedexTrackingLink.hidden = true;
+        fedexTrackingAnchor.removeAttribute("href");
+        fedexTrackingAnchor.textContent = "Open FedEx Tracking";
+        return;
+      }
+
+      fedexTrackingAnchor.href =
+        `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(trackingNumber)}`;
+      fedexTrackingAnchor.textContent = `Open FedEx Tracking for ${trackingNumber}`;
+      fedexTrackingLink.hidden = false;
     }
 
     function renderEmptyResults(message, isError = false) {
