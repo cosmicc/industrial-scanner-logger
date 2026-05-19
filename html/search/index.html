@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tracking Number Search</title>
+  <link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+  <main class="page">
+    <h1>Tracking Number Search</h1>
+    <div class="subhead">
+      Search scan history by exact tracking number.
+    </div>
+
+    <section class="card">
+      <h2>Search</h2>
+      <form id="search-form" class="search-form">
+        <label class="search-label" for="tracking-number">Tracking Number</label>
+        <div class="search-controls">
+          <input
+            id="tracking-number"
+            class="search-input"
+            type="text"
+            name="tracking-number"
+            autocomplete="off"
+            inputmode="numeric"
+            placeholder="Enter tracking number"
+          >
+          <button class="button primary" type="submit">Search</button>
+        </div>
+      </form>
+      <div id="search-status" class="detail">Enter a tracking number to search scan history.</div>
+    </section>
+
+    <section class="card">
+      <h2>Results</h2>
+      <div id="result-summary" class="detail">No search has been run.</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Date</th>
+              <th>Time</th>
+              <th>Scanner ID</th>
+              <th>Scanner Name</th>
+              <th>Role</th>
+              <th>Last Scanner ID</th>
+              <th>Status</th>
+              <th>Duplicate</th>
+              <th>Tracking Number</th>
+              <th>Barcode</th>
+              <th>Barcode Length</th>
+              <th>Failure Reason</th>
+            </tr>
+          </thead>
+          <tbody id="search-results">
+            <tr>
+              <td colspan="13">Search results will appear here.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="footer">
+      <a href="/">Home</a> | <a href="/health">Health Dashboard</a>
+    </div>
+  </main>
+
+  <script>
+    const SEARCH_API_URL = "/api/v1/scans";
+    const PAGE_SIZE = 1000;
+    let activeSearchToken = 0;
+    let inputDebounceTimer = null;
+
+    const form = document.getElementById("search-form");
+    const input = document.getElementById("tracking-number");
+    const statusElement = document.getElementById("search-status");
+    const summaryElement = document.getElementById("result-summary");
+    const resultsBody = document.getElementById("search-results");
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      window.clearTimeout(inputDebounceTimer);
+      activeSearchToken += 1;
+      runSearch(input.value, activeSearchToken);
+    });
+
+    input.addEventListener("input", () => {
+      window.clearTimeout(inputDebounceTimer);
+      activeSearchToken += 1;
+      const queuedSearchToken = activeSearchToken;
+      inputDebounceTimer = window.setTimeout(
+        () => runSearch(input.value, queuedSearchToken),
+        350
+      );
+    });
+
+    async function runSearch(rawTrackingNumber, searchToken) {
+      const trackingNumber = rawTrackingNumber.trim();
+
+      if (!trackingNumber) {
+        statusElement.textContent = "Enter a tracking number to search scan history.";
+        summaryElement.textContent = "No search has been run.";
+        renderEmptyResults("Search results will appear here.");
+        return;
+      }
+
+      statusElement.textContent = `Searching for ${trackingNumber}...`;
+      summaryElement.textContent = "Loading results...";
+      renderEmptyResults("Loading...");
+
+      try {
+        const rows = await fetchAllTrackingRows(trackingNumber, searchToken);
+
+        if (searchToken !== activeSearchToken) {
+          return;
+        }
+
+        statusElement.textContent = `Search complete for ${trackingNumber}.`;
+        renderResults(trackingNumber, rows);
+      } catch (error) {
+        if (searchToken !== activeSearchToken) {
+          return;
+        }
+
+        statusElement.innerHTML = `<span class="error">Search failed.</span>`;
+        summaryElement.textContent = error.message;
+        renderEmptyResults("Unable to load search results.", true);
+      }
+    }
+
+    async function fetchAllTrackingRows(trackingNumber, searchToken) {
+      const rows = [];
+      let offset = 0;
+
+      while (true) {
+        if (searchToken !== activeSearchToken) {
+          return rows;
+        }
+
+        const url = new URL(SEARCH_API_URL, window.location.origin);
+        url.searchParams.set("barcode", trackingNumber);
+        url.searchParams.set("limit", String(PAGE_SIZE));
+        url.searchParams.set("offset", String(offset));
+
+        const response = await fetch(url, { cache: "no-store" });
+
+        if (!response.ok) {
+          throw new Error(`API returned HTTP ${response.status}`);
+        }
+
+        const pageRows = await response.json();
+
+        if (!Array.isArray(pageRows)) {
+          throw new Error("API returned an unexpected response.");
+        }
+
+        rows.push(...pageRows);
+
+        if (pageRows.length < PAGE_SIZE) {
+          return rows;
+        }
+
+        offset += PAGE_SIZE;
+      }
+    }
+
+    function renderResults(trackingNumber, rows) {
+      if (!rows || rows.length === 0) {
+        summaryElement.textContent = `No scans found for ${trackingNumber}.`;
+        renderEmptyResults("No scan rows found.");
+        return;
+      }
+
+      summaryElement.textContent = `${formatCount(rows.length)} scan row${rows.length === 1 ? "" : "s"} found for ${trackingNumber}.`;
+      resultsBody.innerHTML = "";
+
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        const statusClass = row.is_success ? "success" : "failed";
+        const statusText = row.is_success ? "SUCCESS" : "FAILED";
+        const duplicateText = row.is_cross_scanner_duplicate ? "Yes" : "No";
+
+        tr.innerHTML = `
+          <td>${formatValue(row.id)}</td>
+          <td>${formatValue(row.scan_date)}</td>
+          <td>${formatValue(row.scan_time)}</td>
+          <td>${formatValue(row.scanner_id)}</td>
+          <td>${escapeHtml(row.scanner_name || "")}</td>
+          <td>${escapeHtml(row.scanner_role || "")}</td>
+          <td>${formatValue(row.last_scanner_id)}</td>
+          <td class="${statusClass}">${statusText}</td>
+          <td>${duplicateText}</td>
+          <td>${escapeHtml(row.tracking_number ?? "")}</td>
+          <td>${escapeHtml(row.barcode ?? "")}</td>
+          <td>${formatValue(row.barcode_length)}</td>
+          <td>${escapeHtml(row.failure_reason || "")}</td>
+        `;
+
+        resultsBody.appendChild(tr);
+      }
+    }
+
+    function renderEmptyResults(message, isError = false) {
+      resultsBody.innerHTML = "";
+      const tr = document.createElement("tr");
+      const td = document.createElement("td");
+      td.colSpan = 13;
+      td.textContent = message;
+
+      if (isError) {
+        td.className = "error";
+      }
+
+      tr.appendChild(td);
+      resultsBody.appendChild(tr);
+    }
+
+    function formatCount(value) {
+      return Number(value || 0).toLocaleString();
+    }
+
+    function formatValue(value) {
+      if (value === null || value === undefined || value === "") {
+        return "";
+      }
+
+      return escapeHtml(value);
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+  </script>
+</body>
+</html>
