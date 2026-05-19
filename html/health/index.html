@@ -113,13 +113,14 @@
             <th>Role</th>
             <th>Status</th>
             <th>Duplicate</th>
+            <th>Repaired</th>
             <th>Barcode</th>
             <th>Failure Reason</th>
           </tr>
         </thead>
         <tbody id="recent-scans">
           <tr>
-            <td colspan="9">Checking...</td>
+            <td colspan="10">Checking...</td>
           </tr>
         </tbody>
       </table>
@@ -188,7 +189,7 @@
 
       if (!rows || rows.length === 0) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="9">No scan rows found.</td>`;
+        tr.innerHTML = `<td colspan="10">No scan rows found.</td>`;
         tbody.appendChild(tr);
         return;
       }
@@ -198,6 +199,7 @@
         const statusClass = row.is_success ? "success" : "failed";
         const statusText = row.is_success ? "SUCCESS" : "FAILED";
         const duplicateText = row.is_cross_scanner_duplicate ? "Yes" : "No";
+        const repairedText = row.is_repaired ? "Yes" : "No";
 
         tr.innerHTML = `
           <td>${row.scan_date ?? ""}</td>
@@ -207,6 +209,7 @@
           <td>${escapeHtml(row.scanner_role ?? "")}</td>
           <td class="${statusClass}">${statusText}</td>
           <td>${duplicateText}</td>
+          <td>${repairedText}</td>
           <td>${escapeHtml(row.barcode ?? "")}</td>
           <td>${escapeHtml(row.failure_reason ?? "")}</td>
         `;
@@ -442,7 +445,7 @@
         renderCurrentScanRate(null);
 
         document.getElementById("recent-scans").innerHTML =
-          `<tr><td colspan="9" class="error">Unable to load recent scan rows.</td></tr>`;
+          `<tr><td colspan="10" class="error">Unable to load recent scan rows.</td></tr>`;
 
         document.getElementById("script-log-meta").textContent =
           "Unable to load script log.";

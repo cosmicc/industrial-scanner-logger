@@ -76,6 +76,7 @@ max_clients = 8
 frame_idle_timeout = 0.25
 client_idle_timeout = 0
 shutdown_timeout = 5
+tracking_repair_enabled = false
 
 [logging]
 log_file = /var/log/industrial-scanner-logger.log
@@ -240,12 +241,13 @@ The table schema is in:
 db/schema.sql
 ```
 
-Python inserts scan timing, scanner metadata, duplicate flags, and the tracking
-number. The date and time come from the receiver script at the same point where
-the CSV row is written; PostgreSQL does not assign the scan event timestamp.
-PostgreSQL generated columns and views provide success/failure classification,
-failed scan queries, daily totals, package progression, cross-scanner duplicate
-queries, and successful packages missing the configured last scanner.
+Python inserts scan timing, scanner metadata, duplicate and repair flags, and
+the tracking number. The date and time come from the receiver script at the same
+point where the CSV row is written; PostgreSQL does not assign the scan event
+timestamp. PostgreSQL generated columns and views provide success/failure
+classification, failed scan queries, daily totals, package progression,
+cross-scanner duplicate queries, and successful packages missing the configured
+last scanner.
 
 Use `[scanners] last_scanner_id` for the final outbound scanner before boxes
 are loaded. Use `[scanner_names]` to map IP last-octet scanner IDs to readable
@@ -263,6 +265,12 @@ last_scanner_id = 21
 Same-scanner duplicate successful scans are still silently ignored. Successful
 scans are marked as cross-scanner duplicates only when the same barcode was
 already accepted from a different scanner on the same day.
+
+Set `[receiver] tracking_repair_enabled = true` to allow conservative repair of
+short numeric failed scans. A short scan is repaired only when successful scans
+from the same day provide one unambiguous matching prefix; repaired rows are
+logged to `/var/log/industrial-scanner-logger.log` and marked with
+`is_repaired = true` in CSV and PostgreSQL output.
 
 The installer enables PostgreSQL logging by default with local Unix socket peer
 authentication:
@@ -371,7 +379,7 @@ Site_Shipped_Tracking_2026-05-16.csv
 Daily scan CSV columns:
 
 ```text
-date,time,scanner_id,scanner_name,scanner_role,status,is_cross_scanner_duplicate,tracking
+date,time,scanner_id,scanner_name,scanner_role,status,is_cross_scanner_duplicate,is_repaired,tracking
 ```
 
 Failed scan CSV columns:
@@ -393,6 +401,8 @@ one row per scanner plus an `ALL` row for the full day.
 `scanner_role` is `last` only for the configured final outbound scanner.
 `is_cross_scanner_duplicate` is `true` only for successful scans whose barcode
 was already accepted from another scanner that day.
+`is_repaired` is `true` only when tracking-number repair reconstructed a short
+numeric failed scan into a valid tracking number.
 
 ## Development
 

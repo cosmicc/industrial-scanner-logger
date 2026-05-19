@@ -42,6 +42,7 @@ class FakePostgreSQLLogger:
         scanner_role,
         last_scanner_id,
         is_cross_scanner_duplicate,
+        is_repaired,
         scan_date,
         scan_time,
     ):
@@ -53,6 +54,7 @@ class FakePostgreSQLLogger:
             "scanner_role": scanner_role,
             "last_scanner_id": last_scanner_id,
             "is_cross_scanner_duplicate": is_cross_scanner_duplicate,
+            "is_repaired": is_repaired,
             "tracking_number": tracking_number,
         })
         return True
@@ -143,6 +145,7 @@ max_clients = 3
 frame_idle_timeout = 0.5
 client_idle_timeout = 0
 shutdown_timeout = 2
+tracking_repair_enabled = true
 
 [logging]
 log_file = /tmp/industrial-scanner-logger.log
@@ -194,6 +197,7 @@ log_level = warning
             self.assertEqual(config.frame_idle_timeout, 0.5)
             self.assertEqual(config.client_idle_timeout, 0)
             self.assertEqual(config.shutdown_timeout, 2)
+            self.assertTrue(config.tracking_repair_enabled)
             self.assertEqual(config.log_file, "/tmp/industrial-scanner-logger.log")
             self.assertEqual(config.scan_data_log_dir, "/tmp/raw-scans")
             self.assertEqual(config.scan_data_log_prefix, "scanner-data")
@@ -344,6 +348,7 @@ log_level = warning
             self.assertEqual(rows[0]["scanner_role"], "last")
             self.assertEqual(rows[0]["status"], "SUCCESS")
             self.assertEqual(rows[0]["is_cross_scanner_duplicate"], "false")
+            self.assertEqual(rows[0]["is_repaired"], "false")
             self.assertEqual(rows[0]["tracking"], valid_tracking)
 
     def test_client_handler_closes_oversized_undelimited_frame(self):
@@ -524,6 +529,7 @@ log_level = warning
             )
             self.assertEqual(postgresql_logger.rows[0]["scanner_id"], "20")
             self.assertEqual(postgresql_logger.rows[0]["tracking_number"], valid_tracking)
+            self.assertFalse(postgresql_logger.rows[0]["is_repaired"])
             self.assertEqual(postgresql_logger.rows[1]["scan_date"], logger.current_date)
             self.assertRegex(
                 postgresql_logger.rows[1]["scan_time"],
@@ -531,9 +537,91 @@ log_level = warning
             )
             self.assertEqual(postgresql_logger.rows[1]["scanner_id"], "20")
             self.assertEqual(postgresql_logger.rows[1]["tracking_number"], "__NO_READ__")
+            self.assertFalse(postgresql_logger.rows[1]["is_repaired"])
 
             logger.close()
             self.assertTrue(postgresql_logger.closed)
+
+    def test_tracking_repair_reconstructs_short_numeric_scan(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            output_dir = Path(temp_dir)
+            log_path = output_dir / "industrial-scanner-logger.log"
+            postgresql_logger = FakePostgreSQLLogger()
+            normal_tracking = "9622080430009854574100871915237873"
+            short_tracking = "871913626933"
+            repaired_tracking = "9622080430009854574100871913626933"
+
+            configure_script_logging(str(log_path), console=False)
+
+            try:
+                logger = DailyCsvLogger(
+                    output_dir=output_dir,
+                    file_prefix="Test",
+                    no_read_message="__NO_READ__",
+                    success_length=34,
+                    postgresql_logger=postgresql_logger,
+                    tracking_repair_enabled=True,
+                )
+
+                logger.write_scan_event(normal_tracking, "20")
+                logger.write_scan_event(short_tracking, "21")
+            finally:
+                reset_script_logging()
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(rows[1]["status"], "SUCCESS")
+            self.assertEqual(rows[1]["is_repaired"], "true")
+            self.assertEqual(rows[1]["tracking"], repaired_tracking)
+            self.assertEqual(postgresql_logger.rows[1]["tracking_number"], repaired_tracking)
+            self.assertTrue(postgresql_logger.rows[1]["is_repaired"])
+
+            script_log = log_path.read_text(encoding="utf-8")
+            self.assertIn("Tracking number repaired", script_log)
+            self.assertIn(short_tracking, script_log)
+            self.assertIn(repaired_tracking, script_log)
+
+    def test_tracking_repair_leaves_nonmatching_short_scan_failed(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                tracking_repair_enabled=True,
+            )
+
+            logger.write_scan_event("9622080430009854574100871915237873", "20")
+            logger.write_scan_event("991913626933", "21")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(rows[1]["status"], "FAILED")
+            self.assertEqual(rows[1]["is_repaired"], "false")
+            self.assertEqual(rows[1]["tracking"], "991913626933")
+
+    def test_tracking_repair_leaves_ambiguous_short_scan_failed(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                tracking_repair_enabled=True,
+            )
+
+            logger.write_scan_event("9622080430009854574100871915237873", "20")
+            logger.write_scan_event("1111111111111111111111871955555555", "21")
+            logger.write_scan_event("871913626933", "22")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(rows[2]["status"], "FAILED")
+            self.assertEqual(rows[2]["is_repaired"], "false")
+            self.assertEqual(rows[2]["tracking"], "871913626933")
 
     def test_cross_scanner_duplicate_and_last_scanner_metadata_are_recorded(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):

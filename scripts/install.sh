@@ -22,6 +22,7 @@ MAX_CLIENTS="${MAX_CLIENTS:-8}"
 FRAME_IDLE_TIMEOUT="${FRAME_IDLE_TIMEOUT:-0.25}"
 CLIENT_IDLE_TIMEOUT="${CLIENT_IDLE_TIMEOUT:-0}"
 SHUTDOWN_TIMEOUT="${SHUTDOWN_TIMEOUT:-5}"
+TRACKING_REPAIR_ENABLED="${TRACKING_REPAIR_ENABLED:-0}"
 TCP_KEEPALIVE_IDLE="${TCP_KEEPALIVE_IDLE:-60}"
 TCP_KEEPALIVE_INTERVAL="${TCP_KEEPALIVE_INTERVAL:-15}"
 TCP_KEEPALIVE_PROBES="${TCP_KEEPALIVE_PROBES:-4}"
@@ -73,6 +74,8 @@ Options:
   --frame-idle-timeout SEC  seconds before flushing a partial scanner frame [${FRAME_IDLE_TIMEOUT}]
   --client-idle-timeout SEC seconds before disconnecting an idle scanner client; 0 disables [${CLIENT_IDLE_TIMEOUT}]
   --shutdown-timeout SEC    seconds to wait for scanner threads on stop [${SHUTDOWN_TIMEOUT}]
+  --enable-tracking-repair  repair likely truncated tracking scans using same-day successful prefixes
+  --disable-tracking-repair disable tracking-number repair [default]
   --tcp-keepalive-idle SEC  idle seconds before TCP keepalive probes start [${TCP_KEEPALIVE_IDLE}]
   --tcp-keepalive-interval SEC seconds between TCP keepalive probes [${TCP_KEEPALIVE_INTERVAL}]
   --tcp-keepalive-probes NUM failed probes before a socket is considered dead [${TCP_KEEPALIVE_PROBES}]
@@ -334,6 +337,14 @@ while [[ $# -gt 0 ]]; do
             SHUTDOWN_TIMEOUT="$2"
             shift 2
             ;;
+        --enable-tracking-repair)
+            TRACKING_REPAIR_ENABLED=1
+            shift
+            ;;
+        --disable-tracking-repair)
+            TRACKING_REPAIR_ENABLED=0
+            shift
+            ;;
         --tcp-keepalive-idle)
             TCP_KEEPALIVE_IDLE="$2"
             shift 2
@@ -593,6 +604,11 @@ if [[ "${API_ENABLED}" -eq 1 ]]; then
     API_ENABLED_TEXT="true"
 fi
 
+TRACKING_REPAIR_ENABLED_TEXT="false"
+if [[ "${TRACKING_REPAIR_ENABLED}" -eq 1 ]]; then
+    TRACKING_REPAIR_ENABLED_TEXT="true"
+fi
+
 if [[ ! -f "${CONFIG_FILE}" || "${OVERWRITE_CONFIG}" -eq 1 ]]; then
     cat >"${CONFIG_FILE}" <<CONFIG
 # Runtime options for ${SERVICE_NAME}.service.
@@ -644,6 +660,11 @@ client_idle_timeout = ${CLIENT_IDLE_TIMEOUT}
 # Seconds to wait for active scanner threads to stop during service shutdown.
 # Default: 5. Range: greater than 0.
 shutdown_timeout = ${SHUTDOWN_TIMEOUT}
+
+# Enables conservative tracking-number repair for short numeric failed scans.
+# Default: false. When true, a short failed scan can be repaired only if successful scans from the same day provide one unambiguous matching prefix.
+# Example: false for normal strict logging, true to repair likely truncated FedEx tracking scans.
+tracking_repair_enabled = ${TRACKING_REPAIR_ENABLED_TEXT}
 
 [logging]
 # Main troubleshooting log file for receiver startup, connections, and errors.
@@ -829,6 +850,9 @@ Troubleshooting log:
 
 Daily raw scan data logs:
   ${SCAN_DATA_LOG_DIR}/${SCAN_DATA_LOG_PREFIX}-YYYY-MM-DD.log
+
+Tracking number repair:
+  $([[ "${TRACKING_REPAIR_ENABLED}" -eq 1 ]] && echo "enabled" || echo "disabled")
 
 PostgreSQL scan logging:
   $([[ "${POSTGRESQL_ENABLED}" -eq 1 ]] && echo "enabled (${POSTGRESQL_TABLE})" || echo "disabled")

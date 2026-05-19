@@ -5,7 +5,7 @@ HF811 Daily FedEx Tracking TCP Listener
 Creates a new dated CSV file each day.
 
 Daily scan CSV format:
-    date,time,scanner_id,scanner_name,scanner_role,status,is_cross_scanner_duplicate,tracking
+    date,time,scanner_id,scanner_name,scanner_role,status,is_cross_scanner_duplicate,is_repaired,tracking
 
 Failed scans CSV:
     /scanner-logs/failed_scans.csv
@@ -22,7 +22,7 @@ Daily totals CSV format:
 Daily raw scan data log format:
     Event:<number> Success:<number> Failed:<number> Scanner:<id>
     ScannerEvent:<number> ScannerSuccess:<number> ScannerFailed:<number>
-    Status:<SUCCESS|FAILED> Time:<time> Barcode:<barcode>
+    Status:<SUCCESS|FAILED> Repaired:<true|false> Time:<time> Barcode:<barcode>
 
 Success rule:
     Barcode must be exactly 34 numeric digits.
@@ -44,6 +44,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from industrial_scanner_logger._version import __version__
 
@@ -71,6 +72,7 @@ DEFAULT_POSTGRESQL_RETRY_INTERVAL_SECONDS = 30.0
 DEFAULT_LAST_SCANNER_ID = ""
 LOG_BARCODE_PREVIEW_CHARS = 120
 MIN_MAX_BARCODE_CHARS = 64
+TRACKING_REPAIR_MIN_OVERLAP_CHARS = 4
 UNKNOWN_SCANNER_ID = "UNKNOWN"
 ALL_SCANNERS_ID = "ALL"
 SCANNER_ROLE_STANDARD = "standard"
@@ -83,6 +85,7 @@ DAILY_CSV_HEADER = [
     "scanner_role",
     "status",
     "is_cross_scanner_duplicate",
+    "is_repaired",
     "tracking",
 ]
 SAFE_FILE_PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -105,6 +108,7 @@ CONFIG_DEFAULTS = {
         "frame_idle_timeout": str(DEFAULT_FRAME_IDLE_TIMEOUT_SECONDS),
         "client_idle_timeout": str(DEFAULT_CLIENT_IDLE_TIMEOUT_SECONDS),
         "shutdown_timeout": str(DEFAULT_SHUTDOWN_TIMEOUT_SECONDS),
+        "tracking_repair_enabled": "false",
     },
     "logging": {
         "log_file": DEFAULT_LOG_FILE,
@@ -406,6 +410,10 @@ def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
             frame_idle_timeout=config.getfloat("receiver", "frame_idle_timeout"),
             client_idle_timeout=config.getfloat("receiver", "client_idle_timeout"),
             shutdown_timeout=config.getfloat("receiver", "shutdown_timeout"),
+            tracking_repair_enabled=config.getboolean(
+                "receiver",
+                "tracking_repair_enabled",
+            ),
             log_file=config.get("logging", "log_file"),
             scan_data_log_dir=config.get("logging", "scan_data_log_dir"),
             scan_data_log_prefix=config.get("logging", "scan_data_log_prefix"),
@@ -534,8 +542,9 @@ class PostgreSQLScanLogger:
         self.insert_sql = sql.SQL(
             "INSERT INTO {}.{} "
             "(scan_date, scan_time, scanner_id, scanner_name, scanner_role, "
-            "last_scanner_id, is_cross_scanner_duplicate, tracking_number) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+            "last_scanner_id, is_cross_scanner_duplicate, is_repaired, "
+            "tracking_number) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
         ).format(
             sql.Identifier(self.schema_name),
             sql.Identifier(self.relation_name),
@@ -591,6 +600,7 @@ class PostgreSQLScanLogger:
         scanner_role: str,
         last_scanner_id: str,
         is_cross_scanner_duplicate: bool,
+        is_repaired: bool,
         scan_date: str,
         scan_time: str,
     ) -> bool:
@@ -615,6 +625,7 @@ class PostgreSQLScanLogger:
                         scanner_role,
                         db_last_scanner_id,
                         is_cross_scanner_duplicate,
+                        is_repaired,
                         tracking_number,
                     ),
                 )
@@ -649,6 +660,7 @@ class DailyCsvLogger:
         postgresql_logger=None,
         last_scanner_id: str = DEFAULT_LAST_SCANNER_ID,
         scanner_names=None,
+        tracking_repair_enabled: bool = False,
     ):
         self.output_dir = output_dir
         self.file_prefix = validate_file_prefix(file_prefix)
@@ -681,6 +693,7 @@ class DailyCsvLogger:
             "last_scanner_id",
         )
         self.scanner_names = dict(scanner_names or {})
+        self.tracking_repair_enabled = bool(tracking_repair_enabled)
         self.lock = threading.Lock()
 
         self.current_date = None
@@ -780,6 +793,55 @@ class DailyCsvLogger:
 
         return False
 
+    def _successful_tracking_numbers_seen_today(self) -> set[str]:
+        tracking_numbers = set()
+
+        for seen_barcodes in self.seen_success_barcodes_by_scanner.values():
+            tracking_numbers.update(seen_barcodes)
+
+        return tracking_numbers
+
+    def _repair_tracking_number(self, barcode: str) -> Optional[str]:
+        if not self.tracking_repair_enabled:
+            return None
+
+        if (
+            not barcode
+            or barcode == self.no_read_message
+            or not barcode.isdigit()
+            or len(barcode) >= self.success_length
+            or len(barcode) < TRACKING_REPAIR_MIN_OVERLAP_CHARS
+        ):
+            return None
+
+        missing_prefix_length = self.success_length - len(barcode)
+        candidates = set()
+
+        for seen_tracking in self._successful_tracking_numbers_seen_today():
+            if len(seen_tracking) != self.success_length or not seen_tracking.isdigit():
+                continue
+
+            expected_overlap = seen_tracking[
+                missing_prefix_length:
+                missing_prefix_length + TRACKING_REPAIR_MIN_OVERLAP_CHARS
+            ]
+
+            if (
+                len(expected_overlap) < TRACKING_REPAIR_MIN_OVERLAP_CHARS
+                or not barcode.startswith(expected_overlap)
+            ):
+                continue
+
+            candidate = seen_tracking[:missing_prefix_length] + barcode
+
+            if self._classify_scan(candidate) == "SUCCESS":
+                candidates.add(candidate)
+
+        if len(candidates) != 1:
+            return None
+
+        return next(iter(candidates))
+
     def _recalculate_total_counts(self):
         self.event_count = sum(
             counts["total_events"] for counts in self.scanner_counts.values()
@@ -873,7 +935,7 @@ class DailyCsvLogger:
             date,time,scanner_id,status,tracking
 
         it is migrated to:
-            date,time,scanner_id,scanner_name,scanner_role,status,is_cross_scanner_duplicate,tracking
+            date,time,scanner_id,scanner_name,scanner_role,status,is_cross_scanner_duplicate,is_repaired,tracking
         """
         expected_header = DAILY_CSV_HEADER
 
@@ -938,6 +1000,12 @@ class DailyCsvLogger:
                         if is_cross_scanner_duplicate in {"1", "true", "yes"}
                         else "false"
                     )
+                    is_repaired = clean_barcode(row.get("is_repaired", "")).lower()
+                    repaired_text = (
+                        "true"
+                        if is_repaired in {"1", "true", "yes"}
+                        else "false"
+                    )
                     writer.writerow([
                         date_str,
                         time_str,
@@ -946,6 +1014,7 @@ class DailyCsvLogger:
                         scanner_role,
                         status,
                         duplicate_text,
+                        repaired_text,
                         csv_tracking,
                     ])
 
@@ -1395,6 +1464,25 @@ class DailyCsvLogger:
             scanner_name = self._scanner_name(scanner_id)
             scanner_role = self._scanner_role(scanner_id)
             is_cross_scanner_duplicate = False
+            is_repaired = False
+            original_barcode = barcode
+
+            if status != "SUCCESS":
+                repaired_barcode = self._repair_tracking_number(barcode)
+
+                if repaired_barcode is not None:
+                    barcode = repaired_barcode
+                    status = self._classify_scan(barcode)
+                    is_repaired = status == "SUCCESS"
+
+                    if is_repaired:
+                        SCRIPT_LOGGER.info(
+                            "Tracking number repaired scanner_id=%s "
+                            "original=%s repaired=%s",
+                            scanner_id,
+                            truncate_for_log(original_barcode),
+                            truncate_for_log(barcode),
+                        )
 
             if status == "SUCCESS":
                 if barcode in seen_success_barcodes and not LOG_DUPLICATE_SUCCESS_SCANS:
@@ -1433,6 +1521,7 @@ class DailyCsvLogger:
                     scanner_role,
                     status,
                     str(is_cross_scanner_duplicate).lower(),
+                    str(is_repaired).lower(),
                     csv_tracking,
                 ])
 
@@ -1453,6 +1542,7 @@ class DailyCsvLogger:
                 f"ScannerFailed:{scanner_counts['failed_scans']} "
                 f"Status:{status} "
                 f"CrossScannerDuplicate:{str(is_cross_scanner_duplicate).lower()} "
+                f"Repaired:{str(is_repaired).lower()} "
                 f"Time:{time_str} "
                 f"Barcode:{truncate_for_log(barcode)}"
             )
@@ -1464,6 +1554,7 @@ class DailyCsvLogger:
                 scanner_role,
                 self.last_scanner_id,
                 is_cross_scanner_duplicate,
+                is_repaired,
                 date_str,
                 time_str,
             )
@@ -1794,11 +1885,16 @@ def main():
         postgresql_logger=postgresql_logger,
         last_scanner_id=args.last_scanner_id,
         scanner_names=args.scanner_names,
+        tracking_repair_enabled=args.tracking_repair_enabled,
     )
 
     SCRIPT_LOGGER.info("Listening on %s:%s", args.host, args.port)
     SCRIPT_LOGGER.info("No-read message treated as FAILED: %s", args.no_read_message)
     SCRIPT_LOGGER.info("Success rule: exactly %s numeric digits", args.success_length)
+    SCRIPT_LOGGER.info(
+        "Tracking number repair: %s",
+        "enabled" if args.tracking_repair_enabled else "disabled",
+    )
     SCRIPT_LOGGER.info(
         "Maximum barcode frame length: %s characters",
         args.max_barcode_chars,

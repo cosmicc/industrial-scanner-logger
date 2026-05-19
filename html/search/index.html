@@ -49,6 +49,7 @@
               <th>Last Scanner ID</th>
               <th>Status</th>
               <th>Duplicate</th>
+              <th>Repaired</th>
               <th>Tracking Number</th>
               <th>Barcode</th>
               <th>Barcode Length</th>
@@ -57,7 +58,7 @@
           </thead>
           <tbody id="search-results">
             <tr>
-              <td colspan="13">Search results will appear here.</td>
+              <td colspan="14">Search results will appear here.</td>
             </tr>
           </tbody>
         </table>
@@ -183,6 +184,7 @@
         const statusClass = row.is_success ? "success" : "failed";
         const statusText = row.is_success ? "SUCCESS" : "FAILED";
         const duplicateText = row.is_cross_scanner_duplicate ? "Yes" : "No";
+        const repairedText = row.is_repaired ? "Yes" : "No";
 
         tr.innerHTML = `
           <td>${formatValue(row.id)}</td>
@@ -194,6 +196,7 @@
           <td>${formatValue(row.last_scanner_id)}</td>
           <td class="${statusClass}">${statusText}</td>
           <td>${duplicateText}</td>
+          <td>${repairedText}</td>
           <td>${escapeHtml(row.tracking_number ?? "")}</td>
           <td>${escapeHtml(row.barcode ?? "")}</td>
           <td>${formatValue(row.barcode_length)}</td>
@@ -208,7 +211,7 @@
       resultsBody.innerHTML = "";
       const tr = document.createElement("tr");
       const td = document.createElement("td");
-      td.colSpan = 13;
+      td.colSpan = 14;
       td.textContent = message;
 
       if (isError) {

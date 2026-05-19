@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
 
     is_cross_scanner_duplicate BOOLEAN NOT NULL DEFAULT false,
 
+    is_repaired BOOLEAN NOT NULL DEFAULT false,
+
     tracking_number TEXT NOT NULL CHECK (btrim(tracking_number, E' \t\r\n') <> ''),
 
     barcode TEXT GENERATED ALWAYS AS (
@@ -61,6 +63,9 @@ ALTER TABLE scanner_logger.scan_events
 
 ALTER TABLE scanner_logger.scan_events
     ADD COLUMN IF NOT EXISTS is_cross_scanner_duplicate BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE scanner_logger.scan_events
+    ADD COLUMN IF NOT EXISTS is_repaired BOOLEAN NOT NULL DEFAULT false;
 
 DO $$
 BEGIN
@@ -165,6 +170,7 @@ SELECT
     scanner_role,
     last_scanner_id,
     is_cross_scanner_duplicate,
+    is_repaired,
     tracking_number,
     barcode,
     barcode_length,
@@ -182,6 +188,7 @@ SELECT
     scanner_role,
     last_scanner_id,
     is_cross_scanner_duplicate,
+    is_repaired,
     tracking_number,
     barcode,
     barcode_length
@@ -230,7 +237,8 @@ SELECT
     ) AS scan_sequence,
     scanner_counts.scanner_count,
     scanner_counts.scanner_count > 1 AS has_cross_scanner_duplicate,
-    events.is_cross_scanner_duplicate
+    events.is_cross_scanner_duplicate,
+    events.is_repaired
 FROM scanner_logger.scan_events AS events
 JOIN scanner_counts
   ON scanner_counts.scan_date = events.scan_date
