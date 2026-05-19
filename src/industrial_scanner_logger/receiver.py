@@ -5,7 +5,7 @@ HF811 Daily FedEx Tracking TCP Listener
 Creates a new dated CSV file each day.
 
 Daily scan CSV format:
-    date,time,scanner_id,status,tracking
+    date,time,scanner_id,scanner_name,scanner_role,status,is_cross_scanner_duplicate,tracking
 
 Failed scans CSV:
     /scanner-logs/failed_scans.csv
@@ -75,7 +75,16 @@ UNKNOWN_SCANNER_ID = "UNKNOWN"
 ALL_SCANNERS_ID = "ALL"
 SCANNER_ROLE_STANDARD = "standard"
 SCANNER_ROLE_LAST = "last"
-
+DAILY_CSV_HEADER = [
+    "date",
+    "time",
+    "scanner_id",
+    "scanner_name",
+    "scanner_role",
+    "status",
+    "is_cross_scanner_duplicate",
+    "tracking",
+]
 SAFE_FILE_PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 SCANNER_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -694,6 +703,7 @@ class DailyCsvLogger:
 
         self._ensure_totals_file()
         self._ensure_failed_scans_file()
+        self._ensure_existing_daily_csv_headers()
         self._write_missing_prior_totals()
         self._rotate_if_needed()
 
@@ -713,6 +723,18 @@ class DailyCsvLogger:
     def _scan_data_log_path_for_date(self, date_str: str) -> Path:
         filename = f"{self.scan_data_log_prefix}-{date_str}.log"
         return self.scan_data_log_dir / filename
+
+    def _daily_csv_paths(self):
+        pattern = f"{self.file_prefix}_*.csv"
+
+        for csv_path in sorted(self.output_dir.glob(pattern)):
+            match = re.match(
+                rf"^{re.escape(self.file_prefix)}_(\d{{4}}-\d{{2}}-\d{{2}})\.csv$",
+                csv_path.name,
+            )
+
+            if match:
+                yield csv_path, match.group(1)
 
     def _migration_temp_path(self, path: Path) -> Path:
         return path.with_name(f".{path.name}.migrating-{self._timestamp_string()}")
@@ -846,22 +868,14 @@ class DailyCsvLogger:
         """
         Ensure the daily CSV has the latest header.
 
-        If an older daily file exists with:
+        If an older daily file exists with either:
             date,time,tracking
+            date,time,scanner_id,status,tracking
 
         it is migrated to:
             date,time,scanner_id,scanner_name,scanner_role,status,is_cross_scanner_duplicate,tracking
         """
-        expected_header = [
-            "date",
-            "time",
-            "scanner_id",
-            "scanner_name",
-            "scanner_role",
-            "status",
-            "is_cross_scanner_duplicate",
-            "tracking",
-        ]
+        expected_header = DAILY_CSV_HEADER
 
         if not csv_path.exists() or csv_path.stat().st_size == 0:
             with csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -942,6 +956,16 @@ class DailyCsvLogger:
             raise
 
         SCRIPT_LOGGER.info("Migrated daily CSV header: %s", csv_path)
+
+    def _ensure_existing_daily_csv_headers(self):
+        """
+        Upgrade every existing dated daily CSV before loading state or totals.
+
+        This repairs active same-day files and historical files that were created
+        by older receiver versions with the legacy 3-column or 5-column header.
+        """
+        for csv_path, _file_date in self._daily_csv_paths():
+            self._ensure_daily_csv_header(csv_path)
 
     def _ensure_totals_file(self):
         """
@@ -1262,21 +1286,7 @@ class DailyCsvLogger:
         """
         today = self._today_string()
 
-        pattern = f"{self.file_prefix}_*.csv"
-
-        for csv_path in sorted(self.output_dir.glob(pattern)):
-            filename = csv_path.name
-
-            match = re.match(
-                rf"^{re.escape(self.file_prefix)}_(\d{{4}}-\d{{2}}-\d{{2}})\.csv$",
-                filename,
-            )
-
-            if not match:
-                continue
-
-            file_date = match.group(1)
-
+        for csv_path, file_date in self._daily_csv_paths():
             # Only finalize prior days, never today's active file.
             if file_date >= today:
                 continue

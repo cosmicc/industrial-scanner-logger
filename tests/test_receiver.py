@@ -5,6 +5,7 @@ import tempfile
 import threading
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime
 from io import StringIO
 from pathlib import Path
 
@@ -15,6 +16,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from industrial_scanner_logger import __version__  # noqa: E402
 from industrial_scanner_logger.receiver import (  # noqa: E402
     DailyCsvLogger,
+    DAILY_CSV_HEADER,
     clean_barcode,
     configure_script_logging,
     handle_client,
@@ -305,6 +307,44 @@ log_level = warning
                     }
                 ],
             )
+
+    def test_five_column_daily_csv_migrates_to_rich_header(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            output_dir = Path(temp_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            today = datetime.now().strftime("%Y-%m-%d")
+            csv_path = output_dir / f"Test_{today}.csv"
+            valid_tracking = "6" * 34
+
+            with csv_path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["date", "time", "scanner_id", "status", "tracking"])
+                writer.writerow([today, "08:00:00", "21", "SUCCESS", valid_tracking])
+
+            DailyCsvLogger(
+                output_dir=output_dir,
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                last_scanner_id="21",
+                scanner_names={"21": "Last Scanner"},
+            )
+
+            with csv_path.open(newline="", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                header = next(reader)
+
+            self.assertEqual(header, DAILY_CSV_HEADER)
+
+            with csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(rows[0]["scanner_id"], "21")
+            self.assertEqual(rows[0]["scanner_name"], "Last Scanner")
+            self.assertEqual(rows[0]["scanner_role"], "last")
+            self.assertEqual(rows[0]["status"], "SUCCESS")
+            self.assertEqual(rows[0]["is_cross_scanner_duplicate"], "false")
+            self.assertEqual(rows[0]["tracking"], valid_tracking)
 
     def test_client_handler_closes_oversized_undelimited_frame(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
