@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${EUID}" -ne 0 ]]; then
+    echo "update-services must be run as root. Re-run it with sudo." >&2
+    exit 1
+fi
+
+INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
+NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/scanner-site}"
+
+echo "Updating database schema..."
+sudo -u postgres psql -d scannerlogger -f "${INSTALL_DIR}/db/schema.sql" > /dev/null 2>&1
+echo "Refreshing HTML data..."
+cp "${INSTALL_DIR}/html/." "${NGINX_WEB_ROOT}/" -R > /dev/null 2>&1
+echo "Restarting Scanner Service..."
+systemctl restart industrial-scanner-logger > /dev/null 2>&1
+echo "Restarting API Service..."
+systemctl restart industrial-scanner-logger-api > /dev/null 2>&1
+echo "Complete."

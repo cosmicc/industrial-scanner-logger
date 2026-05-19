@@ -13,6 +13,12 @@ LOG_FILE="${LOG_FILE:-/var/log/industrial-scanner-logger.log}"
 SCAN_DATA_LOG_DIR="${SCAN_DATA_LOG_DIR:-/var/log/industrial-scanner-logger}"
 NGINX_SITE_NAME="${NGINX_SITE_NAME:-industrial-scanner-logger}"
 NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/scanner-site}"
+UPDATE_SERVICES_BIN="${UPDATE_SERVICES_BIN:-/usr/local/bin/update-services}"
+
+if [[ "${EUID}" -ne 0 ]]; then
+    echo "This uninstaller must be run as root. Re-run it with sudo." >&2
+    exit 1
+fi
 
 usage() {
     cat <<USAGE
@@ -117,11 +123,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ "${EUID}" -ne 0 ]]; then
-    echo "This uninstaller must be run as root. Re-run it with sudo." >&2
-    exit 1
-fi
-
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 API_UNIT_FILE="/etc/systemd/system/${API_SERVICE_NAME}.service"
 NGINX_SITE_FILE="/etc/nginx/sites-available/${NGINX_SITE_NAME}.conf"
@@ -140,6 +141,7 @@ rm -f "${UNIT_FILE}"
 rm -f "${API_UNIT_FILE}"
 rm -f "${CONFIG_FILE}"
 rm -f "${LEGACY_ENV_FILE}"
+rm -f "${UPDATE_SERVICES_BIN}"
 rmdir "${NGINX_WEB_ROOT}" >/dev/null 2>&1 || true
 
 if command -v systemctl >/dev/null 2>&1; then
@@ -160,6 +162,7 @@ Removed:
   ${API_UNIT_FILE}
   ${CONFIG_FILE}
   ${LEGACY_ENV_FILE}
+  ${UPDATE_SERVICES_BIN}
   ${NGINX_SITE_FILE}
   ${NGINX_SITE_LINK}
   ufw firewall/package

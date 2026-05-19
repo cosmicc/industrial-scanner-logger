@@ -195,7 +195,6 @@ sudo systemctl status industrial-scanner-logger-api
 sudo systemctl status nginx
 sudo journalctl -u industrial-scanner-logger -f
 sudo journalctl -u industrial-scanner-logger-api -f
-scripts/live-scanner-log
 sudo tail -f /var/log/industrial-scanner-logger.log
 sudo tail -f /var/log/industrial-scanner-logger/scanner-log-data-$(date +%F).log
 sudo nginx -t

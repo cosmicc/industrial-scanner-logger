@@ -15,7 +15,6 @@ All notable changes to this project will be documented in this file.
 - Add troubleshooting script logging to console and `/var/log/industrial-scanner-logger.log`.
 - Log service startup, version, scanner connections, scanner disconnections, warnings, and errors without writing raw scanner data to the script log.
 - Create and preserve the troubleshooting log from the Ubuntu service installer.
-- Add executable `scripts/live-scanner-log` helper for following service journal output.
 
 ## 1.1.0 - 2026-05-17
 

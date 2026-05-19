@@ -44,6 +44,7 @@ NGINX_LISTEN="${NGINX_LISTEN:-80 default_server}"
 NGINX_SERVER_NAME="${NGINX_SERVER_NAME:-_}"
 NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/scanner-site}"
 NGINX_DISABLE_DEFAULT_SITE="${NGINX_DISABLE_DEFAULT_SITE:-1}"
+UPDATE_SERVICES_BIN="${UPDATE_SERVICES_BIN:-/usr/local/bin/update-services}"
 START_SERVICE="${START_SERVICE:-1}"
 OVERWRITE_CONFIG="${OVERWRITE_CONFIG:-0}"
 APT_UPDATED=0
@@ -477,6 +478,7 @@ SERVICE_TEMPLATE="${PROJECT_ROOT}/systemd/industrial-scanner-logger.service"
 API_SERVICE_TEMPLATE="${PROJECT_ROOT}/systemd/industrial-scanner-logger-api.service"
 NGINX_TEMPLATE="${PROJECT_ROOT}/nginx/industrial-scanner-logger.conf"
 HTML_SOURCE_DIR="${PROJECT_ROOT}/html"
+UPDATE_SERVICES_SOURCE="${PROJECT_ROOT}/scripts/update-services"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 API_UNIT_FILE="/etc/systemd/system/${API_SERVICE_NAME}.service"
 NGINX_AVAILABLE_DIR="/etc/nginx/sites-available"
@@ -518,6 +520,11 @@ fi
 
 if [[ "${NGINX_ENABLED}" -eq 1 && ! -f "${NGINX_TEMPLATE}" ]]; then
     echo "Missing nginx site template: ${NGINX_TEMPLATE}" >&2
+    exit 1
+fi
+
+if [[ ! -f "${UPDATE_SERVICES_SOURCE}" ]]; then
+    echo "Missing update helper script: ${UPDATE_SERVICES_SOURCE}" >&2
     exit 1
 fi
 
@@ -580,6 +587,8 @@ fi
 "${PYTHON_BIN}" -m pip install --no-deps "${INSTALL_DIR_REAL}"
 chown -R root:root "${INSTALL_DIR}"
 chmod -R u=rwX,go=rX "${INSTALL_DIR}"
+install -d -o root -g root -m 0755 "$(dirname -- "${UPDATE_SERVICES_BIN}")"
+install -o root -g root -m 0755 "${UPDATE_SERVICES_SOURCE}" "${UPDATE_SERVICES_BIN}"
 
 install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${OUTPUT_DIR}"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${SCAN_DATA_LOG_DIR}"
@@ -866,10 +875,14 @@ Nginx API proxy:
 Web root:
   ${NGINX_WEB_ROOT}
 
+Update helper:
+  ${UPDATE_SERVICES_BIN}
+
 UFW firewall:
   enabled; incoming allow list is 22/tcp, 55256/tcp, 80/tcp, 443/tcp
 
 Useful commands:
+  sudo update-services
   sudo systemctl status ${SERVICE_NAME}
   sudo systemctl status ${API_SERVICE_NAME}
   sudo systemctl status nginx
