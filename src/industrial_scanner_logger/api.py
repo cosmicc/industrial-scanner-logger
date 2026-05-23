@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 import sys
@@ -8,6 +9,7 @@ from typing import Optional
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from psycopg import sql
 from psycopg.rows import dict_row
 
@@ -17,7 +19,6 @@ from industrial_scanner_logger.receiver import (
     load_receiver_config,
     validate_positive_int,
 )
-
 
 API_TITLE = "Industrial Scanner Logger API"
 DEFAULT_API_ROOT_PATH = "/api"
@@ -29,6 +30,7 @@ API_SERVICE_UNIT = "industrial-scanner-logger-api.service"
 SCANNER_SCRIPT_LOG_PATH = Path("/var/log/industrial-scanner-logger.log")
 CURRENT_SCAN_RATE_WINDOW_SECONDS = 60
 CURRENT_SCAN_HOUR_WINDOW_SECONDS = 3600
+DAILY_CSV_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 SCAN_EVENT_COLUMNS = [
     "id",
@@ -38,6 +40,7 @@ SCAN_EVENT_COLUMNS = [
     "scanner_name",
     "scanner_role",
     "last_scanner_id",
+    "is_duplicate",
     "is_cross_scanner_duplicate",
     "is_repaired",
     "tracking_number",
@@ -86,6 +89,7 @@ VIEW_DEFINITIONS = {
             "scanner_name",
             "scanner_role",
             "last_scanner_id",
+            "is_duplicate",
             "is_cross_scanner_duplicate",
             "is_repaired",
             "tracking_number",
@@ -109,6 +113,7 @@ VIEW_DEFINITIONS = {
             "scanner_name",
             "scanner_role",
             "last_scanner_id",
+            "is_duplicate",
             "is_cross_scanner_duplicate",
             "is_repaired",
             "tracking_number",
@@ -151,6 +156,7 @@ VIEW_DEFINITIONS = {
             "barcode",
             "scan_sequence",
             "scanner_count",
+            "is_duplicate",
             "has_cross_scanner_duplicate",
             "is_cross_scanner_duplicate",
             "is_repaired",
@@ -220,6 +226,7 @@ def build_dashboard_health(config):
                     scanner_name,
                     scanner_role,
                     last_scanner_id,
+                    is_duplicate,
                     is_cross_scanner_duplicate,
                     is_repaired,
                     tracking_number,
@@ -245,6 +252,7 @@ def build_dashboard_health(config):
                     scanner_name,
                     scanner_role,
                     last_scanner_id,
+                    is_duplicate,
                     is_cross_scanner_duplicate,
                     is_repaired,
                     tracking_number,
@@ -336,6 +344,7 @@ def dashboard_total_row(scan_date: date, row: Optional[dict] = None) -> dict:
         "scan_date": scan_date.isoformat(),
         "successful_scans": int(row.get("successful_scans") or 0),
         "failed_scans": int(row.get("failed_scans") or 0),
+        "duplicate_scans": int(row.get("duplicate_scans") or 0),
     }
 
 
@@ -350,7 +359,8 @@ def fetch_dashboard_daily_totals(
         SELECT
             scan_date,
             count(*) FILTER (WHERE is_success) AS successful_scans,
-            count(*) FILTER (WHERE is_success = false) AS failed_scans
+            count(*) FILTER (WHERE is_success = false) AS failed_scans,
+            count(*) FILTER (WHERE is_duplicate) AS duplicate_scans
         FROM scanner_logger.scan_events
         WHERE scan_date IN (%s, %s)
         GROUP BY scan_date
@@ -407,6 +417,66 @@ def fetch_current_scan_rate(db) -> dict:
         int(row.get("scan_count") or 0),
         int(row.get("hour_scan_count") or 0),
     )
+
+
+def daily_csv_log_path(config, scan_date: date) -> Path:
+    if scan_date >= date.today():
+        raise HTTPException(status_code=404, detail="daily CSV is not finalized")
+
+    filename = f"{config.prefix}_{scan_date.isoformat()}.csv"
+    csv_path = Path(config.output_dir) / filename
+
+    if not csv_path.exists() or not csv_path.is_file():
+        raise HTTPException(status_code=404, detail="daily CSV not found")
+
+    return csv_path
+
+
+def daily_csv_log_row(config, csv_path: Path, scan_date: date) -> dict:
+    stat = csv_path.stat()
+    return {
+        "scan_date": scan_date.isoformat(),
+        "filename": csv_path.name,
+        "size_bytes": stat.st_size,
+        "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(
+            timespec="seconds"
+        ),
+        "download_url": f"{API_VERSION_PREFIX}/logs/daily-csv/{scan_date.isoformat()}",
+    }
+
+
+def list_completed_daily_csv_logs(config, current_day: Optional[date] = None) -> list:
+    current_day = current_day or date.today()
+    output_dir = Path(config.output_dir)
+
+    if not output_dir.exists() or not output_dir.is_dir():
+        return []
+
+    csv_pattern = re.compile(
+        rf"^{re.escape(config.prefix)}_(\d{{4}}-\d{{2}}-\d{{2}})\.csv$"
+    )
+    rows = []
+
+    for csv_path in output_dir.iterdir():
+        match = csv_pattern.match(csv_path.name)
+        if match is None or not csv_path.is_file():
+            continue
+
+        date_text = match.group(1)
+        if not DAILY_CSV_DATE_RE.match(date_text):
+            continue
+
+        try:
+            scan_date = date.fromisoformat(date_text)
+        except ValueError:
+            continue
+
+        if scan_date >= current_day:
+            continue
+
+        rows.append(daily_csv_log_row(config, csv_path, scan_date))
+
+    return sorted(rows, key=lambda row: row["scan_date"], reverse=True)
 
 
 def fetch_one(db, query, params):
@@ -550,6 +620,7 @@ def scanner_id_from_ipv4_host(host: str) -> int | None:
 
     return values[-1]
 
+
 def read_last_log_lines(log_path: Path, line_count: int = 10) -> dict:
     try:
         if not log_path.exists():
@@ -578,6 +649,7 @@ def read_last_log_lines(log_path: Path, line_count: int = 10) -> dict:
             "lines": [],
         }
 
+
 def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
     normalized_root_path = normalize_root_path(root_path)
     app = FastAPI(
@@ -600,6 +672,11 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans/{{scan_id}}"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/views"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/views/{{view_name}}"),
+                external_path(request_root_path, f"{API_VERSION_PREFIX}/logs/daily-csv"),
+                external_path(
+                    request_root_path,
+                    f"{API_VERSION_PREFIX}/logs/daily-csv/{{scan_date}}",
+                ),
             ],
         }
 
@@ -677,10 +754,26 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             offset=offset,
         )
         return fetch_all(db, query, params)
-    
+
     @app.get(f"{API_VERSION_PREFIX}/dashboard/health")
     def dashboard_health(config=Depends(get_config)):
         return build_dashboard_health(config)
+
+    @app.get(f"{API_VERSION_PREFIX}/logs/daily-csv")
+    def list_daily_csv_logs(config=Depends(get_config)):
+        return {
+            "current_day_excluded": date.today().isoformat(),
+            "logs": list_completed_daily_csv_logs(config),
+        }
+
+    @app.get(f"{API_VERSION_PREFIX}/logs/daily-csv/{{scan_date}}")
+    def download_daily_csv_log(scan_date: date, config=Depends(get_config)):
+        csv_path = daily_csv_log_path(config, scan_date)
+        return FileResponse(
+            csv_path,
+            media_type="text/csv",
+            filename=csv_path.name,
+        )
 
     return app
 

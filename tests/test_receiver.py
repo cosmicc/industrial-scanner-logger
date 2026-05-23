@@ -9,14 +9,13 @@ from datetime import datetime
 from io import StringIO
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from industrial_scanner_logger import __version__  # noqa: E402
 from industrial_scanner_logger.receiver import (  # noqa: E402
-    DailyCsvLogger,
     DAILY_CSV_HEADER,
+    DailyCsvLogger,
     clean_barcode,
     configure_script_logging,
     handle_client,
@@ -43,12 +42,14 @@ class FakePostgreSQLLogger:
         scanner_name,
         scanner_role,
         last_scanner_id,
+        is_duplicate,
         is_cross_scanner_duplicate,
         is_repaired,
         scan_date,
         scan_time,
         raw_tracking_number=None,
         raw_barcode=None,
+        raw_is_duplicate=False,
         raw_is_cross_scanner_duplicate=False,
         write_scan_event=True,
     ):
@@ -59,6 +60,7 @@ class FakePostgreSQLLogger:
             "scanner_name": scanner_name,
             "scanner_role": scanner_role,
             "last_scanner_id": last_scanner_id,
+            "is_duplicate": raw_is_duplicate,
             "is_cross_scanner_duplicate": raw_is_cross_scanner_duplicate,
             "is_repaired": False,
             "tracking_number": raw_tracking_number or barcode,
@@ -75,6 +77,7 @@ class FakePostgreSQLLogger:
             "scanner_name": scanner_name,
             "scanner_role": scanner_role,
             "last_scanner_id": last_scanner_id,
+            "is_duplicate": is_duplicate,
             "is_cross_scanner_duplicate": is_cross_scanner_duplicate,
             "is_repaired": is_repaired,
             "tracking_number": tracking_number,
@@ -84,6 +87,28 @@ class FakePostgreSQLLogger:
 
     def close(self):
         self.closed = True
+
+
+class FakeDuplicatePostgreSQLLogger(FakePostgreSQLLogger):
+    def __init__(self, duplicate_flags):
+        super().__init__()
+        self.duplicate_flags = duplicate_flags
+        self.duplicate_calls = []
+
+    def duplicate_flags_for_success(
+        self,
+        scanner_id,
+        tracking_number,
+        scan_date,
+        scan_time,
+    ):
+        self.duplicate_calls.append({
+            "scanner_id": scanner_id,
+            "tracking_number": tracking_number,
+            "scan_date": scan_date,
+            "scan_time": scan_time,
+        })
+        return self.duplicate_flags
 
 
 class FakeSocket:
@@ -370,6 +395,7 @@ log_level = warning
             self.assertEqual(rows[0]["scanner_name"], "Last Scanner")
             self.assertEqual(rows[0]["scanner_role"], "last")
             self.assertEqual(rows[0]["status"], "SUCCESS")
+            self.assertEqual(rows[0]["is_duplicate"], "false")
             self.assertEqual(rows[0]["is_cross_scanner_duplicate"], "false")
             self.assertEqual(rows[0]["is_repaired"], "false")
             self.assertEqual(rows[0]["tracking"], valid_tracking)
@@ -470,7 +496,7 @@ log_level = warning
             self.assertEqual(rows[0]["scanner_id"], "21")
             self.assertEqual(rows[0]["status"], "SUCCESS")
 
-    def test_duplicate_success_rule_is_per_scanner(self):
+    def test_immediate_repeated_successes_are_logged_without_duplicate_flag(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
             logger = DailyCsvLogger(
                 output_dir=Path(temp_dir),
@@ -485,15 +511,20 @@ log_level = warning
             logger.write_scan_event(valid_tracking, "20")
             logger.write_scan_event(valid_tracking, "21")
 
-            self.assertEqual(logger.event_count, 2)
-            self.assertEqual(logger.success_count, 2)
+            self.assertEqual(logger.event_count, 3)
+            self.assertEqual(logger.success_count, 3)
             self.assertEqual(logger.failed_count, 0)
 
             with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
                 rows = list(csv.DictReader(f))
 
-            self.assertEqual([row["scanner_id"] for row in rows], ["20", "21"])
-            self.assertEqual([row["tracking"] for row in rows], [valid_tracking] * 2)
+            self.assertEqual([row["scanner_id"] for row in rows], ["20", "20", "21"])
+            self.assertEqual([row["tracking"] for row in rows], [valid_tracking] * 3)
+            self.assertEqual([row["is_duplicate"] for row in rows], ["false"] * 3)
+            self.assertEqual(
+                [row["is_cross_scanner_duplicate"] for row in rows],
+                ["false"] * 3,
+            )
 
             logger._append_scan_totals_for_day("2026-05-16", logger.scanner_counts)
 
@@ -506,8 +537,8 @@ log_level = warning
                     {
                         "date": "2026-05-16",
                         "scanner_id": "20",
-                        "total_events": "1",
-                        "successful_scans": "1",
+                        "total_events": "2",
+                        "successful_scans": "2",
                         "failed_scans": "0",
                     },
                     {
@@ -520,11 +551,97 @@ log_level = warning
                     {
                         "date": "2026-05-16",
                         "scanner_id": "ALL",
-                        "total_events": "2",
-                        "successful_scans": "2",
+                        "total_events": "3",
+                        "successful_scans": "3",
                         "failed_scans": "0",
                     },
                 ],
+            )
+
+    def test_same_scanner_duplicate_requires_three_different_successes_between_scans(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+            )
+
+            tracking_a = "1" * 34
+            tracking_b = "2" * 34
+            tracking_c = "3" * 34
+            tracking_d = "4" * 34
+
+            logger.write_scan_event(tracking_a, "20")
+            logger.write_scan_event(tracking_b, "20")
+            logger.write_scan_event(tracking_c, "20")
+            logger.write_scan_event(tracking_d, "20")
+            logger.write_scan_event(tracking_a, "20")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(rows[-1]["tracking"], tracking_a)
+            self.assertEqual(rows[-1]["is_duplicate"], "true")
+            self.assertEqual(rows[-1]["is_cross_scanner_duplicate"], "false")
+
+    def test_same_scanner_repeat_before_three_different_successes_is_not_duplicate(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+            )
+
+            tracking_a = "1" * 34
+            tracking_b = "2" * 34
+            tracking_c = "3" * 34
+
+            logger.write_scan_event(tracking_a, "20")
+            logger.write_scan_event(tracking_b, "20")
+            logger.write_scan_event(tracking_c, "20")
+            logger.write_scan_event(tracking_a, "20")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(rows[-1]["tracking"], tracking_a)
+            self.assertEqual(rows[-1]["is_duplicate"], "false")
+            self.assertEqual(rows[-1]["is_cross_scanner_duplicate"], "false")
+
+    def test_duplicate_flags_can_come_from_postgresql_month_lookup(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            postgresql_logger = FakeDuplicatePostgreSQLLogger((True, True))
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                postgresql_logger=postgresql_logger,
+            )
+
+            valid_tracking = "1" * 34
+
+            logger.write_scan_event(valid_tracking, "21")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(rows[0]["is_duplicate"], "true")
+            self.assertEqual(rows[0]["is_cross_scanner_duplicate"], "true")
+            self.assertEqual(postgresql_logger.rows[0]["is_duplicate"], True)
+            self.assertEqual(
+                postgresql_logger.rows[0]["is_cross_scanner_duplicate"],
+                True,
+            )
+            self.assertEqual(
+                postgresql_logger.duplicate_calls[0]["scanner_id"],
+                "21",
+            )
+            self.assertEqual(
+                postgresql_logger.duplicate_calls[0]["tracking_number"],
+                valid_tracking,
             )
 
     def test_postgresql_logger_receives_final_and_raw_scan_events(self):
@@ -546,7 +663,7 @@ log_level = warning
             logger.write_scan_event("__NO_READ__", "20")
             logger.write_scan_event(numeric_short, "20")
 
-            self.assertEqual(len(postgresql_logger.rows), 2)
+            self.assertEqual(len(postgresql_logger.rows), 3)
             self.assertEqual(len(postgresql_logger.raw_rows), 4)
             self.assertEqual(postgresql_logger.rows[0]["scan_date"], logger.current_date)
             self.assertRegex(
@@ -556,10 +673,16 @@ log_level = warning
             self.assertEqual(postgresql_logger.rows[0]["scanner_id"], "20")
             self.assertEqual(postgresql_logger.rows[0]["tracking_number"], valid_tracking)
             self.assertEqual(postgresql_logger.rows[0]["barcode"], valid_tracking)
+            self.assertFalse(postgresql_logger.rows[0]["is_duplicate"])
             self.assertFalse(postgresql_logger.rows[0]["is_repaired"])
-            self.assertEqual(postgresql_logger.rows[1]["tracking_number"], numeric_short)
-            self.assertEqual(postgresql_logger.rows[1]["barcode"], numeric_short)
+            self.assertEqual(postgresql_logger.rows[1]["tracking_number"], valid_tracking)
+            self.assertEqual(postgresql_logger.rows[1]["barcode"], valid_tracking)
+            self.assertFalse(postgresql_logger.rows[1]["is_duplicate"])
             self.assertFalse(postgresql_logger.rows[1]["is_repaired"])
+            self.assertEqual(postgresql_logger.rows[2]["tracking_number"], numeric_short)
+            self.assertEqual(postgresql_logger.rows[2]["barcode"], numeric_short)
+            self.assertFalse(postgresql_logger.rows[2]["is_duplicate"])
+            self.assertFalse(postgresql_logger.rows[2]["is_repaired"])
             self.assertEqual(
                 [row["tracking_number"] for row in postgresql_logger.raw_rows],
                 [valid_tracking, valid_tracking, "__NO_READ__", numeric_short],
@@ -674,8 +797,11 @@ log_level = warning
             )
 
             valid_tracking = "6" * 34
+            other_tracking_numbers = ["7" * 34, "8" * 34, "9" * 34]
 
             logger.write_scan_event(valid_tracking, "20")
+            for tracking_number in other_tracking_numbers:
+                logger.write_scan_event(tracking_number, "20")
             logger.write_scan_event(valid_tracking, "21")
 
             with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
@@ -683,22 +809,26 @@ log_level = warning
 
             self.assertEqual(rows[0]["scanner_name"], "Lane 1 Scanner")
             self.assertEqual(rows[0]["scanner_role"], "standard")
+            self.assertEqual(rows[0]["is_duplicate"], "false")
             self.assertEqual(rows[0]["is_cross_scanner_duplicate"], "false")
-            self.assertEqual(rows[1]["scanner_name"], "Last Scanner")
-            self.assertEqual(rows[1]["scanner_role"], "last")
-            self.assertEqual(rows[1]["is_cross_scanner_duplicate"], "true")
+            self.assertEqual(rows[-1]["scanner_name"], "Last Scanner")
+            self.assertEqual(rows[-1]["scanner_role"], "last")
+            self.assertEqual(rows[-1]["is_duplicate"], "true")
+            self.assertEqual(rows[-1]["is_cross_scanner_duplicate"], "true")
 
             self.assertEqual(postgresql_logger.rows[0]["scanner_name"], "Lane 1 Scanner")
             self.assertEqual(postgresql_logger.rows[0]["scanner_role"], "standard")
             self.assertEqual(postgresql_logger.rows[0]["last_scanner_id"], "21")
+            self.assertFalse(postgresql_logger.rows[0]["is_duplicate"])
             self.assertFalse(
                 postgresql_logger.rows[0]["is_cross_scanner_duplicate"],
             )
-            self.assertEqual(postgresql_logger.rows[1]["scanner_name"], "Last Scanner")
-            self.assertEqual(postgresql_logger.rows[1]["scanner_role"], "last")
-            self.assertEqual(postgresql_logger.rows[1]["last_scanner_id"], "21")
+            self.assertEqual(postgresql_logger.rows[-1]["scanner_name"], "Last Scanner")
+            self.assertEqual(postgresql_logger.rows[-1]["scanner_role"], "last")
+            self.assertEqual(postgresql_logger.rows[-1]["last_scanner_id"], "21")
+            self.assertTrue(postgresql_logger.rows[-1]["is_duplicate"])
             self.assertTrue(
-                postgresql_logger.rows[1]["is_cross_scanner_duplicate"],
+                postgresql_logger.rows[-1]["is_cross_scanner_duplicate"],
             )
 
     def test_script_log_omits_scanner_barcode_data_and_daily_data_log_keeps_it(self):
@@ -746,7 +876,7 @@ log_level = warning
             self.assertEqual(len(data_logs), 1)
             self.assertIn(valid_tracking, data_logs[0].read_text(encoding="utf-8"))
 
-    def test_write_scan_event_logs_success_failure_and_ignores_duplicate_success(self):
+    def test_write_scan_event_logs_success_repeat_and_failure(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
             logger = DailyCsvLogger(
                 output_dir=Path(temp_dir),
@@ -761,20 +891,24 @@ log_level = warning
             logger.write_scan_event(valid_tracking)
             logger.write_scan_event("__NO_READ__")
 
-            self.assertEqual(logger.event_count, 2)
-            self.assertEqual(logger.success_count, 1)
+            self.assertEqual(logger.event_count, 3)
+            self.assertEqual(logger.success_count, 2)
             self.assertEqual(logger.failed_count, 1)
 
             with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
                 rows = list(csv.DictReader(f))
 
-            self.assertEqual(len(rows), 2)
+            self.assertEqual(len(rows), 3)
             self.assertEqual(rows[0]["scanner_id"], "UNKNOWN")
             self.assertEqual(rows[0]["status"], "SUCCESS")
             self.assertEqual(rows[0]["tracking"], valid_tracking)
             self.assertEqual(rows[1]["scanner_id"], "UNKNOWN")
-            self.assertEqual(rows[1]["status"], "FAILED")
-            self.assertEqual(rows[1]["tracking"], "")
+            self.assertEqual(rows[1]["status"], "SUCCESS")
+            self.assertEqual(rows[1]["is_duplicate"], "false")
+            self.assertEqual(rows[1]["tracking"], valid_tracking)
+            self.assertEqual(rows[2]["scanner_id"], "UNKNOWN")
+            self.assertEqual(rows[2]["status"], "FAILED")
+            self.assertEqual(rows[2]["tracking"], "")
 
             with logger.failed_scans_path.open(newline="", encoding="utf-8") as f:
                 failed_rows = list(csv.DictReader(f))
@@ -787,9 +921,9 @@ log_level = warning
             self.assertEqual(len(data_logs), 1)
             data_log_text = data_logs[0].read_text(encoding="utf-8")
             self.assertNotIn("Duplicate ignored", data_log_text)
-            self.assertEqual(len(data_log_text.splitlines()), 2)
+            self.assertEqual(len(data_log_text.splitlines()), 3)
 
-    def test_duplicate_success_is_silently_ignored(self):
+    def test_repeat_before_duplicate_threshold_is_not_reported_as_duplicate(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
             log_path = output_dir / "industrial-scanner-logger.log"
@@ -821,7 +955,8 @@ log_level = warning
             self.assertNotIn("Duplicate successful scan ignored", stdout.getvalue())
             self.assertNotIn("Duplicate successful scan ignored", script_log)
             self.assertNotIn("Duplicate ignored", data_log_text)
-            self.assertEqual(len(data_log_text.splitlines()), 1)
+            self.assertIn("Duplicate:false", data_log_text)
+            self.assertEqual(len(data_log_text.splitlines()), 2)
 
 
 if __name__ == "__main__":

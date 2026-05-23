@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TV Dashboard</title>
+  <link rel="stylesheet" href="/assets/site.css">
+</head>
+<body class="tv-body">
+  <main class="tv-page">
+    <header class="tv-header">
+      <div>
+        <h1>TV Dashboard</h1>
+        <div id="tv-generated" class="tv-subhead">Loading...</div>
+      </div>
+      <div id="tv-status" class="tv-status">Checking</div>
+    </header>
+
+    <section class="tv-rate-grid">
+      <div class="tv-panel tv-rate-panel">
+        <div class="tv-label">Scans Per Minute</div>
+        <div id="tv-scans-minute" class="tv-value">0</div>
+      </div>
+      <div class="tv-panel tv-rate-panel">
+        <div class="tv-label">Scans Per Hour</div>
+        <div id="tv-scans-hour" class="tv-value">0</div>
+      </div>
+    </section>
+
+    <section class="tv-day-grid">
+      <div class="tv-panel">
+        <div class="tv-day-title">Today</div>
+        <div id="tv-today-date" class="tv-date">Loading...</div>
+        <div class="tv-stat-row">
+          <div>
+            <div class="tv-label">Successful Scans</div>
+            <div id="tv-today-success" class="tv-value success">0</div>
+          </div>
+          <div>
+            <div class="tv-label">Duplicates</div>
+            <div id="tv-today-duplicates" class="tv-value duplicate">0</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tv-panel">
+        <div class="tv-day-title">Yesterday</div>
+        <div id="tv-yesterday-date" class="tv-date">Loading...</div>
+        <div class="tv-stat-row">
+          <div>
+            <div class="tv-label">Successful Scans</div>
+            <div id="tv-yesterday-success" class="tv-value success">0</div>
+          </div>
+          <div>
+            <div class="tv-label">Duplicates</div>
+            <div id="tv-yesterday-duplicates" class="tv-value duplicate">0</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const API_URL = "/api/v1/dashboard/health";
+
+    async function loadDashboard() {
+      try {
+        const response = await fetch(API_URL, { cache: "no-store" });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        renderDashboard(data);
+      } catch (error) {
+        document.getElementById("tv-status").textContent = "Offline";
+        document.getElementById("tv-status").classList.add("offline");
+        document.getElementById("tv-generated").textContent = error.message;
+      }
+    }
+
+    function renderDashboard(data) {
+      const rate = data.current_scan_rate || {};
+      const totals = data.daily_totals || {};
+      const today = totals.today || {};
+      const yesterday = totals.yesterday || {};
+      const status = document.getElementById("tv-status");
+
+      status.textContent = (data.status || "unknown").toUpperCase();
+      status.classList.toggle("offline", data.status !== "ok");
+      document.getElementById("tv-generated").textContent = formatGeneratedAt(data.generated_at);
+
+      setText("tv-scans-minute", formatNumber(rate.scans_per_minute));
+      setText("tv-scans-hour", formatNumber(rate.scans_per_hour));
+
+      setText("tv-today-date", today.scan_date || "");
+      setText("tv-today-success", formatNumber(today.successful_scans));
+      setText("tv-today-duplicates", formatNumber(today.duplicate_scans));
+
+      setText("tv-yesterday-date", yesterday.scan_date || "");
+      setText("tv-yesterday-success", formatNumber(yesterday.successful_scans));
+      setText("tv-yesterday-duplicates", formatNumber(yesterday.duplicate_scans));
+    }
+
+    function setText(id, value) {
+      document.getElementById(id).textContent = value;
+    }
+
+    function formatNumber(value) {
+      const numericValue = Number(value || 0);
+
+      if (!Number.isFinite(numericValue)) {
+        return "0";
+      }
+
+      return numericValue.toLocaleString(undefined, {
+        maximumFractionDigits: 2,
+      });
+    }
+
+    function formatGeneratedAt(value) {
+      if (!value) {
+        return "Waiting for data";
+      }
+
+      const parsed = new Date(value);
+
+      if (Number.isNaN(parsed.getTime())) {
+        return value;
+      }
+
+      return `Updated ${parsed.toLocaleTimeString()}`;
+    }
+
+    loadDashboard();
+    window.setInterval(loadDashboard, 5000);
+  </script>
+</body>
+</html>

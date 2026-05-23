@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daily Scan Logs</title>
+  <link rel="stylesheet" href="/assets/site.css">
+</head>
+<body>
+  <main class="page">
+    <h1>Daily Scan Logs</h1>
+    <div class="subhead">
+      Completed daily CSV files are available for download.
+    </div>
+
+    <section class="card">
+      <h2>CSV Downloads</h2>
+      <div id="logs-status" class="detail">Loading...</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Filename</th>
+              <th>Size</th>
+              <th>Modified</th>
+              <th>Download</th>
+            </tr>
+          </thead>
+          <tbody id="logs-table">
+            <tr>
+              <td colspan="5">Loading...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="footer">
+      <a href="/">Home</a> | <a href="/health">Health Dashboard</a> | <a href="/tv-dashboard">TV Dashboard</a>
+    </div>
+  </main>
+
+  <script>
+    const API_ROOT = "/api";
+    const LOGS_API_URL = `${API_ROOT}/v1/logs/daily-csv`;
+
+    async function loadLogs() {
+      const status = document.getElementById("logs-status");
+      const tbody = document.getElementById("logs-table");
+
+      try {
+        const response = await fetch(LOGS_API_URL, { cache: "no-store" });
+
+        if (!response.ok) {
+          throw new Error(`API returned HTTP ${response.status}`);
+        }
+
+        const payload = await response.json();
+        const logs = Array.isArray(payload.logs) ? payload.logs : [];
+        status.textContent = `Current day excluded: ${payload.current_day_excluded || "today"}.`;
+        renderLogs(logs);
+      } catch (error) {
+        status.innerHTML = `<span class="error">Unable to load daily CSV logs.</span>`;
+        tbody.innerHTML = `<tr><td colspan="5">${escapeHtml(error.message)}</td></tr>`;
+      }
+    }
+
+    function renderLogs(logs) {
+      const tbody = document.getElementById("logs-table");
+      tbody.innerHTML = "";
+
+      if (logs.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5">No completed daily CSV files found.</td></tr>`;
+        return;
+      }
+
+      for (const row of logs) {
+        const tr = document.createElement("tr");
+        const downloadUrl = `${API_ROOT}${row.download_url}`;
+        tr.innerHTML = `
+          <td>${escapeHtml(row.scan_date || "")}</td>
+          <td>${escapeHtml(row.filename || "")}</td>
+          <td>${formatBytes(row.size_bytes || 0)}</td>
+          <td>${escapeHtml(formatTimestamp(row.modified_at))}</td>
+          <td><a class="button" href="${downloadUrl}">Download CSV</a></td>
+        `;
+        tbody.appendChild(tr);
+      }
+    }
+
+    function formatBytes(bytes) {
+      const value = Number(bytes || 0);
+
+      if (value < 1024) {
+        return `${value} B`;
+      }
+
+      if (value < 1024 * 1024) {
+        return `${(value / 1024).toFixed(1)} KB`;
+      }
+
+      return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function formatTimestamp(value) {
+      if (!value) {
+        return "";
+      }
+
+      const parsed = new Date(value);
+
+      if (Number.isNaN(parsed.getTime())) {
+        return value;
+      }
+
+      return parsed.toLocaleString();
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    loadLogs();
+  </script>
+</body>
+</html>

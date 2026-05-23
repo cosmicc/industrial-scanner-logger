@@ -1,7 +1,8 @@
 import importlib.util
+import tempfile
 import unittest
 from datetime import date, timedelta
-
+from pathlib import Path
 
 HAS_API_DEPS = all(
     importlib.util.find_spec(module_name)
@@ -19,6 +20,9 @@ class ApiQueryTests(unittest.TestCase):
 
         self.assertEqual(app.root_path, "/api")
         self.assertIn("/v1/health", route_paths)
+        self.assertIn("/v1/dashboard/health", route_paths)
+        self.assertIn("/v1/logs/daily-csv", route_paths)
+        self.assertIn("/v1/logs/daily-csv/{scan_date}", route_paths)
         self.assertIn("/v1/scans", route_paths)
         self.assertNotIn("/api/v1/health", route_paths)
 
@@ -100,6 +104,7 @@ class ApiQueryTests(unittest.TestCase):
                         "scan_date": date(2026, 5, 18),
                         "successful_scans": 14,
                         "failed_scans": 2,
+                        "duplicate_scans": 3,
                     }
                 ]
 
@@ -128,14 +133,40 @@ class ApiQueryTests(unittest.TestCase):
                     "scan_date": "2026-05-18",
                     "successful_scans": 14,
                     "failed_scans": 2,
+                    "duplicate_scans": 3,
                 },
                 "yesterday": {
                     "scan_date": "2026-05-17",
                     "successful_scans": 0,
                     "failed_scans": 0,
+                    "duplicate_scans": 0,
                 },
             },
         )
+
+    def test_completed_daily_csv_logs_exclude_current_day(self):
+        from types import SimpleNamespace
+
+        from industrial_scanner_logger.api import list_completed_daily_csv_logs
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            previous_csv = output_dir / "Test_2026-05-17.csv"
+            current_csv = output_dir / "Test_2026-05-18.csv"
+            invalid_csv = output_dir / "Test_2026-99-99.csv"
+            previous_csv.write_text("date,time,tracking\n", encoding="utf-8")
+            current_csv.write_text("still,open,today\n", encoding="utf-8")
+            invalid_csv.write_text("invalid,date\n", encoding="utf-8")
+
+            rows = list_completed_daily_csv_logs(
+                SimpleNamespace(output_dir=temp_dir, prefix="Test"),
+                current_day=date(2026, 5, 18),
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["scan_date"], "2026-05-17")
+        self.assertEqual(rows[0]["filename"], "Test_2026-05-17.csv")
+        self.assertEqual(rows[0]["download_url"], "/v1/logs/daily-csv/2026-05-17")
 
     def test_current_scan_rate_uses_rolling_one_minute_window(self):
         from industrial_scanner_logger.api import (

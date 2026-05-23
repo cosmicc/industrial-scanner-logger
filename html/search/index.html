@@ -71,7 +71,7 @@
     </section>
 
     <div class="footer">
-      <a href="/">Home</a> | <a href="/health">Health Dashboard</a>
+      <a href="/">Home</a> | <a href="/health">Health Dashboard</a> | <a href="/logs">CSV Logs</a> | <a href="/tv-dashboard">TV Dashboard</a>
     </div>
   </main>
 
@@ -193,7 +193,7 @@
         const tr = document.createElement("tr");
         const statusClass = row.is_success ? "success" : "failed";
         const statusText = row.is_success ? "SUCCESS" : "FAILED";
-        const duplicateText = row.is_cross_scanner_duplicate ? "Yes" : "No";
+        const duplicateText = row.is_duplicate ? "Yes" : "No";
         const repairedText = row.is_repaired ? "Yes" : "No";
 
         tr.innerHTML = `

@@ -27,11 +27,12 @@ TCP_KEEPALIVE_IDLE="${TCP_KEEPALIVE_IDLE:-60}"
 TCP_KEEPALIVE_INTERVAL="${TCP_KEEPALIVE_INTERVAL:-15}"
 TCP_KEEPALIVE_PROBES="${TCP_KEEPALIVE_PROBES:-4}"
 POSTGRESQL_ENABLED="${POSTGRESQL_ENABLED:-1}"
-POSTGRESQL_DSN="${POSTGRESQL_DSN:-postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger}"
+DEFAULT_POSTGRESQL_DSN="postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger"
+POSTGRESQL_DSN="${POSTGRESQL_DSN:-${DEFAULT_POSTGRESQL_DSN}}"
 POSTGRESQL_TABLE="${POSTGRESQL_TABLE:-scanner_logger.scan_events}"
 POSTGRESQL_CONNECT_TIMEOUT="${POSTGRESQL_CONNECT_TIMEOUT:-3}"
 POSTGRESQL_RETRY_INTERVAL="${POSTGRESQL_RETRY_INTERVAL:-30}"
-POSTGRESQL_REQUIRED="${POSTGRESQL_REQUIRED:-0}"
+POSTGRESQL_REQUIRED="${POSTGRESQL_REQUIRED:-1}"
 LAST_SCANNER_ID="${LAST_SCANNER_ID:-}"
 API_ENABLED="${API_ENABLED:-1}"
 API_HOST="${API_HOST:-127.0.0.1}"
@@ -80,13 +81,12 @@ Options:
   --tcp-keepalive-idle SEC  idle seconds before TCP keepalive probes start [${TCP_KEEPALIVE_IDLE}]
   --tcp-keepalive-interval SEC seconds between TCP keepalive probes [${TCP_KEEPALIVE_INTERVAL}]
   --tcp-keepalive-probes NUM failed probes before a socket is considered dead [${TCP_KEEPALIVE_PROBES}]
-  --enable-postgresql      enable PostgreSQL scan event logging [default]
-  --disable-postgresql     disable PostgreSQL scan event logging
+  --enable-postgresql      PostgreSQL is mandatory; accepted for compatibility
   --postgresql-dsn DSN     PostgreSQL URI/DSN with no shell spaces [${POSTGRESQL_DSN}]
   --postgresql-table NAME  PostgreSQL table in schema.table format [${POSTGRESQL_TABLE}]
   --postgresql-connect-timeout SEC PostgreSQL connection timeout [${POSTGRESQL_CONNECT_TIMEOUT}]
   --postgresql-retry-interval SEC  retry delay after PostgreSQL failures [${POSTGRESQL_RETRY_INTERVAL}]
-  --postgresql-required    stop the receiver if PostgreSQL logging is unavailable
+  --postgresql-required    PostgreSQL is mandatory; accepted for compatibility
   --last-scanner-id ID     scanner IP last octet for the final outbound scanner [${LAST_SCANNER_ID:-not set}]
   --enable-api             enable and start the REST API service [default]
   --disable-api            install but disable the REST API service
@@ -237,6 +237,55 @@ install_nginx_package() {
     apt-get install -y nginx
 }
 
+install_postgresql_package() {
+    if [[ "${POSTGRESQL_DSN}" != "${DEFAULT_POSTGRESQL_DSN}" ]] && command -v psql >/dev/null 2>&1; then
+        return
+    fi
+
+    if command -v psql >/dev/null 2>&1 && systemctl list-unit-files postgresql.service >/dev/null 2>&1; then
+        return
+    fi
+
+    require_command apt-get
+
+    echo "Installing PostgreSQL..."
+    export DEBIAN_FRONTEND=noninteractive
+    apt_get_update_once
+    apt-get install -y postgresql
+}
+
+run_as_postgres() {
+    runuser -u postgres -- "$@"
+}
+
+configure_postgresql_database() {
+    local schema_file="${INSTALL_DIR_REAL}/db/schema.sql"
+
+    if [[ ! -f "${schema_file}" ]]; then
+        echo "Missing PostgreSQL schema file: ${schema_file}" >&2
+        exit 1
+    fi
+
+    if [[ "${POSTGRESQL_DSN}" == "${DEFAULT_POSTGRESQL_DSN}" ]]; then
+        systemctl enable postgresql
+        systemctl start postgresql
+
+        if ! run_as_postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${SERVICE_USER}'" | grep -q 1; then
+            run_as_postgres createuser --no-superuser --no-createdb --no-createrole "${SERVICE_USER}"
+        fi
+
+        if ! run_as_postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='scannerlogger'" | grep -q 1; then
+            run_as_postgres createdb -O "${SERVICE_USER}" scannerlogger
+        fi
+
+        run_as_postgres psql -d scannerlogger -f "${schema_file}"
+        return
+    fi
+
+    echo "Applying PostgreSQL schema with configured DSN..."
+    psql "${POSTGRESQL_DSN}" -f "${schema_file}"
+}
+
 install_ufw_firewall() {
     require_command apt-get
 
@@ -363,8 +412,8 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --disable-postgresql)
-            POSTGRESQL_ENABLED=0
-            shift
+            echo "PostgreSQL is mandatory and cannot be disabled." >&2
+            exit 1
             ;;
         --postgresql-dsn)
             POSTGRESQL_DSN="$2"
@@ -467,6 +516,12 @@ if [[ "${API_ENABLED}" -eq 0 ]]; then
     NGINX_ENABLED=0
 fi
 
+if [[ "${POSTGRESQL_ENABLED}" -ne 1 ]]; then
+    echo "PostgreSQL is mandatory and cannot be disabled." >&2
+    exit 1
+fi
+POSTGRESQL_REQUIRED=1
+
 if [[ "${EUID}" -ne 0 ]]; then
     echo "This installer must be run as root. Re-run it with sudo." >&2
     exit 1
@@ -491,6 +546,7 @@ PYTHON_BIN="${INSTALL_DIR}/.venv/bin/python"
 require_command python3
 require_command systemctl
 require_command sed
+require_command runuser
 
 if ! python3 -m venv --help >/dev/null 2>&1; then
     cat >&2 <<'ERROR'
@@ -533,6 +589,7 @@ if [[ "${NGINX_ENABLED}" -eq 1 ]]; then
     install_nginx_package
 fi
 
+install_postgresql_package
 install_ufw_firewall
 
 if [[ -r /etc/os-release ]]; then
@@ -587,6 +644,7 @@ fi
 "${PYTHON_BIN}" -m pip install --no-deps "${INSTALL_DIR_REAL}"
 chown -R root:root "${INSTALL_DIR}"
 chmod -R u=rwX,go=rX "${INSTALL_DIR}"
+configure_postgresql_database
 install -d -o root -g root -m 0755 "$(dirname -- "${UPDATE_SERVICES_BIN}")"
 install -o root -g root -m 0755 "${UPDATE_SERVICES_SOURCE}" "${UPDATE_SERVICES_BIN}"
 
@@ -597,16 +655,6 @@ touch "${LOG_FILE}"
 chown "${SERVICE_USER}:${SERVICE_GROUP}" "${LOG_FILE}"
 chmod 0640 "${LOG_FILE}"
 install -d -o root -g root -m 0755 "$(dirname -- "${CONFIG_FILE}")"
-
-POSTGRESQL_ENABLED_TEXT="false"
-if [[ "${POSTGRESQL_ENABLED}" -eq 1 ]]; then
-    POSTGRESQL_ENABLED_TEXT="true"
-fi
-
-POSTGRESQL_REQUIRED_TEXT="false"
-if [[ "${POSTGRESQL_REQUIRED}" -eq 1 ]]; then
-    POSTGRESQL_REQUIRED_TEXT="true"
-fi
 
 API_ENABLED_TEXT="false"
 if [[ "${API_ENABLED}" -eq 1 ]]; then
@@ -706,14 +754,13 @@ interval = ${TCP_KEEPALIVE_INTERVAL}
 probes = ${TCP_KEEPALIVE_PROBES}
 
 [postgresql]
-# Enables PostgreSQL scan event logging for API views and dashboard data.
-# Default: true in the installed config. Built-in fallback when omitted: false.
-# Set false to run CSV/raw-log only.
-enabled = ${POSTGRESQL_ENABLED_TEXT}
+# Enables PostgreSQL scan event logging for API views, dashboard data, and month-long duplicate checks.
+# Default: true. PostgreSQL is mandatory for receiver operation.
+enabled = true
 
 # Controls whether the receiver must stop when PostgreSQL logging is unavailable.
-# Default: false. Set true only when database logging is mandatory for operations.
-required = ${POSTGRESQL_REQUIRED_TEXT}
+# Default: true. PostgreSQL is mandatory for duplicate decisions and must remain required.
+required = true
 
 # PostgreSQL connection string used by the receiver and API.
 # Default: postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger.
@@ -864,7 +911,7 @@ Tracking number repair:
   $([[ "${TRACKING_REPAIR_ENABLED}" -eq 1 ]] && echo "enabled" || echo "disabled")
 
 PostgreSQL scan logging:
-  $([[ "${POSTGRESQL_ENABLED}" -eq 1 ]] && echo "enabled (${POSTGRESQL_TABLE})" || echo "disabled")
+  enabled and required (${POSTGRESQL_TABLE})
 
 REST API service:
   $([[ "${API_ENABLED}" -eq 1 ]] && echo "enabled (${API_SERVICE_NAME}.service on ${API_HOST}:${API_PORT}${API_ROOT_PATH})" || echo "disabled (${API_SERVICE_NAME}.service installed)")

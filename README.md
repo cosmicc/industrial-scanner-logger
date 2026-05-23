@@ -1,6 +1,6 @@
 # Industrial Scanner Logger
 
-Python 3 TCP receiver, CSV logger, and optional PostgreSQL scan event logger for
+Python 3 TCP receiver, CSV logger, and mandatory PostgreSQL scan event logger for
 a Honeywell HF811 industrial scanner.
 
 Current release: `v1.1.2`
@@ -13,23 +13,25 @@ The current receiver listens for scanner TCP connections, classifies scan events
 - Writes one dated scan CSV per day.
 - Writes failed scans to `failed_scans.csv`.
 - Writes completed daily totals per scanner and per day to `scan_totals.csv`.
-- Can also write accepted scan events to PostgreSQL for query/API use while
-  retaining all CSV logging.
+- Writes accepted scan events to PostgreSQL for duplicate decisions, query/API
+  use, and dashboard data while retaining all CSV logging.
 - Writes troubleshooting events to `/var/log/industrial-scanner-logger.log` when installed as a service.
 - Writes raw per-scan event lines to daily logs under `/var/log/industrial-scanner-logger/`.
 - Runs an optional REST API service for querying PostgreSQL scan data.
+- Serves health, search, completed CSV log download, and TV dashboard pages
+  through nginx when installed.
 - Treats a scan as `SUCCESS` only when the barcode is exactly 34 numeric digits.
 - Treats blank scans, the configured no-read message, wrong lengths, and non-numeric values as `FAILED`.
 - Identifies each scanner by the last octet of its IPv4 address.
-- Ignores duplicate successful tracking numbers on the same scanner during the same day by default.
-- Allows the same package tracking number to be logged by different scanners.
+- Logs repeated successful tracking numbers from the same or different scanners.
+- Marks a successful scan as a duplicate only after the 3 different successful tracking number repeat threshold is met.
 
 ## Requirements
 
 - Python 3.9 or newer
 - Runtime Python packages listed in `requirements.txt`
 - Ubuntu systemd host for the installer
-- PostgreSQL, if PostgreSQL logging or the REST API will be used
+- PostgreSQL, installed and initialized automatically by `scripts/install.sh`
 - Nginx is installed automatically by `scripts/install.sh` when the API proxy is enabled
 - UFW is installed and configured automatically by `scripts/install.sh`
 
@@ -91,7 +93,7 @@ probes = 4
 
 [postgresql]
 enabled = true
-required = false
+required = true
 dsn = postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger
 table = scanner_logger.scan_events
 connect_timeout = 3
@@ -129,9 +131,10 @@ sudo scripts/install.sh
 The installer copies the project to `/opt/industrial-scanner-logger`, creates a
 Python virtual environment, installs the Python package dependencies, creates a
 dedicated `scannerlogger` system user, installs the receiver and API systemd
-units, installs nginx if needed, enables an nginx site for `/api`, and starts
-the services. It also installs UFW, denies incoming traffic by default, and
-allows only `22/tcp`, `55256/tcp`, `80/tcp`, and `443/tcp` incoming.
+units, installs PostgreSQL and applies the database schema, installs nginx if
+needed, enables an nginx site for `/api`, and starts the services. It also
+installs UFW, denies incoming traffic by default, and allows only `22/tcp`,
+`55256/tcp`, `80/tcp`, and `443/tcp` incoming.
 
 The nginx site template is:
 
@@ -159,6 +162,8 @@ root during install. For example:
 ```text
 html/index.html -> /var/www/scanner-site/index.html
 html/health/index.html -> /var/www/scanner-site/health/index.html
+html/logs/index.html -> /var/www/scanner-site/logs/index.html
+html/tv-dashboard/index.html -> /var/www/scanner-site/tv-dashboard/index.html
 html/assets/site.css -> /var/www/scanner-site/assets/site.css
 ```
 
@@ -228,7 +233,11 @@ installer with `--overwrite-config` to pick up this default.
 
 ## PostgreSQL Logging
 
-The receiver can insert final scan events into:
+PostgreSQL is mandatory. The receiver uses `scanner_logger.scan_events` as the
+source of truth for duplicate decisions over the previous 30 days, then writes
+the accepted row before the next scanner event can be evaluated.
+
+The receiver inserts final scan events into:
 
 ```text
 scanner_logger.scan_events
@@ -251,7 +260,7 @@ received barcode, and the tracking number. The date and time come from the
 receiver script at the same point where the CSV row is written; PostgreSQL does
 not assign the scan event timestamp. PostgreSQL generated columns and views
 provide success/failure classification, failed scan queries, daily totals,
-package progression, cross-scanner duplicate queries, and successful packages
+package progression, duplicate queries, and successful packages
 missing the configured last scanner.
 
 Use `[scanners] last_scanner_id` for the final outbound scanner before boxes
@@ -267,9 +276,13 @@ last_scanner_id = 21
 21 = Last Scanner
 ```
 
-Same-scanner duplicate successful scans are still silently ignored. Successful
-scans are marked as cross-scanner duplicates only when the same tracking number
-was already accepted from a different scanner on the same day.
+Repeated successful scans are logged from the same scanner and across scanners.
+A same-scanner repeat is marked `is_duplicate = true` only when that scanner
+accepted 3 different successful tracking numbers between the previous accepted
+scan of that tracking number in the previous 30 days and the current scan.
+Cross-scanner repeats also set `is_cross_scanner_duplicate = true` when that
+threshold is met across the previous 30 days of successful scans and the
+tracking number was previously accepted from a different scanner.
 
 Set `[receiver] tracking_repair_enabled = true` to allow conservative repair of
 short numeric failed scans. A short scan is repaired only when successful scans
@@ -291,23 +304,23 @@ postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger
 ```
 
 That default expects the Linux service user and PostgreSQL role to both be named
-`scannerlogger`, and the database to be named `scannerlogger`. Disable
-PostgreSQL logging during service install if the database is not ready yet:
+`scannerlogger`, and the database to be named `scannerlogger`. The installer
+creates that local role/database and applies `db/schema.sql` when the default
+DSN is used. With a custom DSN, the installer applies `db/schema.sql` through
+that DSN.
 
-```bash
-sudo scripts/install.sh --disable-postgresql
-```
-
-Existing service installs keep their current config file. To add PostgreSQL
-logging to an existing service, edit `/etc/industrial-scanner-logger.conf` and
-set `enabled = true` under `[postgresql]`, or rerun the installer with
-`--overwrite-config`.
+Existing service installs keep their current config file. After this change,
+edit `/etc/industrial-scanner-logger.conf` and set `enabled = true` and
+`required = true` under `[postgresql]`, or rerun the installer with
+`--overwrite-config`. The receiver will not start with PostgreSQL disabled or
+non-required.
 
 After pulling schema changes, reapply `db/schema.sql` to the PostgreSQL database
 before restarting PostgreSQL-backed logging or API queries.
 
-PostgreSQL write failures are logged to the troubleshooting log. CSV and raw
-daily scan logs continue to be written unless `--postgresql-required` is set.
+PostgreSQL connection, duplicate lookup, or write failures are logged to the
+troubleshooting log and stop the receiver so duplicate decisions cannot be made
+from stale local state.
 
 ## REST API
 
@@ -329,6 +342,9 @@ Core public endpoints behind nginx:
 
 ```text
 GET /api/v1/health
+GET /api/v1/dashboard/health
+GET /api/v1/logs/daily-csv
+GET /api/v1/logs/daily-csv/{scan_date}
 GET /api/v1/scans
 GET /api/v1/scans/{scan_id}
 GET /api/v1/views
@@ -346,6 +362,12 @@ The list endpoints support common filters such as `start_date`, `end_date`,
 The `barcode` filter matches either the received barcode or repaired tracking
 number when both fields are available. `/api/v1/scans` also supports
 `is_success`.
+
+`/api/v1/logs/daily-csv` lists completed daily CSV files for download and
+excludes the current day because that file may still be open for writing.
+`/logs` is the browser page for those downloads. `/tv-dashboard` is formatted
+for a 1920x1080 display and currently shows scan-rate, successful-scan, and
+duplicate totals from the health dashboard data.
 
 Interactive API docs are available through nginx:
 
@@ -392,7 +414,7 @@ Site_Shipped_Tracking_2026-05-16.csv
 Daily scan CSV columns:
 
 ```text
-date,time,scanner_id,scanner_name,scanner_role,status,is_cross_scanner_duplicate,is_repaired,tracking
+date,time,scanner_id,scanner_name,scanner_role,status,is_duplicate,is_cross_scanner_duplicate,is_repaired,tracking
 ```
 
 Failed scan CSV columns:
@@ -412,8 +434,10 @@ scanner `10.10.10.20` is recorded as scanner `20`. `scan_totals.csv` includes
 one row per scanner plus an `ALL` row for the full day.
 
 `scanner_role` is `last` only for the configured final outbound scanner.
-`is_cross_scanner_duplicate` is `true` only for successful scans whose tracking
-number was already accepted from another scanner that day.
+`is_duplicate` is `true` only for successful scans that repeat after the 3
+different successful tracking number threshold is met. `is_cross_scanner_duplicate`
+is `true` only for duplicate successful scans whose tracking number was already
+accepted from another scanner within the duplicate lookback window.
 `is_repaired` is `true` only when tracking-number repair reconstructed a short
 numeric failed scan into a valid tracking number.
 

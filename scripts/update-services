@@ -8,9 +8,30 @@ fi
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
 NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/scanner-site}"
+CONFIG_FILE="${CONFIG_FILE:-/etc/industrial-scanner-logger.conf}"
+DEFAULT_POSTGRESQL_DSN="postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger"
+
+postgresql_dsn() {
+    python3 - "${CONFIG_FILE}" "${DEFAULT_POSTGRESQL_DSN}" <<'PY'
+import configparser
+import sys
+
+config_path = sys.argv[1]
+default_dsn = sys.argv[2]
+config = configparser.ConfigParser(interpolation=None)
+config.read_dict({"postgresql": {"dsn": default_dsn}})
+config.read(config_path)
+print(config.get("postgresql", "dsn"))
+PY
+}
 
 echo "Updating database schema..."
-sudo -u postgres psql -d scannerlogger -f "${INSTALL_DIR}/db/schema.sql" > /dev/null 2>&1
+POSTGRESQL_DSN="$(postgresql_dsn)"
+if [[ "${POSTGRESQL_DSN}" == "${DEFAULT_POSTGRESQL_DSN}" ]]; then
+    runuser -u postgres -- psql -d scannerlogger -f "${INSTALL_DIR}/db/schema.sql" > /dev/null 2>&1
+else
+    psql "${POSTGRESQL_DSN}" -f "${INSTALL_DIR}/db/schema.sql" > /dev/null 2>&1
+fi
 echo "Refreshing HTML data..."
 cp "${INSTALL_DIR}/html/." "${NGINX_WEB_ROOT}/" -R > /dev/null 2>&1
 echo "Restarting Scanner Service..."

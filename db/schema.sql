@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
 
     last_scanner_id SMALLINT CHECK (last_scanner_id BETWEEN 0 AND 255),
 
+    is_duplicate BOOLEAN NOT NULL DEFAULT false,
+
     is_cross_scanner_duplicate BOOLEAN NOT NULL DEFAULT false,
 
     is_repaired BOOLEAN NOT NULL DEFAULT false,
@@ -66,6 +68,9 @@ ALTER TABLE scanner_logger.scan_events
 
 ALTER TABLE scanner_logger.scan_events
     ADD COLUMN IF NOT EXISTS last_scanner_id SMALLINT;
+
+ALTER TABLE scanner_logger.scan_events
+    ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE scanner_logger.scan_events
     ADD COLUMN IF NOT EXISTS is_cross_scanner_duplicate BOOLEAN NOT NULL DEFAULT false;
@@ -162,6 +167,12 @@ BEGIN
     END IF;
 END $$;
 
+ALTER TABLE scanner_logger.raw_scan_events
+    ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE scanner_logger.raw_scan_events
+    ADD COLUMN IF NOT EXISTS is_cross_scanner_duplicate BOOLEAN NOT NULL DEFAULT false;
+
 CREATE INDEX IF NOT EXISTS idx_scan_events_scan_date_time
     ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC);
 
@@ -180,6 +191,10 @@ CREATE INDEX IF NOT EXISTS idx_scan_events_success_scan_date_time
 CREATE INDEX IF NOT EXISTS idx_scan_events_failed_scan_date_time
     ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC)
     WHERE is_success = false;
+
+CREATE INDEX IF NOT EXISTS idx_scan_events_duplicate
+    ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC)
+    WHERE is_duplicate = true;
 
 DROP INDEX IF EXISTS scanner_logger.idx_scan_events_success_barcode_scan_date_time;
 
@@ -252,6 +267,7 @@ SELECT
     scanner_name,
     scanner_role,
     last_scanner_id,
+    is_duplicate,
     is_cross_scanner_duplicate,
     is_repaired,
     tracking_number,
@@ -270,6 +286,7 @@ SELECT
     scanner_name,
     scanner_role,
     last_scanner_id,
+    is_duplicate,
     is_cross_scanner_duplicate,
     is_repaired,
     tracking_number,
@@ -292,7 +309,7 @@ SELECT
 FROM scanner_logger.scan_events
 WHERE is_success = true
 GROUP BY tracking_number
-HAVING count(DISTINCT scanner_id) > 1;
+HAVING bool_or(is_duplicate);
 
 CREATE OR REPLACE VIEW scanner_logger.successful_scan_progression AS
 WITH scanner_counts AS (
@@ -321,6 +338,7 @@ SELECT
         ORDER BY events.scan_date, events.scan_time, events.id
     ) AS scan_sequence,
     scanner_counts.scanner_count,
+    events.is_duplicate,
     scanner_counts.scanner_count > 1 AS has_cross_scanner_duplicate,
     events.is_cross_scanner_duplicate,
     events.is_repaired

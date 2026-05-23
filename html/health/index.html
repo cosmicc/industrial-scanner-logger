@@ -128,6 +128,8 @@
     </section>
 
     <div class="footer">
+      <a href="/">Home</a> | <a href="/search">Search</a> | <a href="/logs">CSV Logs</a> | <a href="/tv-dashboard">TV Dashboard</a>
+      <br>
       Last page update: <span id="page-updated">never</span>
     </div>
   </main>
@@ -199,7 +201,7 @@
         const tr = document.createElement("tr");
         const statusClass = row.is_success ? "success" : "failed";
         const statusText = row.is_success ? "SUCCESS" : "FAILED";
-        const duplicateText = row.is_cross_scanner_duplicate ? "Yes" : "No";
+        const duplicateText = row.is_duplicate ? "Yes" : "No";
         const repairedText = row.is_repaired ? "Yes" : "No";
 
         tr.innerHTML = `

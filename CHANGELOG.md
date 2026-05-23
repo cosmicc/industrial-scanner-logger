@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+- Log same-scanner repeated successful scans instead of silently ignoring them.
+- Add `is_duplicate` scan metadata and mark repeats only after the 3 different successful tracking number threshold is met.
+- Keep `is_cross_scanner_duplicate` as a narrower flag for duplicate scans previously accepted from another scanner.
+- Make PostgreSQL mandatory for receiver startup, duplicate lookups, and scan-event writes.
+- Use PostgreSQL scan history for duplicate decisions over the previous 30 days.
+- Add `/logs` for downloading completed daily CSV scan files while excluding the current day.
+- Add `/tv-dashboard` for 1920x1080 display of scan-rate, successful-scan, and duplicate totals.
+
 ## 1.1.2 - 2026-05-17
 
 - Disable scanner idle disconnects by default so connected scanners can remain idle between boxes.
