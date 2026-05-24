@@ -73,7 +73,11 @@
       <div class="card">
         <h2>Today Totals</h2>
         <div id="today-date" class="detail">Checking...</div>
-        <div class="metric-grid">
+        <div class="metric-grid three-up">
+          <div class="metric">
+            <div class="metric-label">Total Scans</div>
+            <div id="today-total" class="metric-value">0</div>
+          </div>
           <div class="metric">
             <div class="metric-label">Successful Scans</div>
             <div id="today-success" class="metric-value success">0</div>
@@ -88,7 +92,11 @@
       <div class="card">
         <h2>Yesterday Totals</h2>
         <div id="yesterday-date" class="detail">Checking...</div>
-        <div class="metric-grid">
+        <div class="metric-grid three-up">
+          <div class="metric">
+            <div class="metric-label">Total Scans</div>
+            <div id="yesterday-total" class="metric-value">0</div>
+          </div>
           <div class="metric">
             <div class="metric-label">Successful Scans</div>
             <div id="yesterday-success" class="metric-value success">0</div>
@@ -98,6 +106,29 @@
             <div id="yesterday-failed" class="metric-value failed">0</div>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Today Totals by Scanner</h2>
+      <div id="today-scanner-totals-detail" class="detail">Checking...</div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Scanner</th>
+              <th>Total Scans</th>
+              <th>Successful</th>
+              <th>Failed</th>
+              <th>Same Scanner Duplicates</th>
+            </tr>
+          </thead>
+          <tbody id="today-scanner-totals">
+            <tr>
+              <td colspan="5">Checking...</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
 
@@ -254,6 +285,7 @@
     function renderDailyTotals(totals) {
       renderDailyTotal("today", totals?.today);
       renderDailyTotal("yesterday", totals?.yesterday);
+      renderTodayScannerTotals(totals?.today_by_scanner);
     }
 
     function renderCurrentScanRate(scanRate) {
@@ -274,19 +306,61 @@
 
     function renderDailyTotal(prefix, total) {
       const dateElement = document.getElementById(`${prefix}-date`);
+      const totalElement = document.getElementById(`${prefix}-total`);
       const successElement = document.getElementById(`${prefix}-success`);
       const failedElement = document.getElementById(`${prefix}-failed`);
 
       if (!total) {
         dateElement.textContent = "Unavailable";
+        totalElement.textContent = "0";
         successElement.textContent = "0";
         failedElement.textContent = "0";
         return;
       }
 
       dateElement.textContent = total.scan_date || "No date returned";
+      totalElement.textContent = formatCount(total.total_scan_events);
       successElement.textContent = formatCount(total.successful_scans);
       failedElement.textContent = formatCount(total.failed_scans);
+    }
+
+    function renderTodayScannerTotals(rows) {
+      const detail = document.getElementById("today-scanner-totals-detail");
+      const tbody = document.getElementById("today-scanner-totals");
+      tbody.innerHTML = "";
+
+      if (!Array.isArray(rows)) {
+        detail.textContent = "Unavailable";
+        tbody.innerHTML =
+          `<tr><td colspan="5">Scanner totals are unavailable.</td></tr>`;
+        return;
+      }
+
+      if (rows.length === 0) {
+        detail.textContent = "No scanner totals found for today.";
+        tbody.innerHTML =
+          `<tr><td colspan="5">No scan rows found for today.</td></tr>`;
+        return;
+      }
+
+      detail.textContent =
+        `${rows.length.toLocaleString()} scanner${rows.length === 1 ? "" : "s"} with scan rows today.`;
+
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        const scannerLabel =
+          row.display_name || row.scanner_name || `Scanner ${row.scanner_id ?? ""}`;
+
+        tr.innerHTML = `
+          <td>${escapeHtml(scannerLabel)}</td>
+          <td>${formatCount(row.total_scan_events)}</td>
+          <td class="success">${formatCount(row.successful_scans)}</td>
+          <td class="failed">${formatCount(row.failed_scans)}</td>
+          <td class="duplicate">${formatCount(row.same_scanner_duplicate_scans)}</td>
+        `;
+
+        tbody.appendChild(tr);
+      }
     }
 
     function formatCount(value) {

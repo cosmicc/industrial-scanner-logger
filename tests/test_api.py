@@ -134,9 +134,11 @@ class ApiQueryTests(unittest.TestCase):
                 return [
                     {
                         "scan_date": date(2026, 5, 18),
+                        "total_scan_events": 16,
                         "successful_scans": 14,
                         "failed_scans": 2,
                         "duplicate_scans": 3,
+                        "same_scanner_duplicate_scans": 2,
                     }
                 ]
 
@@ -163,17 +165,103 @@ class ApiQueryTests(unittest.TestCase):
             {
                 "today": {
                     "scan_date": "2026-05-18",
+                    "total_scan_events": 16,
                     "successful_scans": 14,
                     "failed_scans": 2,
                     "duplicate_scans": 3,
+                    "same_scanner_duplicate_scans": 2,
                 },
                 "yesterday": {
                     "scan_date": "2026-05-17",
+                    "total_scan_events": 0,
                     "successful_scans": 0,
                     "failed_scans": 0,
                     "duplicate_scans": 0,
+                    "same_scanner_duplicate_scans": 0,
                 },
+                "today_by_scanner": [],
             },
+        )
+
+    def test_dashboard_today_scanner_totals_uses_scanner_names(self):
+        from types import SimpleNamespace
+
+        from industrial_scanner_logger.api import fetch_dashboard_today_scanner_totals
+
+        class FakeCursor:
+            def __init__(self):
+                self.params = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return None
+
+            def execute(self, _query, params):
+                self.params = params
+
+            def fetchall(self):
+                return [
+                    {
+                        "scanner_id": 20,
+                        "scanner_name": None,
+                        "total_scan_events": 8,
+                        "successful_scans": 7,
+                        "failed_scans": 1,
+                        "duplicate_scans": 3,
+                        "same_scanner_duplicate_scans": 2,
+                    },
+                    {
+                        "scanner_id": 21,
+                        "scanner_name": "Last Scanner",
+                        "total_scan_events": 4,
+                        "successful_scans": 4,
+                        "failed_scans": 0,
+                        "duplicate_scans": 1,
+                        "same_scanner_duplicate_scans": 0,
+                    },
+                ]
+
+        class FakeDb:
+            def __init__(self):
+                self.cursor_instance = FakeCursor()
+
+            def cursor(self):
+                return self.cursor_instance
+
+        db = FakeDb()
+        totals = fetch_dashboard_today_scanner_totals(
+            db,
+            SimpleNamespace(scanner_names={"20": "Lane 1 Scanner"}),
+            date(2026, 5, 18),
+        )
+
+        self.assertEqual(db.cursor_instance.params, [date(2026, 5, 18)])
+        self.assertEqual(
+            totals,
+            [
+                {
+                    "scanner_id": 20,
+                    "scanner_name": "Lane 1 Scanner",
+                    "display_name": "Lane 1 Scanner",
+                    "total_scan_events": 8,
+                    "successful_scans": 7,
+                    "failed_scans": 1,
+                    "duplicate_scans": 3,
+                    "same_scanner_duplicate_scans": 2,
+                },
+                {
+                    "scanner_id": 21,
+                    "scanner_name": "Last Scanner",
+                    "display_name": "Last Scanner",
+                    "total_scan_events": 4,
+                    "successful_scans": 4,
+                    "failed_scans": 0,
+                    "duplicate_scans": 1,
+                    "same_scanner_duplicate_scans": 0,
+                },
+            ],
         )
 
     def test_completed_daily_csv_logs_mark_empty_days_without_download(self):
@@ -192,7 +280,14 @@ class ApiQueryTests(unittest.TestCase):
             current_csv = output_dir / "Test_2026-05-18.csv"
             invalid_csv = output_dir / "Test_2026-99-99.csv"
             previous_csv.write_text(
-                "date,time,tracking\n2026-05-17,08:00:00,123\n",
+                "\n".join([
+                    "date,time,scanner_id,scanner_name,scanner_role,status,"
+                    "is_duplicate,is_cross_scanner_duplicate,is_repaired,tracking",
+                    "2026-05-17,08:00:00,20,,standard,SUCCESS,false,false,false,123",
+                    "2026-05-17,08:01:00,20,,standard,SUCCESS,true,false,false,456",
+                    "2026-05-17,08:02:00,21,,standard,SUCCESS,true,true,false,789",
+                    "",
+                ]),
                 encoding="utf-8",
             )
             empty_csv.write_text("date,time,tracking\n", encoding="utf-8")
@@ -214,11 +309,13 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(rows[0]["scan_date"], "2026-05-17")
         self.assertEqual(rows[0]["filename"], "Test_2026-05-17.csv")
         self.assertTrue(rows[0]["has_scans"])
-        self.assertEqual(rows[0]["scan_count"], 1)
+        self.assertEqual(rows[0]["scan_count"], 3)
+        self.assertEqual(rows[0]["same_scanner_duplicate_count"], 1)
         self.assertEqual(rows[0]["download_url"], "/v1/logs/daily-csv/2026-05-17")
         self.assertEqual(rows[1]["scan_date"], "2026-05-16")
         self.assertFalse(rows[1]["has_scans"])
         self.assertEqual(rows[1]["scan_count"], 0)
+        self.assertEqual(rows[1]["same_scanner_duplicate_count"], 0)
         self.assertIsNone(rows[1]["download_url"])
 
     def test_current_scan_rate_uses_rolling_one_minute_window(self):

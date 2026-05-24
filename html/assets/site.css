@@ -101,6 +101,10 @@ h1 {
   gap: 12px;
 }
 
+.metric-grid.three-up {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .metric {
   background: var(--panel-2);
   border: 1px solid var(--border);

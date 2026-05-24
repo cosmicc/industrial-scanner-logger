@@ -24,13 +24,14 @@
               <th>Date</th>
               <th>Filename</th>
               <th>Size</th>
-              <th>Modified</th>
+              <th>Total Scans</th>
+              <th>Same Scanner Duplicates</th>
               <th>Download</th>
             </tr>
           </thead>
           <tbody id="logs-table">
             <tr>
-              <td colspan="5">Loading...</td>
+              <td colspan="6">Loading...</td>
             </tr>
           </tbody>
         </table>
@@ -69,7 +70,7 @@
         renderLogsPage();
       } catch (error) {
         status.innerHTML = `<span class="error">Unable to load daily CSV logs.</span>`;
-        tbody.innerHTML = `<tr><td colspan="5">${escapeHtml(error.message)}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6">${escapeHtml(error.message)}</td></tr>`;
         renderPagination(0);
       }
     }
@@ -82,7 +83,7 @@
       tbody.innerHTML = "";
 
       if (allLogs.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5">No completed daily CSV files found.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6">No completed daily CSV files found.</td></tr>`;
         renderPagination(0);
         return;
       }
@@ -98,13 +99,14 @@
             <td>${escapeHtml(row.scan_date || "")}</td>
             <td>${escapeHtml(row.filename || "")}</td>
             <td>${formatBytes(row.size_bytes || 0)}</td>
-            <td>${escapeHtml(formatTimestamp(row.modified_at))}</td>
+            <td>${formatCount(row.scan_count)}</td>
+            <td class="duplicate">${formatCount(row.same_scanner_duplicate_count)}</td>
             <td><a class="button" href="${API_ROOT}${row.download_url}">Download CSV</a></td>
           `;
         } else {
           tr.innerHTML = `
             <td>${escapeHtml(row.scan_date || "")}</td>
-            <td colspan="4" class="warning">No scans for that day.</td>
+            <td colspan="5" class="warning">No scans for that day.</td>
           `;
         }
 
@@ -173,27 +175,8 @@
       return `${(value / (1024 * 1024)).toFixed(1)} MB`;
     }
 
-    function formatTimestamp(value) {
-      if (!value) {
-        return "";
-      }
-
-      const parsed = new Date(value);
-
-      if (Number.isNaN(parsed.getTime())) {
-        return value;
-      }
-
-      return `${parsed.toLocaleDateString()} ${formatMeridiem(parsed)}`;
-    }
-
-    function formatMeridiem(value) {
-      return value.toLocaleTimeString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: true
-      }).replace(/\s?(AM|PM)$/i, (suffix) => suffix.toLowerCase());
+    function formatCount(value) {
+      return Number(value || 0).toLocaleString();
     }
 
     function escapeHtml(value) {

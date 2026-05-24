@@ -275,6 +275,11 @@ def build_dashboard_health(config):
                 current_day,
                 previous_day,
             )
+            daily_totals["today_by_scanner"] = fetch_dashboard_today_scanner_totals(
+                db,
+                config,
+                current_day,
+            )
             current_scan_rate = fetch_current_scan_rate(db)
 
             database = {
@@ -321,6 +326,7 @@ def empty_daily_totals(current_day: date, previous_day: date) -> dict:
     return {
         "today": dashboard_total_row(current_day),
         "yesterday": dashboard_total_row(previous_day),
+        "today_by_scanner": [],
     }
 
 
@@ -416,9 +422,13 @@ def dashboard_total_row(scan_date: date, row: Optional[dict] = None) -> dict:
     row = row or {}
     return {
         "scan_date": scan_date.isoformat(),
+        "total_scan_events": int(row.get("total_scan_events") or 0),
         "successful_scans": int(row.get("successful_scans") or 0),
         "failed_scans": int(row.get("failed_scans") or 0),
         "duplicate_scans": int(row.get("duplicate_scans") or 0),
+        "same_scanner_duplicate_scans": int(
+            row.get("same_scanner_duplicate_scans") or 0
+        ),
     }
 
 
@@ -432,9 +442,13 @@ def fetch_dashboard_daily_totals(
         """
         SELECT
             scan_date,
+            count(*) AS total_scan_events,
             count(*) FILTER (WHERE is_success) AS successful_scans,
             count(*) FILTER (WHERE is_success = false) AS failed_scans,
-            count(*) FILTER (WHERE is_duplicate) AS duplicate_scans
+            count(*) FILTER (WHERE is_duplicate) AS duplicate_scans,
+            count(*) FILTER (
+                WHERE is_duplicate AND is_cross_scanner_duplicate = false
+            ) AS same_scanner_duplicate_scans
         FROM scanner_logger.scan_events
         WHERE scan_date IN (%s, %s)
         GROUP BY scan_date
@@ -446,6 +460,55 @@ def fetch_dashboard_daily_totals(
     return {
         "today": dashboard_total_row(current_day, rows_by_date.get(current_day)),
         "yesterday": dashboard_total_row(previous_day, rows_by_date.get(previous_day)),
+        "today_by_scanner": [],
+    }
+
+
+def fetch_dashboard_today_scanner_totals(db, config, current_day: date) -> list[dict]:
+    rows = fetch_all(
+        db,
+        """
+        SELECT
+            scanner_id,
+            max(NULLIF(scanner_name, '')) AS scanner_name,
+            count(*) AS total_scan_events,
+            count(*) FILTER (WHERE is_success) AS successful_scans,
+            count(*) FILTER (WHERE is_success = false) AS failed_scans,
+            count(*) FILTER (WHERE is_duplicate) AS duplicate_scans,
+            count(*) FILTER (
+                WHERE is_duplicate AND is_cross_scanner_duplicate = false
+            ) AS same_scanner_duplicate_scans
+        FROM scanner_logger.scan_events
+        WHERE scan_date = %s
+        GROUP BY scanner_id
+        ORDER BY scanner_id ASC
+        """,
+        [current_day],
+    )
+
+    return [dashboard_scanner_total_row(config, row) for row in rows]
+
+
+def dashboard_scanner_total_row(config, row: dict) -> dict:
+    scanner_id = int(row.get("scanner_id") or 0)
+    scanner_id_text = str(scanner_id)
+    config_scanner_names = getattr(config, "scanner_names", {}) or {}
+    scanner_name = row.get("scanner_name") or config_scanner_names.get(
+        scanner_id_text,
+        "",
+    )
+
+    return {
+        "scanner_id": scanner_id,
+        "scanner_name": scanner_name,
+        "display_name": scanner_name or f"Scanner {scanner_id_text}",
+        "total_scan_events": int(row.get("total_scan_events") or 0),
+        "successful_scans": int(row.get("successful_scans") or 0),
+        "failed_scans": int(row.get("failed_scans") or 0),
+        "duplicate_scans": int(row.get("duplicate_scans") or 0),
+        "same_scanner_duplicate_scans": int(
+            row.get("same_scanner_duplicate_scans") or 0
+        ),
     }
 
 
@@ -503,7 +566,7 @@ def daily_csv_log_path(config, scan_date: date) -> Path:
     if not csv_path.exists() or not csv_path.is_file():
         raise HTTPException(status_code=404, detail="daily CSV not found")
 
-    if count_daily_csv_scan_rows(csv_path) == 0:
+    if daily_csv_scan_summary(csv_path)["scan_count"] == 0:
         raise HTTPException(status_code=404, detail="daily CSV has no scan rows")
 
     return csv_path
@@ -511,7 +574,8 @@ def daily_csv_log_path(config, scan_date: date) -> Path:
 
 def daily_csv_log_row(config, csv_path: Path, scan_date: date) -> dict:
     stat = csv_path.stat()
-    scan_count = count_daily_csv_scan_rows(csv_path)
+    scan_summary = daily_csv_scan_summary(csv_path)
+    scan_count = scan_summary["scan_count"]
     has_scans = scan_count > 0
     download_url = None
 
@@ -527,16 +591,56 @@ def daily_csv_log_row(config, csv_path: Path, scan_date: date) -> dict:
         ),
         "has_scans": has_scans,
         "scan_count": scan_count,
+        "same_scanner_duplicate_count": scan_summary[
+            "same_scanner_duplicate_count"
+        ],
         "download_url": download_url,
     }
 
 
 def count_daily_csv_scan_rows(csv_path: Path) -> int:
-    with csv_path.open("r", newline="", encoding="utf-8", errors="replace") as f:
-        reader = csv.reader(f)
-        next(reader, None)
+    return daily_csv_scan_summary(csv_path)["scan_count"]
 
-        return sum(1 for row in reader if any(cell.strip() for cell in row))
+
+def daily_csv_scan_summary(csv_path: Path) -> dict:
+    scan_count = 0
+    same_scanner_duplicate_count = 0
+
+    with csv_path.open("r", newline="", encoding="utf-8", errors="replace") as f:
+        reader = csv.DictReader(f)
+
+        for row in reader:
+            if not csv_row_has_data(row):
+                continue
+
+            scan_count += 1
+
+            if csv_truthy(row.get("is_duplicate")) and not csv_truthy(
+                row.get("is_cross_scanner_duplicate")
+            ):
+                same_scanner_duplicate_count += 1
+
+    return {
+        "scan_count": scan_count,
+        "same_scanner_duplicate_count": same_scanner_duplicate_count,
+    }
+
+
+def csv_row_has_data(row: dict) -> bool:
+    for value in row.values():
+        if isinstance(value, list):
+            if any(str(item or "").strip() for item in value):
+                return True
+            continue
+
+        if str(value or "").strip():
+            return True
+
+    return False
+
+
+def csv_truthy(value) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes"}
 
 
 def list_completed_daily_csv_logs(config, current_day: Optional[date] = None) -> list:
