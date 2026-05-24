@@ -18,7 +18,7 @@ PREFIX="${PREFIX:-Site_Shipped_Tracking}"
 NO_READ_MESSAGE="${NO_READ_MESSAGE:-__NO_READ__}"
 SUCCESS_LENGTH="${SUCCESS_LENGTH:-34}"
 MAX_BARCODE_CHARS="${MAX_BARCODE_CHARS:-256}"
-MAX_CLIENTS="${MAX_CLIENTS:-8}"
+MAX_CLIENTS="${MAX_CLIENTS:-10}"
 FRAME_IDLE_TIMEOUT="${FRAME_IDLE_TIMEOUT:-0.25}"
 CLIENT_IDLE_TIMEOUT="${CLIENT_IDLE_TIMEOUT:-0}"
 SHUTDOWN_TIMEOUT="${SHUTDOWN_TIMEOUT:-5}"
@@ -32,6 +32,7 @@ POSTGRESQL_TABLE="${POSTGRESQL_TABLE:-scanner_logger.scan_events}"
 POSTGRESQL_CONNECT_TIMEOUT="${POSTGRESQL_CONNECT_TIMEOUT:-3}"
 POSTGRESQL_RETRY_INTERVAL="${POSTGRESQL_RETRY_INTERVAL:-30}"
 LAST_SCANNER_ID="${LAST_SCANNER_ID:-}"
+MANDATORY_SCANNER_IDS="${MANDATORY_SCANNER_IDS:-}"
 API_ENABLED="${API_ENABLED:-1}"
 API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-8000}"
@@ -85,6 +86,7 @@ Options:
   --postgresql-connect-timeout SEC PostgreSQL connection timeout [${POSTGRESQL_CONNECT_TIMEOUT}]
   --postgresql-retry-interval SEC  retry delay after PostgreSQL failures [${POSTGRESQL_RETRY_INTERVAL}]
   --last-scanner-id ID     scanner IP last octet for the final outbound scanner [${LAST_SCANNER_ID:-not set}]
+  --mandatory-scanner-ids IDS comma or space-separated scanner IDs that must stay connected [${MANDATORY_SCANNER_IDS:-none}]
   --enable-api             enable and start the REST API service [default]
   --disable-api            install but disable the REST API service
   --api-host HOST          REST API bind address [${API_HOST}]
@@ -425,6 +427,10 @@ while [[ $# -gt 0 ]]; do
             LAST_SCANNER_ID="$2"
             shift 2
             ;;
+        --mandatory-scanner-ids)
+            MANDATORY_SCANNER_IDS="$2"
+            shift 2
+            ;;
         --enable-api)
             API_ENABLED=1
             shift
@@ -695,7 +701,7 @@ success_length = ${SUCCESS_LENGTH}
 max_barcode_chars = ${MAX_BARCODE_CHARS}
 
 # Maximum simultaneous scanner TCP connections.
-# Default: 8. Range: greater than 0. Example: 16 for a larger conveyor system.
+# Default: 10. Range: greater than 0. Example: 16 for a larger conveyor system.
 max_clients = ${MAX_CLIENTS}
 
 # Seconds to wait before flushing a partial scanner frame when no line ending is received.
@@ -768,6 +774,11 @@ retry_interval = ${POSTGRESQL_RETRY_INTERVAL}
 # Default: blank, which disables last-scanner matching. Range when set: 0-255.
 # Example: if the final scanner IP is 10.10.10.21, set last_scanner_id = 21.
 last_scanner_id = ${LAST_SCANNER_ID}
+
+# Scanner IDs that must stay connected for the health page and TV dashboard to report OK.
+# Default: blank, which disables mandatory scanner warnings. Format: comma or space-separated scanner IP last octets.
+# Example: mandatory_scanner_ids = 20, 21
+mandatory_scanner_ids = ${MANDATORY_SCANNER_IDS}
 
 [scanner_names]
 # Optional scanner ID to friendly-name mapping.

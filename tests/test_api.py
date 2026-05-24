@@ -176,29 +176,50 @@ class ApiQueryTests(unittest.TestCase):
             },
         )
 
-    def test_completed_daily_csv_logs_exclude_current_day(self):
+    def test_completed_daily_csv_logs_mark_empty_days_without_download(self):
         from types import SimpleNamespace
 
-        from industrial_scanner_logger.api import list_completed_daily_csv_logs
+        from industrial_scanner_logger.api import (
+            daily_csv_log_path,
+            list_completed_daily_csv_logs,
+        )
+        from fastapi import HTTPException
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
             previous_csv = output_dir / "Test_2026-05-17.csv"
+            empty_csv = output_dir / "Test_2026-05-16.csv"
             current_csv = output_dir / "Test_2026-05-18.csv"
             invalid_csv = output_dir / "Test_2026-99-99.csv"
-            previous_csv.write_text("date,time,tracking\n", encoding="utf-8")
+            previous_csv.write_text(
+                "date,time,tracking\n2026-05-17,08:00:00,123\n",
+                encoding="utf-8",
+            )
+            empty_csv.write_text("date,time,tracking\n", encoding="utf-8")
             current_csv.write_text("still,open,today\n", encoding="utf-8")
             invalid_csv.write_text("invalid,date\n", encoding="utf-8")
+            config = SimpleNamespace(output_dir=temp_dir, prefix="Test")
 
             rows = list_completed_daily_csv_logs(
-                SimpleNamespace(output_dir=temp_dir, prefix="Test"),
+                config,
                 current_day=date(2026, 5, 18),
             )
 
-        self.assertEqual(len(rows), 1)
+            with self.assertRaises(HTTPException) as context:
+                daily_csv_log_path(config, date(2026, 5, 16))
+
+        self.assertEqual(context.exception.status_code, 404)
+        self.assertEqual(context.exception.detail, "daily CSV has no scan rows")
+        self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["scan_date"], "2026-05-17")
         self.assertEqual(rows[0]["filename"], "Test_2026-05-17.csv")
+        self.assertTrue(rows[0]["has_scans"])
+        self.assertEqual(rows[0]["scan_count"], 1)
         self.assertEqual(rows[0]["download_url"], "/v1/logs/daily-csv/2026-05-17")
+        self.assertEqual(rows[1]["scan_date"], "2026-05-16")
+        self.assertFalse(rows[1]["has_scans"])
+        self.assertEqual(rows[1]["scan_count"], 0)
+        self.assertIsNone(rows[1]["download_url"])
 
     def test_current_scan_rate_uses_rolling_one_minute_window(self):
         from industrial_scanner_logger.api import (
@@ -254,6 +275,23 @@ class ApiQueryTests(unittest.TestCase):
                 "scans_per_hour": 450,
             },
         )
+
+    def test_dashboard_mandatory_scanners_reports_missing_required_ids(self):
+        from types import SimpleNamespace
+
+        from industrial_scanner_logger.api import dashboard_mandatory_scanners
+
+        status = dashboard_mandatory_scanners(
+            SimpleNamespace(mandatory_scanner_ids=["20", "21"]),
+            [20],
+        )
+
+        self.assertFalse(status["ok"])
+        self.assertTrue(status["configured"])
+        self.assertEqual(status["required_scanner_ids"], [20, 21])
+        self.assertEqual(status["connected_required_scanner_ids"], [20])
+        self.assertEqual(status["missing_scanner_ids"], [21])
+        self.assertEqual(status["warning"], "Mandatory scanner not connected: 21")
 
 
 if __name__ == "__main__":

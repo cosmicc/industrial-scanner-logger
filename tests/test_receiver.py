@@ -21,6 +21,7 @@ from industrial_scanner_logger.receiver import (  # noqa: E402
     handle_client,
     load_receiver_config,
     oversized_scan_marker,
+    parse_configured_scanner_ids,
     parse_postgresql_table,
     reset_script_logging,
     scanner_id_for_postgresql,
@@ -164,6 +165,21 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(scanner_id_for_postgresql("UNKNOWN"), 0)
         self.assertEqual(scanner_id_for_postgresql("scanner-A"), 0)
 
+    def test_parse_configured_scanner_ids_accepts_comma_and_space_lists(self):
+        self.assertEqual(
+            parse_configured_scanner_ids(
+                "20, 21 22,20",
+                "scanners.mandatory_scanner_ids",
+            ),
+            ["20", "21", "22"],
+        )
+
+        with self.assertRaises(ValueError):
+            parse_configured_scanner_ids(
+                "20,scanner-a",
+                "scanners.mandatory_scanner_ids",
+            )
+
     def test_parse_postgresql_table_requires_safe_schema_table_name(self):
         self.assertEqual(
             parse_postgresql_table("scanner_logger.scan_events"),
@@ -214,6 +230,7 @@ retry_interval = 12
 
 [scanners]
 last_scanner_id = 21
+mandatory_scanner_ids = 20, 21
 
 [scanner_names]
 20 = Lane 1 Scanner
@@ -263,6 +280,7 @@ log_level = warning
                 },
             )
             self.assertTrue(config.api_enabled)
+            self.assertEqual(config.mandatory_scanner_ids, ["20", "21"])
             self.assertEqual(config.api_host, "0.0.0.0")
             self.assertEqual(config.api_port, 8080)
             self.assertEqual(config.api_root_path, "/api")

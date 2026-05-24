@@ -51,7 +51,7 @@ from industrial_scanner_logger._version import __version__
 
 DEFAULT_CONFIG_FILE = "/etc/industrial-scanner-logger.conf"
 DEFAULT_MAX_BARCODE_CHARS = 256
-DEFAULT_MAX_CLIENTS = 8
+DEFAULT_MAX_CLIENTS = 10
 DEFAULT_FRAME_IDLE_TIMEOUT_SECONDS = 0.25
 DEFAULT_CLIENT_IDLE_TIMEOUT_SECONDS = 0.0
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
@@ -66,6 +66,7 @@ DEFAULT_POSTGRESQL_TABLE = "scanner_logger.scan_events"
 DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS = 3.0
 DEFAULT_POSTGRESQL_RETRY_INTERVAL_SECONDS = 30.0
 DEFAULT_LAST_SCANNER_ID = ""
+DEFAULT_MANDATORY_SCANNER_IDS = ""
 LOG_BARCODE_PREVIEW_CHARS = 120
 MIN_MAX_BARCODE_CHARS = 64
 TRACKING_REPAIR_MIN_OVERLAP_CHARS = 4
@@ -128,6 +129,7 @@ CONFIG_DEFAULTS = {
     },
     "scanners": {
         "last_scanner_id": DEFAULT_LAST_SCANNER_ID,
+        "mandatory_scanner_ids": DEFAULT_MANDATORY_SCANNER_IDS,
     },
     "scanner_names": {},
     "api": {
@@ -327,6 +329,25 @@ def validate_configured_scanner_id(scanner_id: str, field_name: str) -> str:
     return str(value)
 
 
+def parse_configured_scanner_ids(scanner_ids: str, field_name: str) -> list[str]:
+    scanner_ids = clean_barcode(scanner_ids)
+
+    if not scanner_ids:
+        return []
+
+    parsed_scanner_ids = []
+    seen_scanner_ids = set()
+
+    for scanner_id in re.split(r"[,\s]+", scanner_ids):
+        normalized_scanner_id = validate_configured_scanner_id(scanner_id, field_name)
+
+        if normalized_scanner_id and normalized_scanner_id not in seen_scanner_ids:
+            parsed_scanner_ids.append(normalized_scanner_id)
+            seen_scanner_ids.add(normalized_scanner_id)
+
+    return parsed_scanner_ids
+
+
 def parse_scanner_name_map(config: configparser.ConfigParser) -> dict:
     scanner_names = {}
 
@@ -428,6 +449,10 @@ def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
             last_scanner_id=validate_configured_scanner_id(
                 config.get("scanners", "last_scanner_id"),
                 "scanners.last_scanner_id",
+            ),
+            mandatory_scanner_ids=parse_configured_scanner_ids(
+                config.get("scanners", "mandatory_scanner_ids"),
+                "scanners.mandatory_scanner_ids",
             ),
             scanner_names=parse_scanner_name_map(config),
             api_enabled=config.getboolean("api", "enabled"),

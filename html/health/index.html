@@ -61,6 +61,16 @@
         <h2>Currently Connected Scanner IDs</h2>
         <div id="scanner-list" class="scanner-list">Checking...</div>
       </div>
+
+      <div class="card">
+        <h2>Mandatory Scanners</h2>
+        <div class="status-row">
+          <span id="mandatory-scanners-dot" class="dot"></span>
+          <span id="mandatory-scanners-status">Checking...</span>
+        </div>
+        <div id="mandatory-scanners-detail" class="detail"></div>
+        <div id="mandatory-scanner-list" class="scanner-list"></div>
+      </div>
     </section>
 
     <section class="grid">
@@ -182,6 +192,43 @@
 
         badge.className = "badge";
         badge.textContent = `${scannerName} (${scannerRole})`;
+        container.appendChild(badge);
+      }
+    }
+
+    function renderMandatoryScanners(mandatoryScanners) {
+      const container = document.getElementById("mandatory-scanner-list");
+      const requiredScannerIds = mandatoryScanners?.required_scanner_ids || [];
+      const missingScannerIds = new Set(
+        (mandatoryScanners?.missing_scanner_ids || []).map(String)
+      );
+
+      container.innerHTML = "";
+
+      if (!mandatoryScanners?.configured) {
+        setIndicator(
+          "mandatory-scanners",
+          true,
+          "Not Configured",
+          "No mandatory scanner IDs are configured."
+        );
+        return;
+      }
+
+      setIndicator(
+        "mandatory-scanners",
+        Boolean(mandatoryScanners.ok),
+        mandatoryScanners.ok ? "Connected" : "Warning",
+        mandatoryScanners.warning || "All mandatory scanners are connected."
+      );
+
+      for (const scannerId of requiredScannerIds) {
+        const scannerIdText = String(scannerId);
+        const badge = document.createElement("span");
+        const missing = missingScannerIds.has(scannerIdText);
+
+        badge.className = `badge${missing ? " missing" : ""}`;
+        badge.textContent = `Scanner ${scannerIdText}${missing ? " missing" : ""}`;
         container.appendChild(badge);
       }
     }
@@ -430,6 +477,7 @@
         }
 
         renderConnectedScanners(data.connected_scanners, data.connected_scanner_ids);
+        renderMandatoryScanners(data.mandatory_scanners);
         renderDailyTotals(database.active ? data.daily_totals : null);
         renderCurrentScanRate(database.active ? data.current_scan_rate : null);
         renderRecentScans(data.recent_scans);
@@ -448,6 +496,9 @@
 
         document.getElementById("scanner-list").textContent =
           "Unable to load scanner connection data.";
+
+        setIndicator("mandatory-scanners", false, "Unknown", "API unavailable.");
+        document.getElementById("mandatory-scanner-list").innerHTML = "";
 
         renderDailyTotals(null);
         renderCurrentScanRate(null);

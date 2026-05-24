@@ -1,3 +1,4 @@
+import csv
 import re
 import shutil
 import subprocess
@@ -201,6 +202,7 @@ def build_dashboard_health(config):
 
     connected_scanner_ids = connected_scanner_ids_from_ss(config.port)
     connected_scanners = dashboard_connected_scanners(config, connected_scanner_ids)
+    mandatory_scanners = dashboard_mandatory_scanners(config, connected_scanner_ids)
     script_log = read_last_log_lines(SCANNER_SCRIPT_LOG_PATH, line_count=10)
 
     database = {
@@ -294,6 +296,7 @@ def build_dashboard_health(config):
         services["scanner"]["active"]
         and services["api"]["active"]
         and database["active"]
+        and mandatory_scanners["ok"]
     )
 
     return {
@@ -302,7 +305,9 @@ def build_dashboard_health(config):
         "services": services,
         "database": database,
         "connected_scanner_ids": connected_scanner_ids,
+        "connected_scanner_count": len(connected_scanner_ids),
         "connected_scanners": connected_scanners,
+        "mandatory_scanners": mandatory_scanners,
         "last_received": last_received,
         "recent_scans": recent_scans,
         "daily_totals": daily_totals,
@@ -337,6 +342,41 @@ def dashboard_connected_scanners(config, connected_scanner_ids: list[int]) -> li
         })
 
     return scanners
+
+
+def dashboard_mandatory_scanners(config, connected_scanner_ids: list[int]) -> dict:
+    connected_scanner_id_texts = {
+        str(scanner_id) for scanner_id in connected_scanner_ids
+    }
+    required_scanner_ids = list(config.mandatory_scanner_ids)
+    connected_required_scanner_ids = [
+        scanner_id
+        for scanner_id in required_scanner_ids
+        if scanner_id in connected_scanner_id_texts
+    ]
+    missing_scanner_ids = [
+        scanner_id
+        for scanner_id in required_scanner_ids
+        if scanner_id not in connected_scanner_id_texts
+    ]
+    warning = None
+
+    if missing_scanner_ids:
+        warning = "Mandatory scanner not connected: "
+        if len(missing_scanner_ids) > 1:
+            warning = "Mandatory scanners not connected: "
+        warning += ", ".join(missing_scanner_ids)
+
+    return {
+        "configured": bool(required_scanner_ids),
+        "ok": not missing_scanner_ids,
+        "required_scanner_ids": [int(scanner_id) for scanner_id in required_scanner_ids],
+        "connected_required_scanner_ids": [
+            int(scanner_id) for scanner_id in connected_required_scanner_ids
+        ],
+        "missing_scanner_ids": [int(scanner_id) for scanner_id in missing_scanner_ids],
+        "warning": warning,
+    }
 
 
 def dashboard_total_row(scan_date: date, row: Optional[dict] = None) -> dict:
@@ -430,11 +470,21 @@ def daily_csv_log_path(config, scan_date: date) -> Path:
     if not csv_path.exists() or not csv_path.is_file():
         raise HTTPException(status_code=404, detail="daily CSV not found")
 
+    if count_daily_csv_scan_rows(csv_path) == 0:
+        raise HTTPException(status_code=404, detail="daily CSV has no scan rows")
+
     return csv_path
 
 
 def daily_csv_log_row(config, csv_path: Path, scan_date: date) -> dict:
     stat = csv_path.stat()
+    scan_count = count_daily_csv_scan_rows(csv_path)
+    has_scans = scan_count > 0
+    download_url = None
+
+    if has_scans:
+        download_url = f"{API_VERSION_PREFIX}/logs/daily-csv/{scan_date.isoformat()}"
+
     return {
         "scan_date": scan_date.isoformat(),
         "filename": csv_path.name,
@@ -442,8 +492,18 @@ def daily_csv_log_row(config, csv_path: Path, scan_date: date) -> dict:
         "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(
             timespec="seconds"
         ),
-        "download_url": f"{API_VERSION_PREFIX}/logs/daily-csv/{scan_date.isoformat()}",
+        "has_scans": has_scans,
+        "scan_count": scan_count,
+        "download_url": download_url,
     }
+
+
+def count_daily_csv_scan_rows(csv_path: Path) -> int:
+    with csv_path.open("r", newline="", encoding="utf-8", errors="replace") as f:
+        reader = csv.reader(f)
+        next(reader, None)
+
+        return sum(1 for row in reader if any(cell.strip() for cell in row))
 
 
 def list_completed_daily_csv_logs(config, current_day: Optional[date] = None) -> list:

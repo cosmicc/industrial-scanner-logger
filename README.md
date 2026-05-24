@@ -74,7 +74,7 @@ prefix = Site_Shipped_Tracking
 no_read_message = __NO_READ__
 success_length = 34
 max_barcode_chars = 256
-max_clients = 8
+max_clients = 10
 frame_idle_timeout = 0.25
 client_idle_timeout = 0
 shutdown_timeout = 5
@@ -99,6 +99,7 @@ retry_interval = 30
 
 [scanners]
 last_scanner_id =
+mandatory_scanner_ids =
 
 [scanner_names]
 # 20 = Lane 1 Scanner
@@ -275,12 +276,14 @@ package progression, duplicate queries, and successful packages
 missing the configured last scanner.
 
 Use `[scanners] last_scanner_id` for the final outbound scanner before boxes
-are loaded. Use `[scanner_names]` to map IP last-octet scanner IDs to readable
-names:
+are loaded. Use `[scanners] mandatory_scanner_ids` for scanner IDs that must
+stay connected for the health page and TV dashboard to report OK. Use
+`[scanner_names]` to map IP last-octet scanner IDs to readable names:
 
 ```ini
 [scanners]
 last_scanner_id = 21
+mandatory_scanner_ids = 20, 21
 
 [scanner_names]
 20 = Lane 1 Scanner
@@ -378,9 +381,12 @@ also supports `is_success`.
 
 `/api/v1/logs/daily-csv` lists completed daily CSV files for download and
 excludes the current day because that file may still be open for writing.
-`/logs` is the browser page for those downloads. `/tv-dashboard` is formatted
-for a 1920x1080 display and currently shows scan-rate, successful-scan, and
-duplicate totals from the health dashboard data.
+Header-only daily CSV files are shown as days with no scans instead of being
+made available for download. `/logs` is the browser page for those downloads
+and shows the newest entries first in groups of 10. `/tv-dashboard` is formatted
+for a 1920x1080 display and currently shows scan rate, today's successful-scan
+and duplicate totals, last received scan age, connected scanner count, and
+mandatory scanner warnings from the health dashboard data.
 
 Interactive API docs are available through nginx:
 

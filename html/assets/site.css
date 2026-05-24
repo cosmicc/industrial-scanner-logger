@@ -135,6 +135,11 @@ h1 {
   font-weight: 700;
 }
 
+.badge.missing {
+  border-color: rgba(245, 158, 11, 0.8);
+  color: #fde68a;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -175,6 +180,11 @@ tr:last-child td {
 }
 
 .duplicate {
+  color: var(--yellow);
+  font-weight: 700;
+}
+
+.warning {
   color: var(--yellow);
   font-weight: 700;
 }
@@ -244,6 +254,11 @@ tr:last-child td {
   font: inherit;
 }
 
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .button.primary {
   background: var(--green);
   border-color: var(--green);
@@ -311,6 +326,23 @@ tr:last-child td {
   outline: none;
 }
 
+.pagination {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.pagination:empty {
+  display: none;
+}
+
+.pagination-label {
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .tv-body {
   background: #081014;
   overflow: hidden;
@@ -324,7 +356,7 @@ tr:last-child td {
   box-sizing: border-box;
   padding: 48px;
   display: grid;
-  grid-template-rows: 126px 252px 1fr;
+  grid-template-rows: 126px auto 252px 1fr;
   gap: 28px;
   background:
     linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(8, 16, 20, 0.98)),
@@ -333,6 +365,7 @@ tr:last-child td {
 }
 
 .tv-header {
+  grid-row: 1;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -369,11 +402,31 @@ tr:last-child td {
   color: #fecaca;
 }
 
+.tv-warning {
+  grid-row: 2;
+  border: 3px solid rgba(245, 158, 11, 0.72);
+  border-radius: 8px;
+  background: rgba(69, 26, 3, 0.78);
+  color: #fde68a;
+  font-size: 34px;
+  font-weight: 800;
+  padding: 18px 28px;
+}
+
 .tv-rate-grid,
-.tv-day-grid {
+.tv-info-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 28px;
+}
+
+.tv-rate-grid {
+  grid-row: 3;
+}
+
+.tv-info-grid {
+  grid-row: 4;
+  grid-template-columns: 1.4fr 1fr 1fr;
 }
 
 .tv-panel {
@@ -445,7 +498,7 @@ tr:last-child td {
 
   .tv-header,
   .tv-rate-grid,
-  .tv-day-grid,
+  .tv-info-grid,
   .tv-stat-row {
     grid-template-columns: 1fr;
   }
