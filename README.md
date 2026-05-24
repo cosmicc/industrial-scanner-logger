@@ -304,6 +304,10 @@ mandatory_scanner_ids = 20, 21
 [scanner_names]
 20 = Lane 1 Scanner
 21 = Last Scanner
+
+[dashboard]
+health_page_refresh_seconds = 3
+tv_dashboard_refresh_seconds = 1
 ```
 
 Repeated successful scans are logged from the same scanner and across scanners.
@@ -399,10 +403,12 @@ also supports `is_success`.
 excludes the current day because that file may still be open for writing.
 Header-only daily CSV files are shown as days with no scans instead of being
 made available for download. `/logs` is the browser page for those downloads
-and shows the newest entries first in groups of 10. `/tv-dashboard` is formatted
-for a 1920x1080 display and currently shows scan rate, today's successful-scan
-and duplicate totals, last received scan age, connected scanner count, and
-mandatory scanner warnings from the health dashboard data.
+and shows the newest entries first in groups of 10. `/health` refreshes every 3
+seconds by default, and `/tv-dashboard` refreshes every second by default. The
+TV dashboard is formatted for a 1920x1080 display and currently shows scan
+rate, today's total, successful, duplicate, and failed counts, last received
+scan age, connected scanner count, and mandatory scanner warnings from the
+health dashboard data.
 
 Interactive API docs are available through nginx:
 

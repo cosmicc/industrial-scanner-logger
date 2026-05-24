@@ -9,10 +9,6 @@
 <body class="tv-body">
   <main class="tv-page">
     <header class="tv-header">
-      <div>
-        <h1>TV Dashboard</h1>
-        <div id="tv-generated" class="tv-subhead">Loading...</div>
-      </div>
       <div id="tv-status" class="tv-status">Checking</div>
     </header>
 
@@ -35,12 +31,20 @@
         <div id="tv-today-date" class="tv-date">Loading...</div>
         <div class="tv-stat-row">
           <div>
-            <div class="tv-label">Successful Scans</div>
+            <div class="tv-label">Total</div>
+            <div id="tv-today-total" class="tv-value">0</div>
+          </div>
+          <div>
+            <div class="tv-label">Successful</div>
             <div id="tv-today-success" class="tv-value success">0</div>
           </div>
           <div>
             <div class="tv-label">Duplicates</div>
             <div id="tv-today-duplicates" class="tv-value duplicate">0</div>
+          </div>
+          <div>
+            <div class="tv-label">Failed</div>
+            <div id="tv-today-failed" class="tv-value failed">0</div>
           </div>
         </div>
       </div>
@@ -57,10 +61,18 @@
         <div id="tv-connected-detail" class="tv-date">Checking...</div>
       </div>
     </section>
+
+    <footer class="tv-footer">
+      <span id="tv-generated">Updated pending</span>
+    </footer>
   </main>
 
   <script>
     const API_URL = "/api/v1/dashboard/health";
+    const DEFAULT_TV_REFRESH_SECONDS = 1;
+    let tvRefreshTimer = null;
+    let tvRefreshIntervalMs = null;
+    let lastGeneratedAt = null;
 
     async function loadDashboard() {
       try {
@@ -89,7 +101,9 @@
 
       status.textContent = (data.status || "unknown").toUpperCase();
       status.classList.toggle("offline", data.status !== "ok");
-      document.getElementById("tv-generated").textContent = formatGeneratedAt(data.generated_at);
+      lastGeneratedAt = data.generated_at || null;
+      renderGeneratedAt();
+      configureTvRefresh(data.tv_dashboard_refresh_seconds);
 
       if (mandatoryScanners.warning) {
         warning.hidden = false;
@@ -103,8 +117,10 @@
       setText("tv-scans-hour", formatNumber(rate.scans_per_hour));
 
       setText("tv-today-date", today.scan_date || "");
+      setText("tv-today-total", formatNumber(today.total_scan_events));
       setText("tv-today-success", formatNumber(today.successful_scans));
       setText("tv-today-duplicates", formatNumber(today.duplicate_scans));
+      setText("tv-today-failed", formatNumber(today.failed_scans));
 
       renderLastReceived(data.last_received);
       renderConnectedScanners(data);
@@ -204,18 +220,45 @@
       });
     }
 
-    function formatGeneratedAt(value) {
-      if (!value) {
-        return "Waiting for data";
+    function renderGeneratedAt() {
+      if (!lastGeneratedAt) {
+        setText("tv-generated", "Updated pending");
+        return;
       }
 
-      const parsed = new Date(value);
+      const parsed = new Date(lastGeneratedAt);
 
       if (Number.isNaN(parsed.getTime())) {
-        return value;
+        setText("tv-generated", `Updated ${lastGeneratedAt}`);
+        return;
       }
 
-      return `Updated ${formatMeridiem(parsed)}`;
+      setText("tv-generated", `Updated ${formatElapsedSince(parsed, -1)}`);
+    }
+
+    function configureTvRefresh(refreshSeconds) {
+      const intervalMs = refreshIntervalMs(refreshSeconds, DEFAULT_TV_REFRESH_SECONDS);
+
+      if (tvRefreshTimer && intervalMs === tvRefreshIntervalMs) {
+        return;
+      }
+
+      if (tvRefreshTimer) {
+        window.clearInterval(tvRefreshTimer);
+      }
+
+      tvRefreshIntervalMs = intervalMs;
+      tvRefreshTimer = window.setInterval(loadDashboard, intervalMs);
+    }
+
+    function refreshIntervalMs(value, defaultSeconds) {
+      const seconds = Number(value || defaultSeconds);
+
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        return defaultSeconds * 1000;
+      }
+
+      return Math.max(1000, seconds * 1000);
     }
 
     function formatElapsedTime(scanDate, scanTime, now = new Date()) {
@@ -229,13 +272,21 @@
         return "Unknown";
       }
 
+      return formatElapsedSince(scanDateTime, 10, now);
+    }
+
+    function formatElapsedSince(value, nowThresholdSeconds, now = new Date()) {
       const elapsedSeconds = Math.max(
         0,
-        Math.floor((now.getTime() - scanDateTime.getTime()) / 1000)
+        Math.floor((now.getTime() - value.getTime()) / 1000)
       );
 
-      if (elapsedSeconds <= 10) {
+      if (elapsedSeconds <= nowThresholdSeconds) {
         return "Now";
+      }
+
+      if (elapsedSeconds <= 1) {
+        return "1 Second ago";
       }
 
       const units = [
@@ -336,7 +387,8 @@
     }
 
     loadDashboard();
-    window.setInterval(loadDashboard, 5000);
+    configureTvRefresh(DEFAULT_TV_REFRESH_SECONDS);
+    window.setInterval(renderGeneratedAt, 1000);
   </script>
 </body>
 </html>

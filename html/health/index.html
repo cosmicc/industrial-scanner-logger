@@ -10,7 +10,8 @@
   <main class="page">
     <h1>Industrial Scanner Logger Health</h1>
     <div class="subhead">
-      Auto-refreshes every 5 seconds. Data source: <code>/api/v1/dashboard/health</code>
+      Auto-refreshes <span id="health-refresh-label">every 3 seconds</span>.
+      Data source: <code>/api/v1/dashboard/health</code>
     </div>
 
     <section class="grid">
@@ -75,11 +76,11 @@
         <div id="today-date" class="detail">Checking...</div>
         <div class="metric-grid four-up">
           <div class="metric">
-            <div class="metric-label">Total Scans</div>
+            <div class="metric-label">Total</div>
             <div id="today-total" class="metric-value">0</div>
           </div>
           <div class="metric">
-            <div class="metric-label">Successful Scans</div>
+            <div class="metric-label">Successful</div>
             <div id="today-success" class="metric-value success">0</div>
           </div>
           <div class="metric">
@@ -87,7 +88,7 @@
             <div id="today-duplicates" class="metric-value duplicate">0</div>
           </div>
           <div class="metric">
-            <div class="metric-label">Failed Scans</div>
+            <div class="metric-label">Failed</div>
             <div id="today-failed" class="metric-value failed">0</div>
           </div>
         </div>
@@ -98,11 +99,11 @@
         <div id="yesterday-date" class="detail">Checking...</div>
         <div class="metric-grid four-up">
           <div class="metric">
-            <div class="metric-label">Total Scans</div>
+            <div class="metric-label">Total</div>
             <div id="yesterday-total" class="metric-value">0</div>
           </div>
           <div class="metric">
-            <div class="metric-label">Successful Scans</div>
+            <div class="metric-label">Successful</div>
             <div id="yesterday-success" class="metric-value success">0</div>
           </div>
           <div class="metric">
@@ -110,7 +111,7 @@
             <div id="yesterday-duplicates" class="metric-value duplicate">0</div>
           </div>
           <div class="metric">
-            <div class="metric-label">Failed Scans</div>
+            <div class="metric-label">Failed</div>
             <div id="yesterday-failed" class="metric-value failed">0</div>
           </div>
         </div>
@@ -125,7 +126,7 @@
           <thead>
             <tr>
               <th>Scanner</th>
-              <th>Total Scans</th>
+              <th>Total</th>
               <th>Successful</th>
               <th>Failed</th>
               <th>Duplicates</th>
@@ -182,6 +183,9 @@
 
   <script>
     const API_URL = "/api/v1/dashboard/health";
+    const DEFAULT_HEALTH_REFRESH_SECONDS = 3;
+    let healthRefreshTimer = null;
+    let healthRefreshIntervalMs = null;
 
     function setIndicator(prefix, active, statusText, detailText) {
       const dot = document.getElementById(`${prefix}-dot`);
@@ -655,6 +659,7 @@
         );
         renderRecentScans(data.recent_scans);
         renderScriptLog(data.script_log);
+        configureHealthRefresh(data.health_page_refresh_seconds);
 
         document.getElementById("page-updated").textContent =
           formatDateTime12(new Date());
@@ -676,7 +681,7 @@
         renderCurrentScanRate(null);
 
         document.getElementById("recent-scans").innerHTML =
-          `<tr><td colspan="11" class="error">Unable to load recent scan rows.</td></tr>`;
+          `<tr><td colspan="10" class="error">Unable to load recent scan rows.</td></tr>`;
 
         document.getElementById("script-log-meta").textContent =
           "Unable to load script log.";
@@ -687,7 +692,39 @@
     }
 
     refreshHealth();
-    setInterval(refreshHealth, 5000);
+    configureHealthRefresh(DEFAULT_HEALTH_REFRESH_SECONDS);
+
+    function configureHealthRefresh(refreshSeconds) {
+      const intervalMs = refreshIntervalMs(
+        refreshSeconds,
+        DEFAULT_HEALTH_REFRESH_SECONDS
+      );
+
+      if (healthRefreshTimer && intervalMs === healthRefreshIntervalMs) {
+        return;
+      }
+
+      if (healthRefreshTimer) {
+        window.clearInterval(healthRefreshTimer);
+      }
+
+      healthRefreshIntervalMs = intervalMs;
+      healthRefreshTimer = window.setInterval(refreshHealth, intervalMs);
+
+      const seconds = intervalMs / 1000;
+      document.getElementById("health-refresh-label").textContent =
+        `every ${seconds.toLocaleString()} second${seconds === 1 ? "" : "s"}`;
+    }
+
+    function refreshIntervalMs(value, defaultSeconds) {
+      const seconds = Number(value || defaultSeconds);
+
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        return defaultSeconds * 1000;
+      }
+
+      return Math.max(1000, seconds * 1000);
+    }
 
     function formatDateTime12(value) {
       return `${value.toLocaleDateString()} ${formatMeridiem(value)}`;

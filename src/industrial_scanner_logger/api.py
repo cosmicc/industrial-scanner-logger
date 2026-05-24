@@ -318,6 +318,16 @@ def build_dashboard_health(config):
             "current_scan_rate_stale_seconds",
             60,
         ),
+        "health_page_refresh_seconds": getattr(
+            config,
+            "health_page_refresh_seconds",
+            3,
+        ),
+        "tv_dashboard_refresh_seconds": getattr(
+            config,
+            "tv_dashboard_refresh_seconds",
+            1,
+        ),
         "services": services,
         "database": database,
         "connected_scanner_ids": connected_scanner_ids,

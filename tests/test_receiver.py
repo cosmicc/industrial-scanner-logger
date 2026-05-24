@@ -149,8 +149,8 @@ class FakeSocket:
 
 
 class ReceiverTests(unittest.TestCase):
-    def test_project_version_is_1_2_0(self):
-        self.assertEqual(__version__, "1.2.0")
+    def test_project_version_is_1_2_1(self):
+        self.assertEqual(__version__, "1.2.1")
 
     def test_clean_barcode_removes_scanner_line_noise(self):
         self.assertEqual(clean_barcode("\x0012345\r\n"), "12345")
@@ -240,6 +240,8 @@ mandatory_scanner_ids = 20, 21
 
 [dashboard]
 current_scan_rate_stale_seconds = 120
+health_page_refresh_seconds = 4
+tv_dashboard_refresh_seconds = 2
 
 [api]
 enabled = true
@@ -287,6 +289,8 @@ log_level = warning
             self.assertTrue(config.api_enabled)
             self.assertEqual(config.mandatory_scanner_ids, ["20", "21"])
             self.assertEqual(config.current_scan_rate_stale_seconds, 120)
+            self.assertEqual(config.health_page_refresh_seconds, 4)
+            self.assertEqual(config.tv_dashboard_refresh_seconds, 2)
             self.assertEqual(config.api_host, "0.0.0.0")
             self.assertEqual(config.api_port, 8080)
             self.assertEqual(config.api_root_path, "/api")

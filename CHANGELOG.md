@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.1 - 2026-05-24 (Pre-release)
+
+- Add configurable health page and TV dashboard refresh intervals.
+- Refresh the TV dashboard every second by default and the health page every 3 seconds by default.
+- Expand the TV dashboard today panel to show total, successful, duplicate, and failed counts.
+- Simplify health page daily total labels.
+- Move the TV dashboard updated indicator to the bottom of the page and show elapsed time.
+
 ## 1.2.0 - 2026-05-24
 
 - Log same-scanner repeated successful scans instead of silently ignoring them.

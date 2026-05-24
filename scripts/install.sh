@@ -34,6 +34,8 @@ POSTGRESQL_RETRY_INTERVAL="${POSTGRESQL_RETRY_INTERVAL:-30}"
 LAST_SCANNER_ID="${LAST_SCANNER_ID:-}"
 MANDATORY_SCANNER_IDS="${MANDATORY_SCANNER_IDS:-}"
 CURRENT_SCAN_RATE_STALE_SECONDS="${CURRENT_SCAN_RATE_STALE_SECONDS:-60}"
+HEALTH_PAGE_REFRESH_SECONDS="${HEALTH_PAGE_REFRESH_SECONDS:-3}"
+TV_DASHBOARD_REFRESH_SECONDS="${TV_DASHBOARD_REFRESH_SECONDS:-1}"
 API_ENABLED="${API_ENABLED:-1}"
 API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-8000}"
@@ -90,6 +92,8 @@ Options:
   --last-scanner-id ID     scanner IP last octet for the final outbound scanner [${LAST_SCANNER_ID:-not set}]
   --mandatory-scanner-ids IDS comma or space-separated scanner IDs that must stay connected [${MANDATORY_SCANNER_IDS:-none}]
   --current-scan-rate-stale-seconds SEC seconds before health scan-rate indicator turns red [${CURRENT_SCAN_RATE_STALE_SECONDS}]
+  --health-page-refresh-seconds SEC health page automatic refresh interval [${HEALTH_PAGE_REFRESH_SECONDS}]
+  --tv-dashboard-refresh-seconds SEC TV dashboard automatic refresh interval [${TV_DASHBOARD_REFRESH_SECONDS}]
   --enable-api             enable and start the REST API service [default]
   --disable-api            install but disable the REST API service
   --api-host HOST          REST API bind address [${API_HOST}]
@@ -437,6 +441,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --current-scan-rate-stale-seconds)
             CURRENT_SCAN_RATE_STALE_SECONDS="$2"
+            shift 2
+            ;;
+        --health-page-refresh-seconds)
+            HEALTH_PAGE_REFRESH_SECONDS="$2"
+            shift 2
+            ;;
+        --tv-dashboard-refresh-seconds)
+            TV_DASHBOARD_REFRESH_SECONDS="$2"
             shift 2
             ;;
         --enable-api)
@@ -811,6 +823,14 @@ mandatory_scanner_ids = ${MANDATORY_SCANNER_IDS}
 # Seconds since the last received scan before the health page Current Scan Rate indicator turns red.
 # Default: 60. Range: greater than 0. Example: 300 keeps the indicator green for 5 minutes after the last scan.
 current_scan_rate_stale_seconds = ${CURRENT_SCAN_RATE_STALE_SECONDS}
+
+# Seconds between automatic health page refreshes.
+# Default: 3. Range: greater than 0. Example: 10 refreshes the health page every 10 seconds.
+health_page_refresh_seconds = ${HEALTH_PAGE_REFRESH_SECONDS}
+
+# Seconds between automatic TV dashboard refreshes.
+# Default: 1. Range: greater than 0. Example: 5 refreshes the TV dashboard every 5 seconds.
+tv_dashboard_refresh_seconds = ${TV_DASHBOARD_REFRESH_SECONDS}
 
 [api]
 # Enables the REST API systemd service installed alongside the receiver.
