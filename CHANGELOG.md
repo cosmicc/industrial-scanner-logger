@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 - Add `/logs` for downloading completed daily CSV scan files while excluding the current day.
 - Add `/tv-dashboard` for 1920x1080 display of scan-rate, successful-scan, and duplicate totals.
 - Update tracking search to use an explicit one-year date range, support last-10-digit searches, and open FedEx links from result rows.
+- Add `refresh-nginx-config` for re-rendering the installed nginx site from `/etc/industrial-scanner-logger.conf`.
 
 ## 1.1.2 - 2026-05-17
 

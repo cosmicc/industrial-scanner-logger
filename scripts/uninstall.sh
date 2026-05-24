@@ -14,6 +14,7 @@ SCAN_DATA_LOG_DIR="${SCAN_DATA_LOG_DIR:-/var/log/industrial-scanner-logger}"
 NGINX_SITE_NAME="${NGINX_SITE_NAME:-industrial-scanner-logger}"
 NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/scanner-site}"
 UPDATE_SERVICES_BIN="${UPDATE_SERVICES_BIN:-/usr/local/bin/update-services}"
+REFRESH_NGINX_BIN="${REFRESH_NGINX_BIN:-/usr/local/bin/refresh-nginx-config}"
 
 if [[ "${EUID}" -ne 0 ]]; then
     echo "This uninstaller must be run as root. Re-run it with sudo." >&2
@@ -37,6 +38,7 @@ Options:
   --scan-data-log-dir DIR daily raw scan event log directory [${SCAN_DATA_LOG_DIR}]
   --nginx-site-name NAME nginx site file name [${NGINX_SITE_NAME}]
   --nginx-web-root DIR   document root to remove if empty [${NGINX_WEB_ROOT}]
+  --refresh-nginx-bin PATH nginx refresh helper path [${REFRESH_NGINX_BIN}]
   -h, --help             show this help
 
 The receiver config file is always removed.
@@ -111,6 +113,10 @@ while [[ $# -gt 0 ]]; do
             NGINX_WEB_ROOT="$2"
             shift 2
             ;;
+        --refresh-nginx-bin)
+            REFRESH_NGINX_BIN="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -142,6 +148,7 @@ rm -f "${API_UNIT_FILE}"
 rm -f "${CONFIG_FILE}"
 rm -f "${LEGACY_ENV_FILE}"
 rm -f "${UPDATE_SERVICES_BIN}"
+rm -f "${REFRESH_NGINX_BIN}"
 rmdir "${NGINX_WEB_ROOT}" >/dev/null 2>&1 || true
 
 if command -v systemctl >/dev/null 2>&1; then
@@ -163,6 +170,7 @@ Removed:
   ${CONFIG_FILE}
   ${LEGACY_ENV_FILE}
   ${UPDATE_SERVICES_BIN}
+  ${REFRESH_NGINX_BIN}
   ${NGINX_SITE_FILE}
   ${NGINX_SITE_LINK}
   ufw firewall/package

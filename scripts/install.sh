@@ -44,6 +44,7 @@ NGINX_SERVER_NAME="${NGINX_SERVER_NAME:-_}"
 NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/scanner-site}"
 NGINX_DISABLE_DEFAULT_SITE="${NGINX_DISABLE_DEFAULT_SITE:-1}"
 UPDATE_SERVICES_BIN="${UPDATE_SERVICES_BIN:-/usr/local/bin/update-services}"
+REFRESH_NGINX_BIN="${REFRESH_NGINX_BIN:-/usr/local/bin/refresh-nginx-config}"
 START_SERVICE="${START_SERVICE:-1}"
 OVERWRITE_CONFIG="${OVERWRITE_CONFIG:-0}"
 APT_UPDATED=0
@@ -97,6 +98,7 @@ Options:
   --nginx-server-name NAME nginx server_name value [${NGINX_SERVER_NAME}]
   --nginx-web-root DIR     document root for the future web interface [${NGINX_WEB_ROOT}]
   --keep-nginx-default-site keep Ubuntu's default nginx site enabled
+  --refresh-nginx-bin PATH nginx refresh helper path [${REFRESH_NGINX_BIN}]
   --overwrite-config        replace an existing config file
   --no-start                install and enable the service, but do not start it now
   -h, --help                show this help
@@ -476,6 +478,10 @@ while [[ $# -gt 0 ]]; do
             NGINX_DISABLE_DEFAULT_SITE=0
             shift
             ;;
+        --refresh-nginx-bin)
+            REFRESH_NGINX_BIN="$2"
+            shift 2
+            ;;
         --overwrite-config)
             OVERWRITE_CONFIG=1
             shift
@@ -512,6 +518,7 @@ API_SERVICE_TEMPLATE="${PROJECT_ROOT}/systemd/industrial-scanner-logger-api.serv
 NGINX_TEMPLATE="${PROJECT_ROOT}/nginx/industrial-scanner-logger.conf"
 HTML_SOURCE_DIR="${PROJECT_ROOT}/html"
 UPDATE_SERVICES_SOURCE="${PROJECT_ROOT}/scripts/update-services"
+REFRESH_NGINX_SOURCE="${PROJECT_ROOT}/scripts/refresh-nginx-config"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 API_UNIT_FILE="/etc/systemd/system/${API_SERVICE_NAME}.service"
 NGINX_AVAILABLE_DIR="/etc/nginx/sites-available"
@@ -559,6 +566,11 @@ fi
 
 if [[ ! -f "${UPDATE_SERVICES_SOURCE}" ]]; then
     echo "Missing update helper script: ${UPDATE_SERVICES_SOURCE}" >&2
+    exit 1
+fi
+
+if [[ ! -f "${REFRESH_NGINX_SOURCE}" ]]; then
+    echo "Missing nginx refresh helper script: ${REFRESH_NGINX_SOURCE}" >&2
     exit 1
 fi
 
@@ -625,6 +637,8 @@ chmod -R u=rwX,go=rX "${INSTALL_DIR}"
 configure_postgresql_database
 install -d -o root -g root -m 0755 "$(dirname -- "${UPDATE_SERVICES_BIN}")"
 install -o root -g root -m 0755 "${UPDATE_SERVICES_SOURCE}" "${UPDATE_SERVICES_BIN}"
+install -d -o root -g root -m 0755 "$(dirname -- "${REFRESH_NGINX_BIN}")"
+install -o root -g root -m 0755 "${REFRESH_NGINX_SOURCE}" "${REFRESH_NGINX_BIN}"
 
 install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${OUTPUT_DIR}"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${SCAN_DATA_LOG_DIR}"
@@ -782,6 +796,27 @@ root_path = ${API_ROOT_PATH}
 # Uvicorn API log verbosity.
 # Default: info. Common values: critical, error, warning, info, debug, trace.
 log_level = ${API_LOG_LEVEL}
+
+[nginx]
+# Nginx site filename without the .conf suffix.
+# Default: industrial-scanner-logger. Allowed: letters, numbers, dot, underscore, and dash.
+site_name = ${NGINX_SITE_NAME}
+
+# Nginx listen directive for this site.
+# Default: 80 default_server. Use 80 when this site should share port 80 with other server blocks.
+listen = ${NGINX_LISTEN}
+
+# Hostnames accepted by this site.
+# Default: _, which accepts any hostname not matched by a more specific site.
+server_name = ${NGINX_SERVER_NAME}
+
+# Document root for the installed web interface.
+# Default: /var/www/scanner-site. Static files from html/ are copied here during install.
+web_root = ${NGINX_WEB_ROOT}
+
+# Removes Ubuntu's default nginx site symlink before testing this site.
+# Default: true, because the default listen value also uses default_server.
+disable_default_site = $([[ "${NGINX_DISABLE_DEFAULT_SITE}" -eq 1 ]] && echo "true" || echo "false")
 CONFIG
     chmod 0644 "${CONFIG_FILE}"
 else
@@ -895,11 +930,15 @@ Web root:
 Update helper:
   ${UPDATE_SERVICES_BIN}
 
+Nginx refresh helper:
+  ${REFRESH_NGINX_BIN}
+
 UFW firewall:
   enabled; incoming allow list is 22/tcp, 55256/tcp, 80/tcp, 443/tcp
 
 Useful commands:
   sudo update-services
+  sudo refresh-nginx-config
   sudo systemctl status ${SERVICE_NAME}
   sudo systemctl status ${API_SERVICE_NAME}
   sudo systemctl status nginx

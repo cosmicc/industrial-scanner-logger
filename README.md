@@ -110,6 +110,13 @@ host = 127.0.0.1
 port = 8000
 root_path = /api
 log_level = info
+
+[nginx]
+site_name = industrial-scanner-logger
+listen = 80 default_server
+server_name = _
+web_root = /var/www/scanner-site
+disable_default_site = true
 ```
 
 Check the installed receiver version:
@@ -181,14 +188,19 @@ Receiver options are in:
 
 Edit that file to change the bind address, TCP port, output directory, CSV
 prefix, no-read text, success length, receiver safety limits, troubleshooting
-log path, PostgreSQL options, or REST API bind settings:
+log path, PostgreSQL options, REST API bind settings, or nginx site settings:
 
 ```bash
 sudo nano /etc/industrial-scanner-logger.conf
 sudo systemctl restart industrial-scanner-logger
 sudo systemctl restart industrial-scanner-logger-api
-sudo systemctl reload nginx
+sudo refresh-nginx-config
 ```
+
+`refresh-nginx-config` renders `nginx/industrial-scanner-logger.conf` with the
+`[api]` and `[nginx]` values from `/etc/industrial-scanner-logger.conf`, writes
+the result to `/etc/nginx/sites-available`, validates it with `nginx -t`, and
+restarts nginx.
 
 Useful service commands:
 
@@ -200,6 +212,7 @@ sudo journalctl -u industrial-scanner-logger -f
 sudo journalctl -u industrial-scanner-logger-api -f
 sudo tail -f /var/log/industrial-scanner-logger.log
 sudo tail -f /var/log/industrial-scanner-logger/scanner-log-data-$(date +%F).log
+sudo refresh-nginx-config
 sudo nginx -t
 sudo systemctl restart industrial-scanner-logger
 sudo systemctl restart industrial-scanner-logger-api

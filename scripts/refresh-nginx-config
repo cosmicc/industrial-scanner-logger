@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
+CONFIG_FILE="${CONFIG_FILE:-/etc/industrial-scanner-logger.conf}"
+NGINX_AVAILABLE_DIR="${NGINX_AVAILABLE_DIR:-/etc/nginx/sites-available}"
+NGINX_ENABLED_DIR="${NGINX_ENABLED_DIR:-/etc/nginx/sites-enabled}"
+RESTART_NGINX=1
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+DEFAULT_TEMPLATE="${PROJECT_ROOT}/nginx/industrial-scanner-logger.conf"
+if [[ ! -f "${DEFAULT_TEMPLATE}" ]]; then
+    DEFAULT_TEMPLATE="${INSTALL_DIR}/nginx/industrial-scanner-logger.conf"
+fi
+NGINX_TEMPLATE="${NGINX_TEMPLATE:-${DEFAULT_TEMPLATE}}"
+
+usage() {
+    cat <<USAGE
+Usage: sudo refresh-nginx-config [options]
+
+Render and install the Industrial Scanner Logger nginx site from the app config.
+
+Options:
+  --config-file PATH       app config file [${CONFIG_FILE}]
+  --template-file PATH     nginx template file [${NGINX_TEMPLATE}]
+  --sites-available DIR    nginx sites-available directory [${NGINX_AVAILABLE_DIR}]
+  --sites-enabled DIR      nginx sites-enabled directory [${NGINX_ENABLED_DIR}]
+  --no-restart             render and validate the site, but do not restart nginx
+  -h, --help               show this help
+
+The script reads [api] and [nginx] settings from the config file. Missing
+[nginx] settings use the installer defaults so older installs can still refresh.
+USAGE
+}
+
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "Missing required command: $1" >&2
+        exit 1
+    fi
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --config-file)
+            CONFIG_FILE="$2"
+            shift 2
+            ;;
+        --template-file)
+            NGINX_TEMPLATE="$2"
+            shift 2
+            ;;
+        --sites-available)
+            NGINX_AVAILABLE_DIR="$2"
+            shift 2
+            ;;
+        --sites-enabled)
+            NGINX_ENABLED_DIR="$2"
+            shift 2
+            ;;
+        --no-restart)
+            RESTART_NGINX=0
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+if [[ "${EUID}" -ne 0 ]]; then
+    echo "refresh-nginx-config must be run as root. Re-run it with sudo." >&2
+    exit 1
+fi
+
+require_command python3
+require_command nginx
+if [[ "${RESTART_NGINX}" -eq 1 ]]; then
+    require_command systemctl
+fi
+
+if [[ ! -f "${CONFIG_FILE}" ]]; then
+    echo "Missing app config file: ${CONFIG_FILE}" >&2
+    exit 1
+fi
+
+if [[ ! -f "${NGINX_TEMPLATE}" ]]; then
+    echo "Missing nginx site template: ${NGINX_TEMPLATE}" >&2
+    exit 1
+fi
+
+install -d -o root -g root -m 0755 "${NGINX_AVAILABLE_DIR}"
+install -d -o root -g root -m 0755 "${NGINX_ENABLED_DIR}"
+
+RENDERED_TEMP="$(mktemp)"
+SETTINGS_TEMP="$(mktemp)"
+BACKUP_FILE=""
+DEFAULT_SITE_REMOVED=0
+DEFAULT_SITE_TARGET=""
+NGINX_SITE_FILE=""
+NGINX_SITE_LINK=""
+
+cleanup() {
+    rm -f "${RENDERED_TEMP}" "${SETTINGS_TEMP}"
+    if [[ -n "${BACKUP_FILE}" ]]; then
+        rm -f "${BACKUP_FILE}"
+    fi
+}
+trap cleanup EXIT
+
+python3 - "${CONFIG_FILE}" "${NGINX_TEMPLATE}" "${RENDERED_TEMP}" >"${SETTINGS_TEMP}" <<'PY'
+import configparser
+import re
+import sys
+from pathlib import Path
+
+
+config_path = Path(sys.argv[1])
+template_path = Path(sys.argv[2])
+output_path = Path(sys.argv[3])
+
+config = configparser.ConfigParser(interpolation=None)
+config.read_dict(
+    {
+        "api": {
+            "host": "127.0.0.1",
+            "port": "8000",
+            "root_path": "/api",
+        },
+        "nginx": {
+            "site_name": "industrial-scanner-logger",
+            "listen": "80 default_server",
+            "server_name": "_",
+            "web_root": "/var/www/scanner-site",
+            "disable_default_site": "true",
+        },
+    }
+)
+
+if not config.read(config_path):
+    raise SystemExit(f"Could not read app config file: {config_path}")
+
+site_name = config.get("nginx", "site_name").strip()
+listen = config.get("nginx", "listen").strip()
+server_name = config.get("nginx", "server_name").strip()
+web_root = config.get("nginx", "web_root").strip()
+api_root_path = config.get("api", "root_path").strip().rstrip("/")
+api_host = config.get("api", "host").strip()
+api_port = config.get("api", "port").strip()
+disable_default_site = config.getboolean("nginx", "disable_default_site")
+
+if not re.fullmatch(r"[A-Za-z0-9._-]+", site_name):
+    raise SystemExit("[nginx] site_name may only contain letters, numbers, dots, underscores, and dashes.")
+if not listen:
+    raise SystemExit("[nginx] listen must not be blank.")
+if not server_name:
+    raise SystemExit("[nginx] server_name must not be blank.")
+if not web_root.startswith("/"):
+    raise SystemExit("[nginx] web_root must be an absolute path.")
+if not api_root_path.startswith("/") or api_root_path == "/":
+    raise SystemExit("[api] root_path must start with / and must not be / when nginx is enabled.")
+if not api_host:
+    raise SystemExit("[api] host must not be blank.")
+if not api_port.isdecimal() or not (1 <= int(api_port) <= 65535):
+    raise SystemExit("[api] port must be a number from 1 to 65535.")
+
+replacements = {
+    "@NGINX_LISTEN@": listen,
+    "@NGINX_SERVER_NAME@": server_name,
+    "@NGINX_WEB_ROOT@": web_root,
+    "@API_ROOT_PATH@": api_root_path,
+    "@API_HOST@": api_host,
+    "@API_PORT@": api_port,
+}
+
+rendered = template_path.read_text(encoding="utf-8")
+for token, value in replacements.items():
+    rendered = rendered.replace(token, value)
+
+unresolved = sorted(set(re.findall(r"@(?:NGINX|API)_[A-Z_]+@", rendered)))
+if unresolved:
+    raise SystemExit(f"Unresolved nginx template token(s): {', '.join(unresolved)}")
+
+output_path.write_text(rendered, encoding="utf-8")
+
+values = (
+    site_name,
+    listen,
+    server_name,
+    web_root,
+    api_root_path,
+    api_host,
+    api_port,
+    "true" if disable_default_site else "false",
+)
+sys.stdout.write("\0".join(values) + "\0")
+PY
+
+mapfile -d '' SETTINGS <"${SETTINGS_TEMP}"
+NGINX_SITE_NAME="${SETTINGS[0]}"
+NGINX_LISTEN="${SETTINGS[1]}"
+NGINX_SERVER_NAME="${SETTINGS[2]}"
+NGINX_WEB_ROOT="${SETTINGS[3]}"
+API_ROOT_PATH="${SETTINGS[4]}"
+API_HOST="${SETTINGS[5]}"
+API_PORT="${SETTINGS[6]}"
+NGINX_DISABLE_DEFAULT_SITE="${SETTINGS[7]}"
+
+NGINX_SITE_FILE="${NGINX_AVAILABLE_DIR}/${NGINX_SITE_NAME}.conf"
+NGINX_SITE_LINK="${NGINX_ENABLED_DIR}/${NGINX_SITE_NAME}.conf"
+NGINX_DEFAULT_SITE_LINK="${NGINX_ENABLED_DIR}/default"
+
+restore_previous_site() {
+    if [[ -n "${BACKUP_FILE}" ]]; then
+        cp -p "${BACKUP_FILE}" "${NGINX_SITE_FILE}"
+    else
+        rm -f "${NGINX_SITE_FILE}" "${NGINX_SITE_LINK}"
+    fi
+
+    if [[ "${DEFAULT_SITE_REMOVED}" -eq 1 && ! -e "${NGINX_DEFAULT_SITE_LINK}" ]]; then
+        ln -s "${DEFAULT_SITE_TARGET}" "${NGINX_DEFAULT_SITE_LINK}"
+    fi
+}
+
+if [[ -f "${NGINX_SITE_FILE}" ]]; then
+    BACKUP_FILE="$(mktemp)"
+    cp -p "${NGINX_SITE_FILE}" "${BACKUP_FILE}"
+fi
+
+install -o root -g root -m 0644 "${RENDERED_TEMP}" "${NGINX_SITE_FILE}"
+ln -sfn "${NGINX_SITE_FILE}" "${NGINX_SITE_LINK}"
+
+if [[ "${NGINX_DISABLE_DEFAULT_SITE}" == "true" && -L "${NGINX_DEFAULT_SITE_LINK}" ]]; then
+    DEFAULT_SITE_TARGET="$(readlink "${NGINX_DEFAULT_SITE_LINK}")"
+    rm -f "${NGINX_DEFAULT_SITE_LINK}"
+    DEFAULT_SITE_REMOVED=1
+    echo "Disabled Ubuntu default nginx site: ${NGINX_DEFAULT_SITE_LINK}"
+fi
+
+echo "Rendered nginx site: ${NGINX_SITE_FILE}"
+echo "  listen: ${NGINX_LISTEN}"
+echo "  server_name: ${NGINX_SERVER_NAME}"
+echo "  web_root: ${NGINX_WEB_ROOT}"
+echo "  api proxy: ${API_ROOT_PATH} -> http://${API_HOST}:${API_PORT}/"
+
+if ! nginx -t; then
+    restore_previous_site
+    echo "nginx validation failed; restored the previous site config." >&2
+    exit 1
+fi
+
+if [[ "${RESTART_NGINX}" -eq 1 ]]; then
+    systemctl restart nginx
+    echo "Restarted nginx."
+else
+    echo "Nginx restart skipped."
+fi
