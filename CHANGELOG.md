@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.2.0 - 2026-05-24
+
 - Log same-scanner repeated successful scans instead of silently ignoring them.
 - Add `is_duplicate` scan metadata and mark repeats only after the 3 different successful tracking number threshold is met.
 - Keep `is_cross_scanner_duplicate` as a narrower flag for duplicate scans previously accepted from another scanner.
