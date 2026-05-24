@@ -92,8 +92,6 @@ interval = 15
 probes = 4
 
 [postgresql]
-enabled = true
-required = true
 dsn = postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger
 table = scanner_logger.scan_events
 connect_timeout = 3
@@ -310,10 +308,10 @@ DSN is used. With a custom DSN, the installer applies `db/schema.sql` through
 that DSN.
 
 Existing service installs keep their current config file. After this change,
-edit `/etc/industrial-scanner-logger.conf` and set `enabled = true` and
-`required = true` under `[postgresql]`, or rerun the installer with
-`--overwrite-config`. The receiver will not start with PostgreSQL disabled or
-non-required.
+rerun the installer with `--overwrite-config` to remove obsolete `[postgresql]`
+`enabled` and `required` options from `/etc/industrial-scanner-logger.conf`.
+Older config files that still contain those keys are harmless; the receiver no
+longer reads them because PostgreSQL is always required.
 
 After pulling schema changes, reapply `db/schema.sql` to the PostgreSQL database
 before restarting PostgreSQL-backed logging or API queries.
@@ -360,8 +358,10 @@ GET /api/v1/views/successful-scans-missing-last-scanner
 The list endpoints support common filters such as `start_date`, `end_date`,
 `scanner_id`, `barcode`, `limit`, and `offset` where those fields exist.
 The `barcode` filter matches either the received barcode or repaired tracking
-number when both fields are available. `/api/v1/scans` also supports
-`is_success`.
+number when both fields are available. Numeric 10-digit barcode filters also
+match the end of those tracking fields so users can search by the last 10
+digits. Full 34-digit tracking numbers are matched exactly. `/api/v1/scans`
+also supports `is_success`.
 
 `/api/v1/logs/daily-csv` lists completed daily CSV files for download and
 excludes the current day because that file may still be open for writing.

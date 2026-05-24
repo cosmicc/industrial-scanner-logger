@@ -59,6 +59,38 @@ class ApiQueryTests(unittest.TestCase):
             ],
         )
 
+    def test_build_scan_events_query_matches_last_10_tracking_digits(self):
+        from industrial_scanner_logger.api import build_scan_events_query
+
+        _query, params = build_scan_events_query(
+            barcode="1234567890",
+            limit=25,
+            offset=50,
+        )
+
+        self.assertEqual(
+            params,
+            [
+                "1234567890",
+                10,
+                "1234567890",
+                "1234567890",
+                10,
+                "1234567890",
+                25,
+                50,
+            ],
+        )
+
+    def test_tracking_suffix_search_accepts_only_last_10_digits(self):
+        from industrial_scanner_logger.api import is_tracking_suffix_search
+
+        self.assertTrue(is_tracking_suffix_search("1234567890"))
+        self.assertFalse(is_tracking_suffix_search("1" * 25))
+        self.assertFalse(is_tracking_suffix_search("1" * 9))
+        self.assertFalse(is_tracking_suffix_search("1" * 34))
+        self.assertFalse(is_tracking_suffix_search("ABC4567890"))
+
     def test_view_query_rejects_unsupported_filters(self):
         from fastapi import HTTPException
 

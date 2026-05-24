@@ -121,8 +121,6 @@ CONFIG_DEFAULTS = {
         "probes": str(DEFAULT_TCP_KEEPALIVE_PROBES),
     },
     "postgresql": {
-        "enabled": "true",
-        "required": "true",
         "dsn": DEFAULT_POSTGRESQL_DSN,
         "table": DEFAULT_POSTGRESQL_TABLE,
         "connect_timeout": str(DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS),
@@ -420,8 +418,6 @@ def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
             tcp_keepalive_idle=config.getint("tcp_keepalive", "idle"),
             tcp_keepalive_interval=config.getint("tcp_keepalive", "interval"),
             tcp_keepalive_probes=config.getint("tcp_keepalive", "probes"),
-            postgresql_enabled=config.getboolean("postgresql", "enabled"),
-            postgresql_required=config.getboolean("postgresql", "required"),
             postgresql_dsn=config.get("postgresql", "dsn"),
             postgresql_table=config.get("postgresql", "table"),
             postgresql_connect_timeout=config.getfloat(
@@ -489,7 +485,6 @@ class PostgreSQLScanLogger:
         table_name: str = DEFAULT_POSTGRESQL_TABLE,
         connect_timeout: float = DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS,
         retry_interval: float = DEFAULT_POSTGRESQL_RETRY_INTERVAL_SECONDS,
-        required: bool = False,
     ):
         self.dsn = dsn
         self.schema_name, self.relation_name = parse_postgresql_table(table_name)
@@ -503,7 +498,6 @@ class PostgreSQLScanLogger:
             retry_interval,
             "postgresql_retry_interval",
         )
-        self.required = required
         self.conn = None
         self.insert_sql = None
         self.raw_insert_sql = None
@@ -522,7 +516,10 @@ class PostgreSQLScanLogger:
 
     def _load_driver(self):
         if self.driver_unavailable:
-            return False
+            raise RuntimeError(
+                "PostgreSQL logging requires the psycopg package. "
+                "Install the project dependencies or reinstall the service."
+            )
 
         if self._psycopg is not None and self._sql is not None:
             return True
@@ -537,11 +534,7 @@ class PostgreSQLScanLogger:
                 "Install the project dependencies or reinstall the service."
             )
 
-            if self.required:
-                raise RuntimeError(message) from exc
-
-            SCRIPT_LOGGER.error(message)
-            return False
+            raise RuntimeError(message) from exc
 
         self._psycopg = psycopg
         self._sql = sql
@@ -577,23 +570,16 @@ class PostgreSQLScanLogger:
             f"error={exc}"
         )
 
-        if self.required:
-            raise RuntimeError(message) from exc
+        raise RuntimeError(message) from exc
 
-        SCRIPT_LOGGER.error(message)
-
-    def _connect(self) -> bool:
+    def _connect(self):
         if self.conn is not None:
-            return True
+            return
 
         if time.monotonic() < self.next_retry_time:
-            if self.required:
-                raise RuntimeError("PostgreSQL scan logging is unavailable")
+            raise RuntimeError("PostgreSQL scan logging is unavailable")
 
-            return False
-
-        if not self._load_driver():
-            return False
+        self._load_driver()
 
         try:
             self.conn = self._psycopg.connect(
@@ -603,18 +589,15 @@ class PostgreSQLScanLogger:
             )
         except Exception as exc:
             self._mark_unavailable("connect", exc)
-            return False
 
         SCRIPT_LOGGER.info(
             "PostgreSQL scan logging connected table=%s raw_table=%s",
             self.table_name,
             self.raw_table_name,
         )
-        return True
 
     def verify_connection(self):
-        if not self._connect():
-            raise RuntimeError("PostgreSQL scan logging is unavailable")
+        self._connect()
 
     def _table_sql(self):
         return self._sql.SQL("{}.{}").format(
@@ -764,9 +747,8 @@ class PostgreSQLScanLogger:
         tracking_number: str,
         scan_date: str,
         scan_time: str,
-    ) -> Optional[tuple[bool, bool]]:
-        if not self._connect():
-            return None
+    ) -> tuple[bool, bool]:
+        self._connect()
 
         db_scanner_id = scanner_id_for_postgresql(scanner_id)
 
@@ -797,7 +779,6 @@ class PostgreSQLScanLogger:
             )
         except Exception as exc:
             self._mark_unavailable("duplicate lookup", exc)
-            return None
 
         return (
             same_scanner_duplicate or cross_scanner_duplicate,
@@ -856,8 +837,7 @@ class PostgreSQLScanLogger:
         raw_is_cross_scanner_duplicate: bool = False,
         write_scan_event: bool = True,
     ) -> bool:
-        if not self._connect():
-            return False
+        self._connect()
 
         db_scanner_id = scanner_id_for_postgresql(scanner_id)
         db_last_scanner_id = (
@@ -900,7 +880,6 @@ class PostgreSQLScanLogger:
                 )
         except Exception as exc:
             self._mark_unavailable("insert", exc)
-            return False
 
         return True
 
@@ -2277,12 +2256,6 @@ def main():
         if len(args.no_read_message) > args.max_barcode_chars:
             raise ValueError("no_read_message cannot be longer than max_barcode_chars")
 
-        if not args.postgresql_enabled:
-            raise ValueError("postgresql.enabled must be true; PostgreSQL is mandatory")
-
-        if not args.postgresql_required:
-            raise ValueError("postgresql.required must be true; PostgreSQL is mandatory")
-
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -2300,11 +2273,10 @@ def main():
         table_name=args.postgresql_table,
         connect_timeout=args.postgresql_connect_timeout,
         retry_interval=args.postgresql_retry_interval,
-        required=True,
     )
 
     SCRIPT_LOGGER.info(
-        "PostgreSQL scan logging enabled table=%s required=true",
+        "PostgreSQL scan logging table=%s",
         postgresql_logger.table_name,
     )
 

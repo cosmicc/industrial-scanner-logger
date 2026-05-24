@@ -207,8 +207,6 @@ interval = 10
 probes = 2
 
 [postgresql]
-enabled = true
-required = true
 dsn = postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger
 table = scanner_logger.scan_events
 connect_timeout = 4
@@ -253,8 +251,6 @@ log_level = warning
             self.assertEqual(config.tcp_keepalive_idle, 30)
             self.assertEqual(config.tcp_keepalive_interval, 10)
             self.assertEqual(config.tcp_keepalive_probes, 2)
-            self.assertTrue(config.postgresql_enabled)
-            self.assertTrue(config.postgresql_required)
             self.assertEqual(config.postgresql_table, "scanner_logger.scan_events")
             self.assertEqual(config.postgresql_connect_timeout, 4)
             self.assertEqual(config.postgresql_retry_interval, 12)

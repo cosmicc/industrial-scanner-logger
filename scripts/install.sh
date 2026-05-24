@@ -26,13 +26,11 @@ TRACKING_REPAIR_ENABLED="${TRACKING_REPAIR_ENABLED:-0}"
 TCP_KEEPALIVE_IDLE="${TCP_KEEPALIVE_IDLE:-60}"
 TCP_KEEPALIVE_INTERVAL="${TCP_KEEPALIVE_INTERVAL:-15}"
 TCP_KEEPALIVE_PROBES="${TCP_KEEPALIVE_PROBES:-4}"
-POSTGRESQL_ENABLED="${POSTGRESQL_ENABLED:-1}"
 DEFAULT_POSTGRESQL_DSN="postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger"
 POSTGRESQL_DSN="${POSTGRESQL_DSN:-${DEFAULT_POSTGRESQL_DSN}}"
 POSTGRESQL_TABLE="${POSTGRESQL_TABLE:-scanner_logger.scan_events}"
 POSTGRESQL_CONNECT_TIMEOUT="${POSTGRESQL_CONNECT_TIMEOUT:-3}"
 POSTGRESQL_RETRY_INTERVAL="${POSTGRESQL_RETRY_INTERVAL:-30}"
-POSTGRESQL_REQUIRED="${POSTGRESQL_REQUIRED:-1}"
 LAST_SCANNER_ID="${LAST_SCANNER_ID:-}"
 API_ENABLED="${API_ENABLED:-1}"
 API_HOST="${API_HOST:-127.0.0.1}"
@@ -81,12 +79,10 @@ Options:
   --tcp-keepalive-idle SEC  idle seconds before TCP keepalive probes start [${TCP_KEEPALIVE_IDLE}]
   --tcp-keepalive-interval SEC seconds between TCP keepalive probes [${TCP_KEEPALIVE_INTERVAL}]
   --tcp-keepalive-probes NUM failed probes before a socket is considered dead [${TCP_KEEPALIVE_PROBES}]
-  --enable-postgresql      PostgreSQL is mandatory; accepted for compatibility
   --postgresql-dsn DSN     PostgreSQL URI/DSN with no shell spaces [${POSTGRESQL_DSN}]
   --postgresql-table NAME  PostgreSQL table in schema.table format [${POSTGRESQL_TABLE}]
   --postgresql-connect-timeout SEC PostgreSQL connection timeout [${POSTGRESQL_CONNECT_TIMEOUT}]
   --postgresql-retry-interval SEC  retry delay after PostgreSQL failures [${POSTGRESQL_RETRY_INTERVAL}]
-  --postgresql-required    PostgreSQL is mandatory; accepted for compatibility
   --last-scanner-id ID     scanner IP last octet for the final outbound scanner [${LAST_SCANNER_ID:-not set}]
   --enable-api             enable and start the REST API service [default]
   --disable-api            install but disable the REST API service
@@ -407,14 +403,6 @@ while [[ $# -gt 0 ]]; do
             TCP_KEEPALIVE_PROBES="$2"
             shift 2
             ;;
-        --enable-postgresql)
-            POSTGRESQL_ENABLED=1
-            shift
-            ;;
-        --disable-postgresql)
-            echo "PostgreSQL is mandatory and cannot be disabled." >&2
-            exit 1
-            ;;
         --postgresql-dsn)
             POSTGRESQL_DSN="$2"
             shift 2
@@ -430,10 +418,6 @@ while [[ $# -gt 0 ]]; do
         --postgresql-retry-interval)
             POSTGRESQL_RETRY_INTERVAL="$2"
             shift 2
-            ;;
-        --postgresql-required)
-            POSTGRESQL_REQUIRED=1
-            shift
             ;;
         --last-scanner-id)
             LAST_SCANNER_ID="$2"
@@ -515,12 +499,6 @@ done
 if [[ "${API_ENABLED}" -eq 0 ]]; then
     NGINX_ENABLED=0
 fi
-
-if [[ "${POSTGRESQL_ENABLED}" -ne 1 ]]; then
-    echo "PostgreSQL is mandatory and cannot be disabled." >&2
-    exit 1
-fi
-POSTGRESQL_REQUIRED=1
 
 if [[ "${EUID}" -ne 0 ]]; then
     echo "This installer must be run as root. Re-run it with sudo." >&2
@@ -754,14 +732,6 @@ interval = ${TCP_KEEPALIVE_INTERVAL}
 probes = ${TCP_KEEPALIVE_PROBES}
 
 [postgresql]
-# Enables PostgreSQL scan event logging for API views, dashboard data, and month-long duplicate checks.
-# Default: true. PostgreSQL is mandatory for receiver operation.
-enabled = true
-
-# Controls whether the receiver must stop when PostgreSQL logging is unavailable.
-# Default: true. PostgreSQL is mandatory for duplicate decisions and must remain required.
-required = true
-
 # PostgreSQL connection string used by the receiver and API.
 # Default: postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger.
 # Example TCP DSN: postgresql://scannerlogger:password@127.0.0.1:5432/scannerlogger
@@ -911,7 +881,7 @@ Tracking number repair:
   $([[ "${TRACKING_REPAIR_ENABLED}" -eq 1 ]] && echo "enabled" || echo "disabled")
 
 PostgreSQL scan logging:
-  enabled and required (${POSTGRESQL_TABLE})
+  mandatory (${POSTGRESQL_TABLE})
 
 REST API service:
   $([[ "${API_ENABLED}" -eq 1 ]] && echo "enabled (${API_SERVICE_NAME}.service on ${API_HOST}:${API_PORT}${API_ROOT_PATH})" || echo "disabled (${API_SERVICE_NAME}.service installed)")

@@ -10,7 +10,7 @@
   <main class="page">
     <h1>Tracking Number Search</h1>
     <div class="subhead">
-      Search scan history by exact tracking number.
+      Search scan history by full tracking number or last 10 digits.
     </div>
 
     <section class="card">
@@ -29,8 +29,18 @@
           >
           <button class="button primary" type="submit">Search</button>
         </div>
+        <div class="date-controls">
+          <label class="search-label" for="start-date">
+            Start Date
+            <input id="start-date" class="date-input" type="date" name="start-date">
+          </label>
+          <label class="search-label" for="end-date">
+            End Date
+            <input id="end-date" class="date-input" type="date" name="end-date">
+          </label>
+        </div>
       </form>
-      <div id="search-status" class="detail">Enter a tracking number to search scan history.</div>
+      <div id="search-status" class="detail">Enter a tracking number and date range to search scan history.</div>
       <div id="fedex-tracking-link" class="detail" hidden>
         <a id="fedex-tracking-anchor" href="#" target="_blank" rel="noopener noreferrer">
           Open FedEx Tracking
@@ -78,11 +88,13 @@
   <script>
     const SEARCH_API_URL = "/api/v1/scans";
     const PAGE_SIZE = 1000;
+    const FEDEX_TRACKING_DIGITS = 34;
     let activeSearchToken = 0;
-    let inputDebounceTimer = null;
 
     const form = document.getElementById("search-form");
     const input = document.getElementById("tracking-number");
+    const startDateInput = document.getElementById("start-date");
+    const endDateInput = document.getElementById("end-date");
     const statusElement = document.getElementById("search-status");
     const fedexTrackingLink = document.getElementById("fedex-tracking-link");
     const fedexTrackingAnchor = document.getElementById("fedex-tracking-anchor");
@@ -91,30 +103,34 @@
 
     form.addEventListener("submit", (event) => {
       event.preventDefault();
-      window.clearTimeout(inputDebounceTimer);
       activeSearchToken += 1;
-      runSearch(input.value, activeSearchToken);
+      runSearch(input.value, startDateInput.value, endDateInput.value, activeSearchToken);
     });
 
-    input.addEventListener("input", () => {
-      window.clearTimeout(inputDebounceTimer);
-      activeSearchToken += 1;
-      const queuedSearchToken = activeSearchToken;
-      updateFedExTrackingLink(input.value.trim());
-      inputDebounceTimer = window.setTimeout(
-        () => runSearch(input.value, queuedSearchToken),
-        350
-      );
-    });
+    function setDefaultDates() {
+      const today = new Date();
+      const start = new Date(today);
+      start.setDate(start.getDate() - 365);
 
-    async function runSearch(rawTrackingNumber, searchToken) {
+      startDateInput.value = formatDateInput(start);
+      endDateInput.value = formatDateInput(today);
+    }
+
+    async function runSearch(rawTrackingNumber, startDate, endDate, searchToken) {
       const trackingNumber = rawTrackingNumber.trim();
 
       if (!trackingNumber) {
-        statusElement.textContent = "Enter a tracking number to search scan history.";
+        statusElement.textContent = "Enter a tracking number and date range to search scan history.";
         updateFedExTrackingLink("");
         summaryElement.textContent = "No search has been run.";
         renderEmptyResults("Search results will appear here.");
+        return;
+      }
+
+      if (startDate && endDate && startDate > endDate) {
+        statusElement.innerHTML = `<span class="error">Start date must be on or before end date.</span>`;
+        summaryElement.textContent = "No search has been run.";
+        renderEmptyResults("Fix the date range and search again.", true);
         return;
       }
 
@@ -124,7 +140,12 @@
       renderEmptyResults("Loading...");
 
       try {
-        const rows = await fetchAllTrackingRows(trackingNumber, searchToken);
+        const rows = await fetchAllTrackingRows(
+          trackingNumber,
+          startDate,
+          endDate,
+          searchToken
+        );
 
         if (searchToken !== activeSearchToken) {
           return;
@@ -143,7 +164,7 @@
       }
     }
 
-    async function fetchAllTrackingRows(trackingNumber, searchToken) {
+    async function fetchAllTrackingRows(trackingNumber, startDate, endDate, searchToken) {
       const rows = [];
       let offset = 0;
 
@@ -154,6 +175,12 @@
 
         const url = new URL(SEARCH_API_URL, window.location.origin);
         url.searchParams.set("barcode", trackingNumber);
+        if (startDate) {
+          url.searchParams.set("start_date", startDate);
+        }
+        if (endDate) {
+          url.searchParams.set("end_date", endDate);
+        }
         url.searchParams.set("limit", String(PAGE_SIZE));
         url.searchParams.set("offset", String(offset));
 
@@ -182,11 +209,13 @@
     function renderResults(trackingNumber, rows) {
       if (!rows || rows.length === 0) {
         summaryElement.textContent = `No scans found for ${trackingNumber}.`;
+        updateFedExTrackingLink(trackingNumber);
         renderEmptyResults("No scan rows found.");
         return;
       }
 
       summaryElement.textContent = `${formatCount(rows.length)} scan row${rows.length === 1 ? "" : "s"} found for ${trackingNumber}.`;
+      updateFedExTrackingLink(trackingValueForFedEx(rows[0]));
       resultsBody.innerHTML = "";
 
       for (const row of rows) {
@@ -195,6 +224,22 @@
         const statusText = row.is_success ? "SUCCESS" : "FAILED";
         const duplicateText = row.is_duplicate ? "Yes" : "No";
         const repairedText = row.is_repaired ? "Yes" : "No";
+        const fedexUrl = fedExTrackingUrl(trackingValueForFedEx(row));
+
+        if (fedexUrl) {
+          tr.classList.add("clickable-row");
+          tr.tabIndex = 0;
+          tr.setAttribute("role", "link");
+          tr.addEventListener("click", () => {
+            window.open(fedexUrl, "_blank", "noopener");
+          });
+          tr.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              window.open(fedexUrl, "_blank", "noopener");
+            }
+          });
+        }
 
         tr.innerHTML = `
           <td>${formatValue(row.id)}</td>
@@ -218,7 +263,9 @@
     }
 
     function updateFedExTrackingLink(trackingNumber) {
-      if (!trackingNumber) {
+      const fedexTrackingNumber = fedExTrackingNumberFromValue(trackingNumber);
+
+      if (!fedexTrackingNumber) {
         fedexTrackingLink.hidden = true;
         fedexTrackingAnchor.removeAttribute("href");
         fedexTrackingAnchor.textContent = "Open FedEx Tracking";
@@ -226,9 +273,33 @@
       }
 
       fedexTrackingAnchor.href =
-        `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(trackingNumber)}`;
-      fedexTrackingAnchor.textContent = `Open FedEx Tracking for ${trackingNumber}`;
+        `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(fedexTrackingNumber)}`;
+      fedexTrackingAnchor.textContent = `Open FedEx Tracking for ${fedexTrackingNumber}`;
       fedexTrackingLink.hidden = false;
+    }
+
+    function trackingValueForFedEx(row) {
+      return row.tracking_number || row.barcode || "";
+    }
+
+    function fedExTrackingUrl(value) {
+      const fedexTrackingNumber = fedExTrackingNumberFromValue(value);
+
+      if (!fedexTrackingNumber) {
+        return "";
+      }
+
+      return `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(fedexTrackingNumber)}`;
+    }
+
+    function fedExTrackingNumberFromValue(value) {
+      const digits = String(value || "").replace(/\D/g, "");
+
+      if (digits.length < FEDEX_TRACKING_DIGITS) {
+        return "";
+      }
+
+      return digits.slice(-FEDEX_TRACKING_DIGITS);
     }
 
     function renderEmptyResults(message, isError = false) {
@@ -250,6 +321,13 @@
       return Number(value || 0).toLocaleString();
     }
 
+    function formatDateInput(value) {
+      const year = value.getFullYear();
+      const month = String(value.getMonth() + 1).padStart(2, "0");
+      const day = String(value.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    }
+
     function formatValue(value) {
       if (value === null || value === undefined || value === "") {
         return "";
@@ -266,6 +344,8 @@
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
     }
+
+    setDefaultDates();
   </script>
 </body>
 </html>

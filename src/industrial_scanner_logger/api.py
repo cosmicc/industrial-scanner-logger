@@ -31,6 +31,7 @@ SCANNER_SCRIPT_LOG_PATH = Path("/var/log/industrial-scanner-logger.log")
 CURRENT_SCAN_RATE_WINDOW_SECONDS = 60
 CURRENT_SCAN_HOUR_WINDOW_SECONDS = 3600
 DAILY_CSV_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+TRACKING_SUFFIX_SEARCH_LENGTHS = {10}
 
 SCAN_EVENT_COLUMNS = [
     "id",
@@ -946,6 +947,7 @@ def add_common_filters(
         if barcode_column is None and tracking_number_column is None:
             raise HTTPException(status_code=400, detail="barcode is not supported")
 
+        barcode = barcode.strip()
         barcode_filters = []
 
         if barcode_column is not None:
@@ -957,12 +959,22 @@ def add_common_filters(
         ):
             barcode_filters.append(sql.Identifier(tracking_number_column))
 
-        filter_sql = sql.SQL(" OR ").join(
-            sql.SQL("{} = %s").format(column)
-            for column in barcode_filters
-        )
+        filter_parts = []
+
+        for column in barcode_filters:
+            filter_parts.append(sql.SQL("{} = %s").format(column))
+            params.append(barcode)
+
+            if is_tracking_suffix_search(barcode):
+                filter_parts.append(sql.SQL("right({}, %s) = %s").format(column))
+                params.extend([len(barcode), barcode])
+
+        filter_sql = sql.SQL(" OR ").join(filter_parts)
         conditions.append(sql.SQL("(") + filter_sql + sql.SQL(")"))
-        params.extend([barcode] * len(barcode_filters))
+
+
+def is_tracking_suffix_search(value: str) -> bool:
+    return value.isdigit() and len(value) in TRACKING_SUFFIX_SEARCH_LENGTHS
 
 
 def where_clause(conditions):

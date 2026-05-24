@@ -267,7 +267,19 @@ tr:last-child td {
   gap: 10px;
 }
 
-.search-input {
+.date-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.date-controls .search-label {
+  display: grid;
+  gap: 6px;
+}
+
+.search-input,
+.date-input {
   flex: 1 1 280px;
   min-width: 0;
   background: #020617;
@@ -278,10 +290,25 @@ tr:last-child td {
   padding: 10px 14px;
 }
 
-.search-input:focus {
+.date-input {
+  flex-basis: 180px;
+}
+
+.search-input:focus,
+.date-input:focus {
   border-color: var(--green);
   outline: none;
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
+}
+
+.clickable-row {
+  cursor: pointer;
+}
+
+.clickable-row:hover,
+.clickable-row:focus {
+  background: rgba(34, 197, 94, 0.08);
+  outline: none;
 }
 
 .tv-body {
