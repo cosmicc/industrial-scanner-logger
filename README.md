@@ -10,10 +10,7 @@
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](README.md#current-behavior)
 <!-- badges:end -->
 
-Python 3 TCP receiver, CSV logger, and mandatory PostgreSQL scan event logger for
-a Honeywell HF811 industrial scanner.
-
-The current receiver listens for scanner TCP connections, classifies scan events, and writes daily CSV logs. It is packaged so the project can be installed, tested, versioned, and uploaded to GitHub as it grows.
+Industrial Scanner Logger is a Python 3, Ubuntu-hosted shipment scan logging platform for Honeywell HF811 fixed-mount industrial scanners that receives scanner barcode output over TCP, validates and classifies FedEx tracking scan events, suppresses same-day same-scanner duplicate successes, writes durable CSV and raw diagnostic scan logs, records scan data in PostgreSQL for query and reporting, exposes FastAPI REST endpoints behind nginx, serves a lightweight web interface, and includes installer, schema, configuration, systemd service, firewall, logging, and troubleshooting tooling for running the complete scanner logging system on a production server.
 
 ## Current Behavior
 
