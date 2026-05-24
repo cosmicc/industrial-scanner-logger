@@ -73,7 +73,7 @@
       <div class="card">
         <h2>Today Totals</h2>
         <div id="today-date" class="detail">Checking...</div>
-        <div class="metric-grid three-up">
+        <div class="metric-grid four-up">
           <div class="metric">
             <div class="metric-label">Total Scans</div>
             <div id="today-total" class="metric-value">0</div>
@@ -86,13 +86,17 @@
             <div class="metric-label">Duplicates</div>
             <div id="today-duplicates" class="metric-value duplicate">0</div>
           </div>
+          <div class="metric">
+            <div class="metric-label">Failed Scans</div>
+            <div id="today-failed" class="metric-value failed">0</div>
+          </div>
         </div>
       </div>
 
       <div class="card">
         <h2>Yesterday Totals</h2>
         <div id="yesterday-date" class="detail">Checking...</div>
-        <div class="metric-grid three-up">
+        <div class="metric-grid four-up">
           <div class="metric">
             <div class="metric-label">Total Scans</div>
             <div id="yesterday-total" class="metric-value">0</div>
@@ -104,6 +108,10 @@
           <div class="metric">
             <div class="metric-label">Duplicates</div>
             <div id="yesterday-duplicates" class="metric-value duplicate">0</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Failed Scans</div>
+            <div id="yesterday-failed" class="metric-value failed">0</div>
           </div>
         </div>
       </div>
@@ -133,12 +141,6 @@
     </section>
 
     <section class="card">
-      <h2>Last 10 Script Log Lines</h2>
-      <div id="script-log-meta" class="log-meta">Checking...</div>
-      <pre id="script-log-lines" class="log-box">Checking...</pre>
-    </section>
-
-    <section class="card">
       <h2>Last 10 Raw Scan Rows</h2>
       <table>
         <thead>
@@ -162,6 +164,12 @@
           </tr>
         </tbody>
       </table>
+    </section>
+
+    <section class="card">
+      <h2>Last 10 Script Log Lines</h2>
+      <div id="script-log-meta" class="log-meta">Checking...</div>
+      <pre id="script-log-lines" class="log-box">Checking...</pre>
     </section>
 
     <div class="footer">
@@ -263,6 +271,7 @@
         const statusText = row.is_success ? "SUCCESS" : "FAILED";
         const duplicateText = row.is_duplicate ? "Yes" : "No";
         const repairedText = row.is_repaired ? "Yes" : "No";
+        tr.className = scanAgeClass(row.scan_date, row.scan_time);
 
         tr.innerHTML = `
           <td>${row.scan_date ?? ""}</td>
@@ -288,19 +297,31 @@
       renderTodayScannerTotals(totals?.today_by_scanner);
     }
 
-    function renderCurrentScanRate(scanRate) {
+    function renderCurrentScanRate(scanRate, lastReceived, staleSeconds) {
       if (!scanRate) {
         setIndicator("current-scan-rate", false, "Unavailable", "");
         return;
       }
 
       const scansPerMinute = Number(scanRate.scans_per_minute || 0);
+      const staleThresholdSeconds = Number(staleSeconds || 60);
+      const elapsedSeconds = lastReceived
+        ? scanElapsedSeconds(lastReceived.scan_date, lastReceived.scan_time)
+        : null;
+      const fresh = elapsedSeconds !== null && elapsedSeconds <= staleThresholdSeconds;
+      let detailText = `${formatRate(scanRate.scans_per_hour)} Scans per hour.`;
+
+      if (elapsedSeconds === null) {
+        detailText += ` No received scan time. Red after ${formatDuration(staleThresholdSeconds)} without scans.`;
+      } else {
+        detailText += ` Last scan ${formatElapsedTime(lastReceived.scan_date, lastReceived.scan_time)}. Red after ${formatDuration(staleThresholdSeconds)} without scans.`;
+      }
 
       setIndicator(
         "current-scan-rate",
-        scansPerMinute > 0,
+        fresh,
         `${formatRate(scansPerMinute)} scans/min`,
-        `${formatRate(scanRate.scans_per_hour)} Scans per hour`
+        detailText
       );
     }
 
@@ -309,12 +330,14 @@
       const totalElement = document.getElementById(`${prefix}-total`);
       const successElement = document.getElementById(`${prefix}-success`);
       const duplicateElement = document.getElementById(`${prefix}-duplicates`);
+      const failedElement = document.getElementById(`${prefix}-failed`);
 
       if (!total) {
         dateElement.textContent = "Unavailable";
         totalElement.textContent = "0";
         successElement.textContent = "0";
         duplicateElement.textContent = "0";
+        failedElement.textContent = "0";
         return;
       }
 
@@ -322,6 +345,7 @@
       totalElement.textContent = formatCount(total.total_scan_events);
       successElement.textContent = formatCount(total.successful_scans);
       duplicateElement.textContent = formatCount(total.duplicate_scans);
+      failedElement.textContent = formatCount(total.failed_scans);
     }
 
     function renderTodayScannerTotals(rows) {
@@ -374,6 +398,52 @@
       });
     }
 
+    function scanAgeClass(scanDate, scanTime) {
+      const elapsedSeconds = scanElapsedSeconds(scanDate, scanTime);
+
+      if (elapsedSeconds === null) {
+        return "";
+      }
+
+      if (elapsedSeconds <= 60) {
+        return "scan-age-fresh";
+      }
+
+      if (elapsedSeconds <= 5 * 60) {
+        return "scan-age-warm";
+      }
+
+      if (elapsedSeconds <= 60 * 60) {
+        return "scan-age-stale";
+      }
+
+      return "scan-age-old";
+    }
+
+    function scanElapsedSeconds(scanDate, scanTime, now = new Date()) {
+      const scanDateTime = parseScanDateTime(scanDate, scanTime);
+
+      if (!scanDateTime) {
+        return null;
+      }
+
+      return Math.max(
+        0,
+        Math.floor((now.getTime() - scanDateTime.getTime()) / 1000)
+      );
+    }
+
+    function formatDuration(seconds) {
+      const totalSeconds = Number(seconds || 0);
+
+      if (totalSeconds >= 60 && totalSeconds % 60 === 0) {
+        const minutes = totalSeconds / 60;
+        return `${minutes.toLocaleString()} minute${minutes === 1 ? "" : "s"}`;
+      }
+
+      return `${totalSeconds.toLocaleString()} second${totalSeconds === 1 ? "" : "s"}`;
+    }
+
     function formatTime12(scanDate, scanTime) {
       if (!scanTime) {
         return "";
@@ -414,9 +484,9 @@
         return "Unknown";
       }
 
-      const scanDateTime = new Date(`${scanDate}T${scanTime}`);
+      const scanDateTime = parseScanDateTime(scanDate, scanTime);
 
-      if (Number.isNaN(scanDateTime.getTime())) {
+      if (!scanDateTime) {
         return "Unknown";
       }
 
@@ -578,7 +648,11 @@
 
         renderMandatoryScanners(data.mandatory_scanners);
         renderDailyTotals(database.active ? data.daily_totals : null);
-        renderCurrentScanRate(database.active ? data.current_scan_rate : null);
+        renderCurrentScanRate(
+          database.active ? data.current_scan_rate : null,
+          database.active ? data.last_received : null,
+          data.current_scan_rate_stale_seconds
+        );
         renderRecentScans(data.recent_scans);
         renderScriptLog(data.script_log);
 

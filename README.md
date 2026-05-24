@@ -195,8 +195,15 @@ log path, PostgreSQL options, REST API bind settings, or nginx site settings:
 sudo nano /etc/industrial-scanner-logger.conf
 sudo systemctl restart industrial-scanner-logger
 sudo systemctl restart industrial-scanner-logger-api
+sudo refresh-app-config
 sudo refresh-nginx-config
 ```
+
+`refresh-app-config` updates `/etc/industrial-scanner-logger.conf` from the
+installed default `config/industrial-scanner-logger.conf` schema. It keeps
+existing values for options that still exist, adds new default options, removes
+options deleted from the defaults file, and restarts the receiver service around
+the config rewrite.
 
 `refresh-nginx-config` renders `nginx/industrial-scanner-logger.conf` with the
 `[api]` and `[nginx]` values from `/etc/industrial-scanner-logger.conf`, writes
@@ -213,6 +220,7 @@ sudo journalctl -u industrial-scanner-logger -f
 sudo journalctl -u industrial-scanner-logger-api -f
 sudo tail -f /var/log/industrial-scanner-logger.log
 sudo tail -f /var/log/industrial-scanner-logger/scanner-log-data-$(date +%F).log
+sudo refresh-app-config
 sudo refresh-nginx-config
 sudo nginx -t
 sudo systemctl restart industrial-scanner-logger
@@ -324,10 +332,10 @@ DSN is used. With a custom DSN, the installer applies `db/schema.sql` through
 that DSN.
 
 Existing service installs keep their current config file. After this change,
-rerun the installer with `--overwrite-config` to remove obsolete `[postgresql]`
-`enabled` and `required` options from `/etc/industrial-scanner-logger.conf`.
-Older config files that still contain those keys are harmless; the receiver no
-longer reads them because PostgreSQL is always required.
+run `sudo refresh-app-config` to add new config options from
+`config/industrial-scanner-logger.conf` and remove obsolete options such as the
+old `[postgresql]` `enabled` and `required` keys without overwriting modified
+settings.
 
 After pulling schema changes, reapply `db/schema.sql` to the PostgreSQL database
 before restarting PostgreSQL-backed logging or API queries.

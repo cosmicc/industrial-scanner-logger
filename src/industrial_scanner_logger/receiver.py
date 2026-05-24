@@ -67,6 +67,7 @@ DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS = 3.0
 DEFAULT_POSTGRESQL_RETRY_INTERVAL_SECONDS = 30.0
 DEFAULT_LAST_SCANNER_ID = ""
 DEFAULT_MANDATORY_SCANNER_IDS = ""
+DEFAULT_CURRENT_SCAN_RATE_STALE_SECONDS = 60
 LOG_BARCODE_PREVIEW_CHARS = 120
 MIN_MAX_BARCODE_CHARS = 64
 TRACKING_REPAIR_MIN_OVERLAP_CHARS = 4
@@ -132,6 +133,11 @@ CONFIG_DEFAULTS = {
         "mandatory_scanner_ids": DEFAULT_MANDATORY_SCANNER_IDS,
     },
     "scanner_names": {},
+    "dashboard": {
+        "current_scan_rate_stale_seconds": str(
+            DEFAULT_CURRENT_SCAN_RATE_STALE_SECONDS
+        ),
+    },
     "api": {
         "enabled": "true",
         "host": "127.0.0.1",
@@ -455,6 +461,10 @@ def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
                 "scanners.mandatory_scanner_ids",
             ),
             scanner_names=parse_scanner_name_map(config),
+            current_scan_rate_stale_seconds=validate_positive_int(
+                config.getint("dashboard", "current_scan_rate_stale_seconds"),
+                "dashboard.current_scan_rate_stale_seconds",
+            ),
             api_enabled=config.getboolean("api", "enabled"),
             api_host=config.get("api", "host"),
             api_port=config.getint("api", "port"),

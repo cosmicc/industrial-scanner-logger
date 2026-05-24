@@ -238,6 +238,9 @@ mandatory_scanner_ids = 20, 21
 20 = Lane 1 Scanner
 21 = Last Scanner
 
+[dashboard]
+current_scan_rate_stale_seconds = 120
+
 [api]
 enabled = true
 host = 0.0.0.0
@@ -283,6 +286,7 @@ log_level = warning
             )
             self.assertTrue(config.api_enabled)
             self.assertEqual(config.mandatory_scanner_ids, ["20", "21"])
+            self.assertEqual(config.current_scan_rate_stale_seconds, 120)
             self.assertEqual(config.api_host, "0.0.0.0")
             self.assertEqual(config.api_port, 8080)
             self.assertEqual(config.api_root_path, "/api")

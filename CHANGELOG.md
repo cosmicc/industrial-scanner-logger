@@ -24,6 +24,9 @@ All notable changes to this project will be documented in this file.
 - Rewrite the home page as an app hub with live status, version metadata, bug-report link, and GitHub source link.
 - Show daily CSV total scan and duplicate counts, and add today's per-scanner totals to the health page.
 - Restrict `is_cross_scanner_duplicate` to the configured last scanner; other scanner repeats remain regular duplicates.
+- Add a configurable health dashboard scan-rate stale threshold and color recent scan rows by age.
+- Show failed scan counts alongside totals, successful scans, and duplicates on health daily total cards.
+- Add `refresh-app-config` for syncing `/etc/industrial-scanner-logger.conf` with the default config schema while preserving existing values.
 
 ## 1.1.2 - 2026-05-17
 

@@ -33,6 +33,7 @@ POSTGRESQL_CONNECT_TIMEOUT="${POSTGRESQL_CONNECT_TIMEOUT:-3}"
 POSTGRESQL_RETRY_INTERVAL="${POSTGRESQL_RETRY_INTERVAL:-30}"
 LAST_SCANNER_ID="${LAST_SCANNER_ID:-}"
 MANDATORY_SCANNER_IDS="${MANDATORY_SCANNER_IDS:-}"
+CURRENT_SCAN_RATE_STALE_SECONDS="${CURRENT_SCAN_RATE_STALE_SECONDS:-60}"
 API_ENABLED="${API_ENABLED:-1}"
 API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-8000}"
@@ -45,6 +46,7 @@ NGINX_SERVER_NAME="${NGINX_SERVER_NAME:-_}"
 NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/scanner-site}"
 NGINX_DISABLE_DEFAULT_SITE="${NGINX_DISABLE_DEFAULT_SITE:-1}"
 UPDATE_SERVICES_BIN="${UPDATE_SERVICES_BIN:-/usr/local/bin/update-services}"
+REFRESH_APP_CONFIG_BIN="${REFRESH_APP_CONFIG_BIN:-/usr/local/bin/refresh-app-config}"
 REFRESH_NGINX_BIN="${REFRESH_NGINX_BIN:-/usr/local/bin/refresh-nginx-config}"
 START_SERVICE="${START_SERVICE:-1}"
 OVERWRITE_CONFIG="${OVERWRITE_CONFIG:-0}"
@@ -87,6 +89,7 @@ Options:
   --postgresql-retry-interval SEC  retry delay after PostgreSQL failures [${POSTGRESQL_RETRY_INTERVAL}]
   --last-scanner-id ID     scanner IP last octet for the final outbound scanner [${LAST_SCANNER_ID:-not set}]
   --mandatory-scanner-ids IDS comma or space-separated scanner IDs that must stay connected [${MANDATORY_SCANNER_IDS:-none}]
+  --current-scan-rate-stale-seconds SEC seconds before health scan-rate indicator turns red [${CURRENT_SCAN_RATE_STALE_SECONDS}]
   --enable-api             enable and start the REST API service [default]
   --disable-api            install but disable the REST API service
   --api-host HOST          REST API bind address [${API_HOST}]
@@ -100,6 +103,7 @@ Options:
   --nginx-server-name NAME nginx server_name value [${NGINX_SERVER_NAME}]
   --nginx-web-root DIR     document root for the future web interface [${NGINX_WEB_ROOT}]
   --keep-nginx-default-site keep Ubuntu's default nginx site enabled
+  --refresh-app-config-bin PATH app config refresh helper path [${REFRESH_APP_CONFIG_BIN}]
   --refresh-nginx-bin PATH nginx refresh helper path [${REFRESH_NGINX_BIN}]
   --overwrite-config        replace an existing config file
   --no-start                install and enable the service, but do not start it now
@@ -431,6 +435,10 @@ while [[ $# -gt 0 ]]; do
             MANDATORY_SCANNER_IDS="$2"
             shift 2
             ;;
+        --current-scan-rate-stale-seconds)
+            CURRENT_SCAN_RATE_STALE_SECONDS="$2"
+            shift 2
+            ;;
         --enable-api)
             API_ENABLED=1
             shift
@@ -484,6 +492,10 @@ while [[ $# -gt 0 ]]; do
             NGINX_DISABLE_DEFAULT_SITE=0
             shift
             ;;
+        --refresh-app-config-bin)
+            REFRESH_APP_CONFIG_BIN="$2"
+            shift 2
+            ;;
         --refresh-nginx-bin)
             REFRESH_NGINX_BIN="$2"
             shift 2
@@ -524,6 +536,7 @@ API_SERVICE_TEMPLATE="${PROJECT_ROOT}/systemd/industrial-scanner-logger-api.serv
 NGINX_TEMPLATE="${PROJECT_ROOT}/nginx/industrial-scanner-logger.conf"
 HTML_SOURCE_DIR="${PROJECT_ROOT}/html"
 UPDATE_SERVICES_SOURCE="${PROJECT_ROOT}/scripts/update-services"
+REFRESH_APP_CONFIG_SOURCE="${PROJECT_ROOT}/scripts/refresh-app-config"
 REFRESH_NGINX_SOURCE="${PROJECT_ROOT}/scripts/refresh-nginx-config"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 API_UNIT_FILE="/etc/systemd/system/${API_SERVICE_NAME}.service"
@@ -572,6 +585,11 @@ fi
 
 if [[ ! -f "${UPDATE_SERVICES_SOURCE}" ]]; then
     echo "Missing update helper script: ${UPDATE_SERVICES_SOURCE}" >&2
+    exit 1
+fi
+
+if [[ ! -f "${REFRESH_APP_CONFIG_SOURCE}" ]]; then
+    echo "Missing app config refresh helper script: ${REFRESH_APP_CONFIG_SOURCE}" >&2
     exit 1
 fi
 
@@ -643,6 +661,8 @@ chmod -R u=rwX,go=rX "${INSTALL_DIR}"
 configure_postgresql_database
 install -d -o root -g root -m 0755 "$(dirname -- "${UPDATE_SERVICES_BIN}")"
 install -o root -g root -m 0755 "${UPDATE_SERVICES_SOURCE}" "${UPDATE_SERVICES_BIN}"
+install -d -o root -g root -m 0755 "$(dirname -- "${REFRESH_APP_CONFIG_BIN}")"
+install -o root -g root -m 0755 "${REFRESH_APP_CONFIG_SOURCE}" "${REFRESH_APP_CONFIG_BIN}"
 install -d -o root -g root -m 0755 "$(dirname -- "${REFRESH_NGINX_BIN}")"
 install -o root -g root -m 0755 "${REFRESH_NGINX_SOURCE}" "${REFRESH_NGINX_BIN}"
 
@@ -786,6 +806,11 @@ mandatory_scanner_ids = ${MANDATORY_SCANNER_IDS}
 # Format: <0-255> = <display name>. Examples:
 #   20 = Lane 1 Scanner
 #   21 = Last Scanner
+
+[dashboard]
+# Seconds since the last received scan before the health page Current Scan Rate indicator turns red.
+# Default: 60. Range: greater than 0. Example: 300 keeps the indicator green for 5 minutes after the last scan.
+current_scan_rate_stale_seconds = ${CURRENT_SCAN_RATE_STALE_SECONDS}
 
 [api]
 # Enables the REST API systemd service installed alongside the receiver.
@@ -941,6 +966,9 @@ Web root:
 Update helper:
   ${UPDATE_SERVICES_BIN}
 
+App config refresh helper:
+  ${REFRESH_APP_CONFIG_BIN}
+
 Nginx refresh helper:
   ${REFRESH_NGINX_BIN}
 
@@ -949,6 +977,7 @@ UFW firewall:
 
 Useful commands:
   sudo update-services
+  sudo refresh-app-config
   sudo refresh-nginx-config
   sudo systemctl status ${SERVICE_NAME}
   sudo systemctl status ${API_SERVICE_NAME}

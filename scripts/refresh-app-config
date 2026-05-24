@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${EUID}" -ne 0 ]]; then
+    echo "refresh-app-config must be run as root. Re-run it with sudo." >&2
+    exit 1
+fi
+
+SERVICE_NAME="${SERVICE_NAME:-industrial-scanner-logger}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
+CONFIG_FILE="${CONFIG_FILE:-/etc/industrial-scanner-logger.conf}"
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+DEFAULT_DEFAULTS_FILE="${PROJECT_ROOT}/config/industrial-scanner-logger.conf"
+if [[ ! -f "${DEFAULT_DEFAULTS_FILE}" ]]; then
+    DEFAULT_DEFAULTS_FILE="${INSTALL_DIR}/config/industrial-scanner-logger.conf"
+fi
+DEFAULTS_FILE="${DEFAULTS_FILE:-${DEFAULT_DEFAULTS_FILE}}"
+SERVICE_UNIT="${SERVICE_NAME%.service}.service"
+
+usage() {
+    cat <<USAGE
+Usage: sudo refresh-app-config [options]
+
+Refresh /etc/industrial-scanner-logger.conf from the default app config.
+
+Options:
+  --config-file PATH     running app config file [${CONFIG_FILE}]
+  --defaults-file PATH   default config file used as the schema [${DEFAULTS_FILE}]
+  --service-name NAME    receiver systemd service name [${SERVICE_NAME}]
+  -h, --help             show this help
+
+The default config file is never changed. The running config keeps existing
+values for options that still exist in the defaults file, gains newly added
+options from the defaults file, and drops options or sections removed from the
+defaults file.
+USAGE
+}
+
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "Missing required command: $1" >&2
+        exit 1
+    fi
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --config-file)
+            CONFIG_FILE="$2"
+            shift 2
+            ;;
+        --defaults-file)
+            DEFAULTS_FILE="$2"
+            shift 2
+            ;;
+        --service-name)
+            SERVICE_NAME="$2"
+            SERVICE_UNIT="${SERVICE_NAME%.service}.service"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+require_command python3
+require_command systemctl
+
+if [[ ! -f "${DEFAULTS_FILE}" ]]; then
+    echo "Missing default app config file: ${DEFAULTS_FILE}" >&2
+    exit 1
+fi
+
+MERGED_TEMP="$(mktemp)"
+BACKUP_FILE=""
+SERVICE_STOPPED=0
+SERVICE_STARTED=0
+
+finish() {
+    local status=$?
+
+    rm -f "${MERGED_TEMP}"
+
+    if [[ "${SERVICE_STOPPED}" -eq 1 && "${SERVICE_STARTED}" -eq 0 ]]; then
+        echo "Starting ${SERVICE_UNIT}..."
+        if ! systemctl start "${SERVICE_UNIT}"; then
+            echo "Failed to start ${SERVICE_UNIT}." >&2
+            if [[ "${status}" -eq 0 ]]; then
+                status=1
+            fi
+        fi
+    fi
+
+    exit "${status}"
+}
+trap finish EXIT
+
+python3 - "${DEFAULTS_FILE}" "${CONFIG_FILE}" "${MERGED_TEMP}" <<'PY'
+import configparser
+import re
+import sys
+from pathlib import Path
+
+
+defaults_path = Path(sys.argv[1])
+current_path = Path(sys.argv[2])
+output_path = Path(sys.argv[3])
+
+
+def read_config(path: Path, required: bool) -> configparser.ConfigParser:
+    parser = configparser.ConfigParser(interpolation=None)
+
+    if not path.exists():
+        if required:
+            raise SystemExit(f"Missing config file: {path}")
+        return parser
+
+    try:
+        with path.open(encoding="utf-8") as f:
+            parser.read_file(f)
+    except configparser.Error as exc:
+        raise SystemExit(f"Could not parse config file {path}: {exc}") from exc
+
+    return parser
+
+
+def existing_value_map(parser: configparser.ConfigParser) -> dict[str, dict[str, str]]:
+    return {
+        section.lower(): {
+            option.lower(): parser.get(section, option, raw=True)
+            for option in parser.options(section)
+        }
+        for section in parser.sections()
+    }
+
+
+def merged_option_line(prefix: str, key: str, delimiter: str, value: str) -> list[str]:
+    value_lines = value.splitlines() or [""]
+    lines = [f"{prefix}{key} {delimiter} {value_lines[0]}"]
+
+    for continuation in value_lines[1:]:
+        lines.append(f"    {continuation}")
+
+    return lines
+
+
+defaults = read_config(defaults_path, required=True)
+current = read_config(current_path, required=False)
+current_values = existing_value_map(current)
+default_text = defaults_path.read_text(encoding="utf-8")
+section_name = None
+output_lines = []
+
+section_re = re.compile(r"^\s*\[([^\]]+)\]\s*(?:[#;].*)?$")
+option_re = re.compile(r"^(\s*)([^#;\s][^=:]*?)(\s*)([:=]).*$")
+
+for line in default_text.splitlines():
+    section_match = section_re.match(line)
+    if section_match:
+        section_name = section_match.group(1)
+        output_lines.append(line)
+        continue
+
+    option_match = option_re.match(line)
+    if section_name and option_match:
+        prefix, option_name, _space, delimiter = option_match.groups()
+        normalized_section = section_name.lower()
+        normalized_option = option_name.strip().lower()
+        value = current_values.get(normalized_section, {}).get(normalized_option)
+
+        if value is not None:
+            output_lines.extend(
+                merged_option_line(prefix, option_name.strip(), delimiter, value)
+            )
+            continue
+
+    output_lines.append(line)
+
+output_path.write_text("\n".join(output_lines).rstrip() + "\n", encoding="utf-8")
+PY
+
+echo "Stopping ${SERVICE_UNIT}..."
+systemctl stop "${SERVICE_UNIT}"
+SERVICE_STOPPED=1
+
+install -d -o root -g root -m 0755 "$(dirname -- "${CONFIG_FILE}")"
+
+if [[ -f "${CONFIG_FILE}" ]] && cmp -s "${MERGED_TEMP}" "${CONFIG_FILE}"; then
+    echo "Config already matches the default schema: ${CONFIG_FILE}"
+else
+    if [[ -f "${CONFIG_FILE}" ]]; then
+        BACKUP_FILE="${CONFIG_FILE}.backup-$(date +%Y%m%d%H%M%S)"
+        cp -p "${CONFIG_FILE}" "${BACKUP_FILE}"
+        echo "Backed up existing config: ${BACKUP_FILE}"
+    fi
+
+    install -o root -g root -m 0644 "${MERGED_TEMP}" "${CONFIG_FILE}"
+    echo "Refreshed app config: ${CONFIG_FILE}"
+fi
+
+echo "Starting ${SERVICE_UNIT}..."
+systemctl start "${SERVICE_UNIT}"
+SERVICE_STARTED=1
+
+echo "Complete."

@@ -308,6 +308,11 @@ def build_dashboard_health(config):
         "status": "ok" if overall_ok else "degraded",
         "version": __version__,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "current_scan_rate_stale_seconds": getattr(
+            config,
+            "current_scan_rate_stale_seconds",
+            60,
+        ),
         "services": services,
         "database": database,
         "connected_scanner_ids": connected_scanner_ids,
