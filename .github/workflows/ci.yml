@@ -21,6 +21,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Check README badges
+        run: python scripts/update-readme-badges --check
+
       - name: Install package
         run: python -m pip install -e .
 

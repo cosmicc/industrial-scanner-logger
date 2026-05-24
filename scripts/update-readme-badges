@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Update the generated README badge block."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+from urllib.parse import quote
+
+
+REPO_OWNER = "cosmicc"
+REPO_NAME = "industrial-scanner-logger"
+WORKFLOW_FILE = "ci.yml"
+
+README_PATH = Path("README.md")
+CI_WORKFLOW_PATH = Path(".github/workflows/ci.yml")
+LICENSE_PATH = Path("LICENSE")
+PYPROJECT_PATH = Path("pyproject.toml")
+
+BADGE_START = "<!-- badges:start -->"
+BADGE_END = "<!-- badges:end -->"
+
+
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def ci_python_versions() -> list[str]:
+    workflow_text = read_text(CI_WORKFLOW_PATH)
+    match = re.search(r"python-version:\s*\[([^\]]+)\]", workflow_text)
+
+    if not match:
+        raise SystemExit(f"Could not find python-version matrix in {CI_WORKFLOW_PATH}")
+
+    versions = re.findall(r'"([^"]+)"', match.group(1))
+
+    if not versions:
+        raise SystemExit(f"Could not parse python-version matrix in {CI_WORKFLOW_PATH}")
+
+    return versions
+
+
+def project_license() -> str:
+    pyproject_text = read_text(PYPROJECT_PATH)
+    match = re.search(r'license\s*=\s*\{text\s*=\s*"([^"]+)"\}', pyproject_text)
+
+    if match:
+        return match.group(1)
+
+    if LICENSE_PATH.exists():
+        license_text = read_text(LICENSE_PATH)
+        if "MIT License" in license_text:
+            return "MIT"
+
+    return "License"
+
+
+def markdown_badge(label: str, image_url: str, link_url: str) -> str:
+    return f"[![{label}]({image_url})]({link_url})"
+
+
+def generated_badge_block() -> str:
+    repo_url = f"https://github.com/{REPO_OWNER}/{REPO_NAME}"
+    actions_url = f"{repo_url}/actions/workflows/{WORKFLOW_FILE}"
+    release_url = f"{repo_url}/releases/latest"
+    workflow_badge = f"{actions_url}/badge.svg?branch=main"
+    tests_badge = (
+        f"https://img.shields.io/github/actions/workflow/status/{REPO_OWNER}/"
+        f"{REPO_NAME}/{WORKFLOW_FILE}?branch=main&label=tests"
+        "&logo=githubactions&logoColor=white"
+    )
+    python_versions = " | ".join(ci_python_versions())
+    python_badge = (
+        "https://img.shields.io/badge/"
+        f"python-{quote(python_versions, safe='')}-3776ab"
+        "?logo=python&logoColor=white"
+    )
+    release_badge = (
+        f"https://img.shields.io/github/v/release/{REPO_OWNER}/{REPO_NAME}"
+        "?label=release&sort=semver"
+    )
+    license_name = project_license()
+    license_badge = (
+        "https://img.shields.io/badge/"
+        f"license-{quote(license_name, safe='')}-green.svg"
+    )
+    postgres_badge = (
+        "https://img.shields.io/badge/PostgreSQL-required-336791"
+        "?logo=postgresql&logoColor=white"
+    )
+    fastapi_badge = (
+        "https://img.shields.io/badge/API-FastAPI-009688"
+        "?logo=fastapi&logoColor=white"
+    )
+
+    badges = [
+        markdown_badge("CI", workflow_badge, actions_url),
+        markdown_badge("Tests", tests_badge, actions_url),
+        markdown_badge("Python", python_badge, PYPROJECT_PATH.as_posix()),
+        markdown_badge("Release", release_badge, release_url),
+        markdown_badge("License", license_badge, LICENSE_PATH.as_posix()),
+        markdown_badge("PostgreSQL", postgres_badge, "README.md#requirements"),
+        markdown_badge("FastAPI", fastapi_badge, "README.md#current-behavior"),
+    ]
+
+    return "\n".join([BADGE_START, *badges, BADGE_END])
+
+
+def update_readme(readme_text: str, badge_block: str) -> str:
+    pattern = re.compile(
+        rf"{re.escape(BADGE_START)}.*?{re.escape(BADGE_END)}",
+        re.DOTALL,
+    )
+
+    if pattern.search(readme_text):
+        return pattern.sub(badge_block, readme_text, count=1)
+
+    lines = readme_text.splitlines()
+    if not lines or not lines[0].startswith("# "):
+        raise SystemExit("README.md must start with an H1 heading to insert badges")
+
+    return "\n".join([lines[0], "", badge_block, *lines[1:]]) + "\n"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="fail if README.md does not already contain the generated badge block",
+    )
+    args = parser.parse_args()
+
+    readme_text = read_text(README_PATH)
+    badge_block = generated_badge_block()
+    updated_text = update_readme(readme_text, badge_block)
+
+    if args.check:
+        if updated_text != readme_text:
+            print(
+                "README.md badge block is out of date. "
+                "Run scripts/update-readme-badges.",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
+
+    README_PATH.write_text(updated_text, encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
