@@ -240,7 +240,7 @@
 
         tr.innerHTML = `
           <td>${formatValue(row.scan_date)}</td>
-          <td>${formatValue(row.scan_time)}</td>
+          <td>${formatTime12(row.scan_date, row.scan_time)}</td>
           <td>${escapeHtml(row.scanner_name || "")}</td>
           <td>${escapeHtml(row.scanner_role || "")}</td>
           <td class="${statusClass}">${statusText}</td>
@@ -320,6 +320,41 @@
       const month = String(value.getMonth() + 1).padStart(2, "0");
       const day = String(value.getDate()).padStart(2, "0");
       return `${year}-${month}-${day}`;
+    }
+
+    function formatTime12(scanDate, scanTime) {
+      if (!scanTime) {
+        return "";
+      }
+
+      const parsed = parseScanDateTime(scanDate, scanTime);
+
+      if (!parsed) {
+        return escapeHtml(scanTime);
+      }
+
+      return escapeHtml(formatMeridiem(parsed));
+    }
+
+    function parseScanDateTime(scanDate, scanTime) {
+      const datePart = scanDate || "1970-01-01";
+      const normalizedTime = String(scanTime).replace(/(\.\d{3})\d+$/, "$1");
+      const parsed = new Date(`${datePart}T${normalizedTime}`);
+
+      if (Number.isNaN(parsed.getTime())) {
+        return null;
+      }
+
+      return parsed;
+    }
+
+    function formatMeridiem(value) {
+      return value.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true
+      }).replace(/\s?(AM|PM)$/i, (suffix) => suffix.toLowerCase());
     }
 
     function formatValue(value) {

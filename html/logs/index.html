@@ -184,7 +184,16 @@
         return value;
       }
 
-      return parsed.toLocaleString();
+      return `${parsed.toLocaleDateString()} ${formatMeridiem(parsed)}`;
+    }
+
+    function formatMeridiem(value) {
+      return value.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true
+      }).replace(/\s?(AM|PM)$/i, (suffix) => suffix.toLowerCase());
     }
 
     function escapeHtml(value) {

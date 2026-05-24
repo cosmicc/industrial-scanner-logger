@@ -127,7 +127,7 @@
       );
       setText(
         "tv-last-received-detail",
-        `${lastReceived.scan_date || ""} ${lastReceived.scan_time || ""}`.trim()
+        formatScanDateTime(lastReceived.scan_date, lastReceived.scan_time)
       );
     }
 
@@ -177,7 +177,7 @@
         return value;
       }
 
-      return `Updated ${parsed.toLocaleTimeString()}`;
+      return `Updated ${formatMeridiem(parsed)}`;
     }
 
     function formatElapsedTime(scanDate, scanTime, now = new Date()) {
@@ -256,6 +256,45 @@
 
     function formatElapsedPart(value, label) {
       return `${value.toLocaleString()} ${label}${value === 1 ? "" : "s"}`;
+    }
+
+    function formatScanDateTime(scanDate, scanTime) {
+      if (!scanDate && !scanTime) {
+        return "";
+      }
+
+      const parsed = parseScanDateTime(scanDate, scanTime);
+
+      if (!parsed) {
+        return `${scanDate || ""} ${scanTime || ""}`.trim();
+      }
+
+      return `${scanDate || parsed.toLocaleDateString()} ${formatMeridiem(parsed)}`;
+    }
+
+    function parseScanDateTime(scanDate, scanTime) {
+      if (!scanTime) {
+        return null;
+      }
+
+      const datePart = scanDate || "1970-01-01";
+      const normalizedTime = String(scanTime).replace(/(\.\d{3})\d+$/, "$1");
+      const parsed = new Date(`${datePart}T${normalizedTime}`);
+
+      if (Number.isNaN(parsed.getTime())) {
+        return null;
+      }
+
+      return parsed;
+    }
+
+    function formatMeridiem(value) {
+      return value.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true
+      }).replace(/\s?(AM|PM)$/i, (suffix) => suffix.toLowerCase());
     }
 
     loadDashboard();
