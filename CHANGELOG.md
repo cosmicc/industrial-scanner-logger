@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 - Increase the default maximum scanner connection count to 10.
 - Mark completed daily CSV files with no scan rows as unavailable for download.
 - Paginate the CSV log downloader page in newest-first groups of 10 days.
+- Simplify the health, search, and CSV log pages by removing redundant scanner columns and improving empty-day display.
 
 ## 1.1.2 - 2026-05-17
 

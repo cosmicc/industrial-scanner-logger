@@ -58,11 +58,6 @@
       </div>
 
       <div class="card">
-        <h2>Currently Connected Scanner IDs</h2>
-        <div id="scanner-list" class="scanner-list">Checking...</div>
-      </div>
-
-      <div class="card">
         <h2>Mandatory Scanners</h2>
         <div class="status-row">
           <span id="mandatory-scanners-dot" class="dot"></span>
@@ -157,43 +152,6 @@
 
       status.textContent = statusText;
       detail.textContent = detailText || "";
-    }
-
-    function renderScannerList(scannerIds) {
-      const container = document.getElementById("scanner-list");
-      container.innerHTML = "";
-
-      if (!scannerIds || scannerIds.length === 0) {
-        container.textContent = "No established scanner TCP connections detected.";
-        return;
-      }
-
-      for (const scannerId of scannerIds) {
-        const badge = document.createElement("span");
-        badge.className = "badge";
-        badge.textContent = `Scanner ${scannerId}`;
-        container.appendChild(badge);
-      }
-    }
-
-    function renderConnectedScanners(scanners, fallbackScannerIds) {
-      const container = document.getElementById("scanner-list");
-      container.innerHTML = "";
-
-      if (!scanners || scanners.length === 0) {
-        renderScannerList(fallbackScannerIds);
-        return;
-      }
-
-      for (const scanner of scanners) {
-        const badge = document.createElement("span");
-        const scannerName = scanner.scanner_name || `Scanner ${scanner.scanner_id}`;
-        const scannerRole = scanner.scanner_role === "last" ? "Last Scanner" : "Standard";
-
-        badge.className = "badge";
-        badge.textContent = `${scannerName} (${scannerRole})`;
-        container.appendChild(badge);
-      }
     }
 
     function renderMandatoryScanners(mandatoryScanners) {
@@ -476,7 +434,6 @@
             "No scan rows found.";
         }
 
-        renderConnectedScanners(data.connected_scanners, data.connected_scanner_ids);
         renderMandatoryScanners(data.mandatory_scanners);
         renderDailyTotals(database.active ? data.daily_totals : null);
         renderCurrentScanRate(database.active ? data.current_scan_rate : null);
@@ -493,9 +450,6 @@
 
         document.getElementById("last-received").innerHTML =
           `<span class="error">Unable to load health data.</span>`;
-
-        document.getElementById("scanner-list").textContent =
-          "Unable to load scanner connection data.";
 
         setIndicator("mandatory-scanners", false, "Unknown", "API unavailable.");
         document.getElementById("mandatory-scanner-list").innerHTML = "";

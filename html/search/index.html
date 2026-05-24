@@ -55,13 +55,10 @@
         <table>
           <thead>
             <tr>
-              <th>ID</th>
               <th>Date</th>
               <th>Time</th>
-              <th>Scanner ID</th>
               <th>Scanner Name</th>
               <th>Role</th>
-              <th>Last Scanner ID</th>
               <th>Status</th>
               <th>Duplicate</th>
               <th>Repaired</th>
@@ -73,7 +70,7 @@
           </thead>
           <tbody id="search-results">
             <tr>
-              <td colspan="14">Search results will appear here.</td>
+              <td colspan="11">Search results will appear here.</td>
             </tr>
           </tbody>
         </table>
@@ -242,13 +239,10 @@
         }
 
         tr.innerHTML = `
-          <td>${formatValue(row.id)}</td>
           <td>${formatValue(row.scan_date)}</td>
           <td>${formatValue(row.scan_time)}</td>
-          <td>${formatValue(row.scanner_id)}</td>
           <td>${escapeHtml(row.scanner_name || "")}</td>
           <td>${escapeHtml(row.scanner_role || "")}</td>
-          <td>${formatValue(row.last_scanner_id)}</td>
           <td class="${statusClass}">${statusText}</td>
           <td>${duplicateText}</td>
           <td>${repairedText}</td>
@@ -306,7 +300,7 @@
       resultsBody.innerHTML = "";
       const tr = document.createElement("tr");
       const td = document.createElement("td");
-      td.colSpan = 14;
+      td.colSpan = 11;
       td.textContent = message;
 
       if (isError) {
