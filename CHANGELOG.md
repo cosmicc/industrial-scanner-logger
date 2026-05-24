@@ -27,6 +27,7 @@ All notable changes to this project will be documented in this file.
 - Add a configurable health dashboard scan-rate stale threshold and color recent scan rows by age.
 - Show failed scan counts alongside totals, successful scans, and duplicates on health daily total cards.
 - Add `refresh-app-config` for syncing `/etc/industrial-scanner-logger.conf` with the default config schema while preserving existing values.
+- Prefer configured scanner names over scanner IDs in dashboard and search displays.
 
 ## 1.1.2 - 2026-05-17
 

@@ -243,32 +243,37 @@ def build_dashboard_health(config):
                 """,
                 [],
             )
+            if last_received:
+                last_received = scan_row_with_display_name(config, last_received)
 
-            recent_scans = fetch_all(
-                db,
-                """
-                SELECT
-                    id,
-                    scan_date,
-                    scan_time,
-                    scanner_id,
-                    scanner_name,
-                    scanner_role,
-                    last_scanner_id,
-                    is_duplicate,
-                    is_cross_scanner_duplicate,
-                    is_repaired,
-                    tracking_number,
-                    barcode,
-                    barcode_length,
-                    is_success,
-                    failure_reason
-                FROM scanner_logger.raw_scan_events
-                ORDER BY scan_date DESC, scan_time DESC, id DESC
-                LIMIT 10
-                """,
-                [],
-            )
+            recent_scans = [
+                scan_row_with_display_name(config, row)
+                for row in fetch_all(
+                    db,
+                    """
+                    SELECT
+                        id,
+                        scan_date,
+                        scan_time,
+                        scanner_id,
+                        scanner_name,
+                        scanner_role,
+                        last_scanner_id,
+                        is_duplicate,
+                        is_cross_scanner_duplicate,
+                        is_repaired,
+                        tracking_number,
+                        barcode,
+                        barcode_length,
+                        is_success,
+                        failure_reason
+                    FROM scanner_logger.raw_scan_events
+                    ORDER BY scan_date DESC, scan_time DESC, id DESC
+                    LIMIT 10
+                    """,
+                    [],
+                )
+            ]
 
             daily_totals = fetch_dashboard_daily_totals(
                 db,
@@ -350,6 +355,7 @@ def dashboard_connected_scanners(config, connected_scanner_ids: list[int]) -> li
         scanners.append({
             "scanner_id": scanner_id,
             "scanner_name": scanner_name,
+            "display_name": scanner_display_name(config, scanner_id, scanner_name),
             "scanner_role": scanner_role,
         })
 
@@ -415,12 +421,36 @@ def dashboard_mandatory_scanner_row(config, scanner_id: str, connected: bool) ->
 
 
 def dashboard_mandatory_scanner_label(config, scanner_id: str) -> str:
-    scanner_name = config.scanner_names.get(scanner_id, "")
+    return scanner_display_name(config, scanner_id)
+
+
+def scanner_display_name(config, scanner_id, fallback_name: str = "") -> str:
+    scanner_name = scanner_name_value(config, scanner_id, fallback_name)
 
     if scanner_name:
         return scanner_name
 
-    return f"Scanner {scanner_id}"
+    scanner_id_text = str(scanner_id or "").strip()
+    if scanner_id_text:
+        return f"Scanner {scanner_id_text}"
+
+    return ""
+
+
+def scanner_name_value(config, scanner_id, fallback_name: str = "") -> str:
+    scanner_id_text = str(scanner_id or "").strip()
+    config_scanner_names = getattr(config, "scanner_names", {}) or {}
+    return config_scanner_names.get(scanner_id_text, "") or fallback_name
+
+
+def scan_row_with_display_name(config, row: dict) -> dict:
+    scan_row = dict(row)
+    scan_row["display_name"] = scanner_display_name(
+        config,
+        scan_row.get("scanner_id"),
+        scan_row.get("scanner_name") or "",
+    )
+    return scan_row
 
 
 def dashboard_total_row(scan_date: date, row: Optional[dict] = None) -> dict:
@@ -501,16 +531,16 @@ def fetch_dashboard_today_scanner_totals(db, config, current_day: date) -> list[
 def dashboard_scanner_total_row(config, row: dict) -> dict:
     scanner_id = int(row.get("scanner_id") or 0)
     scanner_id_text = str(scanner_id)
-    config_scanner_names = getattr(config, "scanner_names", {}) or {}
-    scanner_name = row.get("scanner_name") or config_scanner_names.get(
+    scanner_name = scanner_name_value(
+        config,
         scanner_id_text,
-        "",
+        row.get("scanner_name") or "",
     )
 
     return {
         "scanner_id": scanner_id,
         "scanner_name": scanner_name,
-        "display_name": scanner_name or f"Scanner {scanner_id_text}",
+        "display_name": scanner_display_name(config, scanner_id_text, scanner_name),
         "total_scan_events": int(row.get("total_scan_events") or 0),
         "successful_scans": int(row.get("successful_scans") or 0),
         "failed_scans": int(row.get("failed_scans") or 0),
@@ -909,6 +939,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
         limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
         offset: int = Query(default=0, ge=0),
         db=Depends(get_db),
+        config=Depends(get_config),
     ):
         query, params = build_scan_events_query(
             start_date=start_date,
@@ -919,10 +950,13 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             limit=limit,
             offset=offset,
         )
-        return fetch_all(db, query, params)
+        return [
+            scan_row_with_display_name(config, row)
+            for row in fetch_all(db, query, params)
+        ]
 
     @app.get(f"{API_VERSION_PREFIX}/scans/{{scan_id}}")
-    def get_scan(scan_id: int, db=Depends(get_db)):
+    def get_scan(scan_id: int, db=Depends(get_db), config=Depends(get_config)):
         query = sql.SQL("SELECT {} FROM scanner_logger.scan_events WHERE id = %s").format(
             column_list(SCAN_EVENT_COLUMNS)
         )
@@ -932,7 +966,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
         if not rows:
             raise HTTPException(status_code=404, detail="scan event not found")
 
-        return rows[0]
+        return scan_row_with_display_name(config, rows[0])
 
     @app.get(f"{API_VERSION_PREFIX}/views")
     def list_views():

@@ -57,7 +57,7 @@
             <tr>
               <th>Date</th>
               <th>Time</th>
-              <th>Scanner Name</th>
+              <th>Scanner</th>
               <th>Role</th>
               <th>Status</th>
               <th>Duplicate</th>
@@ -241,7 +241,7 @@
         tr.innerHTML = `
           <td>${formatValue(row.scan_date)}</td>
           <td>${formatTime12(row.scan_date, row.scan_time)}</td>
-          <td>${escapeHtml(row.scanner_name || "")}</td>
+          <td>${escapeHtml(scannerDisplayName(row))}</td>
           <td>${escapeHtml(row.scanner_role || "")}</td>
           <td class="${statusClass}">${statusText}</td>
           <td>${duplicateText}</td>
@@ -274,6 +274,26 @@
 
     function trackingValueForFedEx(row) {
       return row.tracking_number || row.barcode || "";
+    }
+
+    function scannerDisplayName(row) {
+      if (row.display_name) {
+        return row.display_name;
+      }
+
+      if (row.scanner_name) {
+        return row.scanner_name;
+      }
+
+      if (
+        row.scanner_id !== undefined &&
+        row.scanner_id !== null &&
+        row.scanner_id !== ""
+      ) {
+        return `Scanner ${row.scanner_id}`;
+      }
+
+      return "";
     }
 
     function fedExTrackingUrl(value) {

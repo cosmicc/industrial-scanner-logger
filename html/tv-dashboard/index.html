@@ -147,11 +147,49 @@
       document.getElementById("tv-connected-detail").classList.remove("warning");
 
       if (mandatoryScanners.configured) {
-        setText("tv-connected-detail", "All mandatory scanners connected.");
+        const labels = mandatoryScannerLabels(mandatoryScanners);
+        setText(
+          "tv-connected-detail",
+          labels.length > 0
+            ? `Mandatory scanners connected: ${labels.join(", ")}.`
+            : "All mandatory scanners connected."
+        );
         return;
       }
 
       setText("tv-connected-detail", "No mandatory scanners configured.");
+    }
+
+    function mandatoryScannerLabels(mandatoryScanners) {
+      if (Array.isArray(mandatoryScanners?.required_scanners)) {
+        return mandatoryScanners.required_scanners
+          .map(scannerDisplayName)
+          .filter(Boolean);
+      }
+
+      return (mandatoryScanners?.required_scanner_ids || [])
+        .map((scannerId) => `Scanner ${scannerId}`)
+        .filter(Boolean);
+    }
+
+    function scannerDisplayName(row) {
+      if (row.display_name) {
+        return row.display_name;
+      }
+
+      if (row.scanner_name) {
+        return row.scanner_name;
+      }
+
+      if (
+        row.scanner_id !== undefined &&
+        row.scanner_id !== null &&
+        row.scanner_id !== ""
+      ) {
+        return `Scanner ${row.scanner_id}`;
+      }
+
+      return "";
     }
 
     function formatNumber(value) {

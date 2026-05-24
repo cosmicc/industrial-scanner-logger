@@ -147,8 +147,7 @@
           <tr>
             <th>Date</th>
             <th>Time</th>
-            <th>Scanner ID</th>
-            <th>Scanner Name</th>
+            <th>Scanner</th>
             <th>Role</th>
             <th>Status</th>
             <th>Duplicate</th>
@@ -160,7 +159,7 @@
         </thead>
         <tbody id="recent-scans">
           <tr>
-            <td colspan="11">Checking...</td>
+            <td colspan="10">Checking...</td>
           </tr>
         </tbody>
       </table>
@@ -210,7 +209,7 @@
           "mandatory-scanners",
           true,
           "Not Configured",
-          "No mandatory scanner IDs are configured."
+          "No mandatory scanners are configured."
         );
         return;
       }
@@ -260,7 +259,7 @@
 
       if (!rows || rows.length === 0) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="11">No scan rows found.</td>`;
+        tr.innerHTML = `<td colspan="10">No scan rows found.</td>`;
         tbody.appendChild(tr);
         return;
       }
@@ -276,8 +275,7 @@
         tr.innerHTML = `
           <td>${row.scan_date ?? ""}</td>
           <td>${formatTime12(row.scan_date, row.scan_time)}</td>
-          <td>${row.scanner_id ?? ""}</td>
-          <td>${escapeHtml(row.scanner_name ?? "")}</td>
+          <td>${escapeHtml(scannerDisplayName(row))}</td>
           <td>${escapeHtml(row.scanner_role ?? "")}</td>
           <td class="${statusClass}">${statusText}</td>
           <td>${duplicateText}</td>
@@ -309,19 +307,12 @@
         ? scanElapsedSeconds(lastReceived.scan_date, lastReceived.scan_time)
         : null;
       const fresh = elapsedSeconds !== null && elapsedSeconds <= staleThresholdSeconds;
-      let detailText = `${formatRate(scanRate.scans_per_hour)} Scans per hour.`;
-
-      if (elapsedSeconds === null) {
-        detailText += ` No received scan time. Red after ${formatDuration(staleThresholdSeconds)} without scans.`;
-      } else {
-        detailText += ` Last scan ${formatElapsedTime(lastReceived.scan_date, lastReceived.scan_time)}. Red after ${formatDuration(staleThresholdSeconds)} without scans.`;
-      }
 
       setIndicator(
         "current-scan-rate",
         fresh,
         `${formatRate(scansPerMinute)} scans/min`,
-        detailText
+        `${formatRate(scanRate.scans_per_hour)} Scans per hour`
       );
     }
 
@@ -433,17 +424,6 @@
       );
     }
 
-    function formatDuration(seconds) {
-      const totalSeconds = Number(seconds || 0);
-
-      if (totalSeconds >= 60 && totalSeconds % 60 === 0) {
-        const minutes = totalSeconds / 60;
-        return `${minutes.toLocaleString()} minute${minutes === 1 ? "" : "s"}`;
-      }
-
-      return `${totalSeconds.toLocaleString()} second${totalSeconds === 1 ? "" : "s"}`;
-    }
-
     function formatTime12(scanDate, scanTime) {
       if (!scanTime) {
         return "";
@@ -551,6 +531,26 @@
       }
 
       return "Now";
+    }
+
+    function scannerDisplayName(row) {
+      if (row.display_name) {
+        return row.display_name;
+      }
+
+      if (row.scanner_name) {
+        return row.scanner_name;
+      }
+
+      if (
+        row.scanner_id !== undefined &&
+        row.scanner_id !== null &&
+        row.scanner_id !== ""
+      ) {
+        return `Scanner ${row.scanner_id}`;
+      }
+
+      return "";
     }
 
     function formatElapsedPart(value, label) {

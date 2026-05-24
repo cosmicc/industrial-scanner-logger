@@ -233,7 +233,12 @@ class ApiQueryTests(unittest.TestCase):
         db = FakeDb()
         totals = fetch_dashboard_today_scanner_totals(
             db,
-            SimpleNamespace(scanner_names={"20": "Lane 1 Scanner"}),
+            SimpleNamespace(
+                scanner_names={
+                    "20": "Lane 1 Scanner",
+                    "21": "Configured Last Scanner",
+                }
+            ),
             date(2026, 5, 18),
         )
 
@@ -253,8 +258,8 @@ class ApiQueryTests(unittest.TestCase):
                 },
                 {
                     "scanner_id": 21,
-                    "scanner_name": "Last Scanner",
-                    "display_name": "Last Scanner",
+                    "scanner_name": "Configured Last Scanner",
+                    "display_name": "Configured Last Scanner",
                     "total_scan_events": 4,
                     "successful_scans": 4,
                     "failed_scans": 0,
@@ -412,6 +417,39 @@ class ApiQueryTests(unittest.TestCase):
             status["warning"],
             "Mandatory scanner not connected: Last Scanner",
         )
+
+    def test_scan_row_display_name_prefers_current_config_name(self):
+        from types import SimpleNamespace
+
+        from industrial_scanner_logger.api import scan_row_with_display_name
+
+        row = scan_row_with_display_name(
+            SimpleNamespace(scanner_names={"20": "Lane 1 Scanner"}),
+            {
+                "scanner_id": 20,
+                "scanner_name": "Old Scanner Name",
+                "barcode": "123",
+            },
+        )
+
+        self.assertEqual(row["display_name"], "Lane 1 Scanner")
+        self.assertEqual(row["scanner_name"], "Old Scanner Name")
+
+    def test_scan_row_display_name_falls_back_to_scanner_id(self):
+        from types import SimpleNamespace
+
+        from industrial_scanner_logger.api import scan_row_with_display_name
+
+        row = scan_row_with_display_name(
+            SimpleNamespace(scanner_names={}),
+            {
+                "scanner_id": 21,
+                "scanner_name": "",
+                "barcode": "123",
+            },
+        )
+
+        self.assertEqual(row["display_name"], "Scanner 21")
 
 
 if __name__ == "__main__":
