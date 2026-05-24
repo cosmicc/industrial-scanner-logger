@@ -780,7 +780,7 @@ def connected_scanner_ids_from_ss(listen_port: int) -> list[int]:
     return sorted(scanner_ids)
 
 
-def run_ss_for_port(ss_path: str, listen_port: int) -> str | None:
+def run_ss_for_port(ss_path: str, listen_port: int) -> Optional[str]:
     try:
         result = subprocess.run(
             [
@@ -836,7 +836,7 @@ def split_host_port(endpoint: str) -> tuple[str, str]:
     return host, port
 
 
-def scanner_id_from_ipv4_host(host: str) -> int | None:
+def scanner_id_from_ipv4_host(host: str) -> Optional[int]:
     host = host.strip("[]")
 
     if host.startswith("::ffff:"):
