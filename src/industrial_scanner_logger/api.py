@@ -301,6 +301,7 @@ def build_dashboard_health(config):
 
     return {
         "status": "ok" if overall_ok else "degraded",
+        "version": __version__,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "services": services,
         "database": database,
@@ -349,6 +350,14 @@ def dashboard_mandatory_scanners(config, connected_scanner_ids: list[int]) -> di
         str(scanner_id) for scanner_id in connected_scanner_ids
     }
     required_scanner_ids = list(config.mandatory_scanner_ids)
+    required_scanners = [
+        dashboard_mandatory_scanner_row(
+            config,
+            scanner_id,
+            scanner_id in connected_scanner_id_texts,
+        )
+        for scanner_id in required_scanner_ids
+    ]
     connected_required_scanner_ids = [
         scanner_id
         for scanner_id in required_scanner_ids
@@ -365,11 +374,15 @@ def dashboard_mandatory_scanners(config, connected_scanner_ids: list[int]) -> di
         warning = "Mandatory scanner not connected: "
         if len(missing_scanner_ids) > 1:
             warning = "Mandatory scanners not connected: "
-        warning += ", ".join(missing_scanner_ids)
+        warning += ", ".join(
+            dashboard_mandatory_scanner_label(config, scanner_id)
+            for scanner_id in missing_scanner_ids
+        )
 
     return {
         "configured": bool(required_scanner_ids),
         "ok": not missing_scanner_ids,
+        "required_scanners": required_scanners,
         "required_scanner_ids": [int(scanner_id) for scanner_id in required_scanner_ids],
         "connected_required_scanner_ids": [
             int(scanner_id) for scanner_id in connected_required_scanner_ids
@@ -377,6 +390,26 @@ def dashboard_mandatory_scanners(config, connected_scanner_ids: list[int]) -> di
         "missing_scanner_ids": [int(scanner_id) for scanner_id in missing_scanner_ids],
         "warning": warning,
     }
+
+
+def dashboard_mandatory_scanner_row(config, scanner_id: str, connected: bool) -> dict:
+    scanner_name = config.scanner_names.get(scanner_id, "")
+
+    return {
+        "scanner_id": int(scanner_id),
+        "scanner_name": scanner_name,
+        "display_name": dashboard_mandatory_scanner_label(config, scanner_id),
+        "connected": connected,
+    }
+
+
+def dashboard_mandatory_scanner_label(config, scanner_id: str) -> str:
+    scanner_name = config.scanner_names.get(scanner_id, "")
+
+    if scanner_name:
+        return scanner_name
+
+    return f"Scanner {scanner_id}"
 
 
 def dashboard_total_row(scan_date: date, row: Optional[dict] = None) -> dict:

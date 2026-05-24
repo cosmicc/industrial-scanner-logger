@@ -282,16 +282,39 @@ class ApiQueryTests(unittest.TestCase):
         from industrial_scanner_logger.api import dashboard_mandatory_scanners
 
         status = dashboard_mandatory_scanners(
-            SimpleNamespace(mandatory_scanner_ids=["20", "21"]),
+            SimpleNamespace(
+                mandatory_scanner_ids=["20", "21"],
+                scanner_names={"20": "Lane 1 Scanner", "21": "Last Scanner"},
+            ),
             [20],
         )
 
         self.assertFalse(status["ok"])
         self.assertTrue(status["configured"])
+        self.assertEqual(
+            status["required_scanners"],
+            [
+                {
+                    "scanner_id": 20,
+                    "scanner_name": "Lane 1 Scanner",
+                    "display_name": "Lane 1 Scanner",
+                    "connected": True,
+                },
+                {
+                    "scanner_id": 21,
+                    "scanner_name": "Last Scanner",
+                    "display_name": "Last Scanner",
+                    "connected": False,
+                },
+            ],
+        )
         self.assertEqual(status["required_scanner_ids"], [20, 21])
         self.assertEqual(status["connected_required_scanner_ids"], [20])
         self.assertEqual(status["missing_scanner_ids"], [21])
-        self.assertEqual(status["warning"], "Mandatory scanner not connected: 21")
+        self.assertEqual(
+            status["warning"],
+            "Mandatory scanner not connected: Last Scanner",
+        )
 
 
 if __name__ == "__main__":

@@ -3,24 +3,98 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Shipping Tracker Scan Logger</title>
+  <title>Industrial Scanner Logger</title>
   <link rel="stylesheet" href="/assets/site.css">
 </head>
 <body>
-  <main class="page landing">
-    <section class="card landing-card">
-      <h1 class="landing-title">Shipping Tracker Scan Logger</h1>
-      <div class="subhead">Coming soon.</div>
-      <div class="detail">
-        Health, search, CSV log downloads, and the TV dashboard are available now while the main scan logger interface is being built.
+  <main class="page home-page">
+    <header class="home-header">
+      <div>
+        <div class="home-kicker">Scanner operations hub</div>
+        <h1 class="home-title">Industrial Scanner Logger</h1>
+        <div class="home-summary">
+          Health checks, tracking search, CSV log downloads, and the TV dashboard are available from one place.
+        </div>
       </div>
-      <div class="landing-actions">
-        <a class="button primary" href="/health">Open Health Dashboard</a>
-        <a class="button" href="/search">Search Tracking Number</a>
-        <a class="button" href="/logs">Download CSV Logs</a>
-        <a class="button" href="/tv-dashboard">TV Dashboard</a>
+      <div class="home-status-panel">
+        <div id="home-status" class="home-status-pill">Checking...</div>
+        <div class="home-status-detail">Version <span data-app-version>Loading...</span></div>
       </div>
+    </header>
+
+    <nav class="home-link-grid" aria-label="Application pages">
+      <a class="home-link-card primary" href="/health">
+        <span class="home-link-title">Health Dashboard</span>
+        <span class="home-link-detail">Service status, database status, mandatory scanners, and recent scan rows.</span>
+      </a>
+
+      <a class="home-link-card" href="/search">
+        <span class="home-link-title">Search Tracking Number</span>
+        <span class="home-link-detail">Find scan records by full tracking number, barcode, or last 10 tracking digits.</span>
+      </a>
+
+      <a class="home-link-card" href="/logs">
+        <span class="home-link-title">CSV Log Downloads</span>
+        <span class="home-link-detail">Download completed daily scan CSV files, newest first.</span>
+      </a>
+
+      <a class="home-link-card" href="/tv-dashboard">
+        <span class="home-link-title">TV Dashboard</span>
+        <span class="home-link-detail">Open the large-format dashboard for scan rate, scanner count, and last received data.</span>
+      </a>
+    </nav>
+
+    <section class="home-notice">
+      <strong>Under construction.</strong>
+      Please report bugs or issues to
+      <a href="mailto:iperry@teomasystems.com?subject=Industrial%20Scanner%20App%20Issue">iperry@teomasystems.com</a>.
     </section>
+
+    <footer class="home-meta">
+      <span>Version <span data-app-version>Loading...</span></span>
+      <span>
+        Source:
+        <a href="https://github.com/cosmicc/industrial-scanner-logger" target="_blank" rel="noopener noreferrer">cosmicc/industrial-scanner-logger</a>
+      </span>
+    </footer>
   </main>
+
+  <script>
+    const HOME_HEALTH_API_URL = "/api/v1/dashboard/health";
+
+    function setVersion(version) {
+      for (const element of document.querySelectorAll("[data-app-version]")) {
+        element.textContent = version || "unknown";
+      }
+    }
+
+    function setHomeStatus(status, detailClass) {
+      const statusElement = document.getElementById("home-status");
+      statusElement.className = `home-status-pill ${detailClass || ""}`.trim();
+      statusElement.textContent = status;
+    }
+
+    async function refreshHomeStatus() {
+      try {
+        const response = await fetch(HOME_HEALTH_API_URL, { cache: "no-store" });
+
+        if (!response.ok) {
+          throw new Error(`API returned HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        setVersion(data.version);
+        setHomeStatus(
+          data.status === "ok" ? "System OK" : "Needs Attention",
+          data.status === "ok" ? "ok" : "warning"
+        );
+      } catch (_error) {
+        setVersion("unknown");
+        setHomeStatus("API Unavailable", "error");
+      }
+    }
+
+    refreshHomeStatus();
+  </script>
 </body>
 </html>

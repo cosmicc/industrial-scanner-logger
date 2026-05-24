@@ -21,6 +21,7 @@ All notable changes to this project will be documented in this file.
 - Paginate the CSV log downloader page in newest-first groups of 10 days.
 - Simplify the health, search, and CSV log pages by removing redundant scanner columns and improving empty-day display.
 - Display webpage times with 12-hour am/pm formatting.
+- Rewrite the home page as an app hub with live status, version metadata, bug-report link, and GitHub source link.
 
 ## 1.1.2 - 2026-05-17
 

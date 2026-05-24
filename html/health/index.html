@@ -46,6 +46,7 @@
       <div class="card">
         <h2>Last Received Data</h2>
         <div id="last-received" class="big-value">Checking...</div>
+        <div id="last-received-detail" class="detail"></div>
       </div>
 
       <div class="card">
@@ -135,6 +136,8 @@
     <div class="footer">
       <a href="/">Home</a> | <a href="/search">Search</a> | <a href="/logs">CSV Logs</a> | <a href="/tv-dashboard">TV Dashboard</a>
       <br>
+      App version: <span id="app-version">Loading...</span>
+      <br>
       Last page update: <span id="page-updated">never</span>
     </div>
   </main>
@@ -156,7 +159,7 @@
 
     function renderMandatoryScanners(mandatoryScanners) {
       const container = document.getElementById("mandatory-scanner-list");
-      const requiredScannerIds = mandatoryScanners?.required_scanner_ids || [];
+      const requiredScanners = mandatoryScannerRows(mandatoryScanners);
       const missingScannerIds = new Set(
         (mandatoryScanners?.missing_scanner_ids || []).map(String)
       );
@@ -180,15 +183,36 @@
         mandatoryScanners.warning || "All mandatory scanners are connected."
       );
 
-      for (const scannerId of requiredScannerIds) {
-        const scannerIdText = String(scannerId);
+      for (const scanner of requiredScanners) {
+        const scannerIdText = String(scanner.scanner_id);
         const badge = document.createElement("span");
-        const missing = missingScannerIds.has(scannerIdText);
+        const missing = scanner.connected === false || missingScannerIds.has(scannerIdText);
+        const scannerLabel = scanner.display_name || scanner.scanner_name || `Scanner ${scannerIdText}`;
 
         badge.className = `badge${missing ? " missing" : ""}`;
-        badge.textContent = `Scanner ${scannerIdText}${missing ? " missing" : ""}`;
+        badge.textContent = `${scannerLabel}${missing ? " missing" : ""}`;
         container.appendChild(badge);
       }
+    }
+
+    function mandatoryScannerRows(mandatoryScanners) {
+      if (Array.isArray(mandatoryScanners?.required_scanners)) {
+        return mandatoryScanners.required_scanners;
+      }
+
+      const missingScannerIds = new Set(
+        (mandatoryScanners?.missing_scanner_ids || []).map(String)
+      );
+
+      return (mandatoryScanners?.required_scanner_ids || []).map((scannerId) => {
+        const scannerIdText = String(scannerId);
+
+        return {
+          scanner_id: scannerId,
+          display_name: `Scanner ${scannerIdText}`,
+          connected: !missingScannerIds.has(scannerIdText)
+        };
+      });
     }
 
     function renderRecentScans(rows) {
@@ -437,6 +461,9 @@
         const api = data.services?.api || {};
         const database = data.database || {};
 
+        document.getElementById("app-version").textContent =
+          data.version || "unknown";
+
         setIndicator(
           "scanner",
           Boolean(scanner.active),
@@ -464,9 +491,15 @@
               data.last_received.scan_date,
               data.last_received.scan_time
             );
+          document.getElementById("last-received-detail").textContent =
+            formatScanDateTime(
+              data.last_received.scan_date,
+              data.last_received.scan_time
+            );
         } else {
           document.getElementById("last-received").textContent =
             "No scan rows found.";
+          document.getElementById("last-received-detail").textContent = "";
         }
 
         renderMandatoryScanners(data.mandatory_scanners);
@@ -485,6 +518,8 @@
 
         document.getElementById("last-received").innerHTML =
           `<span class="error">Unable to load health data.</span>`;
+        document.getElementById("last-received-detail").textContent = "";
+        document.getElementById("app-version").textContent = "unknown";
 
         setIndicator("mandatory-scanners", false, "Unknown", "API unavailable.");
         document.getElementById("mandatory-scanner-list").innerHTML = "";
@@ -508,6 +543,20 @@
 
     function formatDateTime12(value) {
       return `${value.toLocaleDateString()} ${formatMeridiem(value)}`;
+    }
+
+    function formatScanDateTime(scanDate, scanTime) {
+      if (!scanDate && !scanTime) {
+        return "";
+      }
+
+      const parsed = parseScanDateTime(scanDate, scanTime);
+
+      if (!parsed) {
+        return `${scanDate || ""} ${scanTime || ""}`.trim();
+      }
+
+      return `${scanDate || parsed.toLocaleDateString()} ${formatMeridiem(parsed)}`;
     }
   </script>
 </body>
