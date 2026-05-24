@@ -22,7 +22,8 @@ All notable changes to this project will be documented in this file.
 - Simplify the health, search, and CSV log pages by removing redundant scanner columns and improving empty-day display.
 - Display webpage times with 12-hour am/pm formatting.
 - Rewrite the home page as an app hub with live status, version metadata, bug-report link, and GitHub source link.
-- Show daily CSV total scan and same-scanner duplicate counts, and add today's per-scanner totals to the health page.
+- Show daily CSV total scan and duplicate counts, and add today's per-scanner totals to the health page.
+- Restrict `is_cross_scanner_duplicate` to the configured last scanner; other scanner repeats remain regular duplicates.
 
 ## 1.1.2 - 2026-05-17
 

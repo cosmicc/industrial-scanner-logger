@@ -83,8 +83,8 @@
             <div id="today-success" class="metric-value success">0</div>
           </div>
           <div class="metric">
-            <div class="metric-label">Failed Scans</div>
-            <div id="today-failed" class="metric-value failed">0</div>
+            <div class="metric-label">Duplicates</div>
+            <div id="today-duplicates" class="metric-value duplicate">0</div>
           </div>
         </div>
       </div>
@@ -102,8 +102,8 @@
             <div id="yesterday-success" class="metric-value success">0</div>
           </div>
           <div class="metric">
-            <div class="metric-label">Failed Scans</div>
-            <div id="yesterday-failed" class="metric-value failed">0</div>
+            <div class="metric-label">Duplicates</div>
+            <div id="yesterday-duplicates" class="metric-value duplicate">0</div>
           </div>
         </div>
       </div>
@@ -120,7 +120,7 @@
               <th>Total Scans</th>
               <th>Successful</th>
               <th>Failed</th>
-              <th>Same Scanner Duplicates</th>
+              <th>Duplicates</th>
             </tr>
           </thead>
           <tbody id="today-scanner-totals">
@@ -308,20 +308,20 @@
       const dateElement = document.getElementById(`${prefix}-date`);
       const totalElement = document.getElementById(`${prefix}-total`);
       const successElement = document.getElementById(`${prefix}-success`);
-      const failedElement = document.getElementById(`${prefix}-failed`);
+      const duplicateElement = document.getElementById(`${prefix}-duplicates`);
 
       if (!total) {
         dateElement.textContent = "Unavailable";
         totalElement.textContent = "0";
         successElement.textContent = "0";
-        failedElement.textContent = "0";
+        duplicateElement.textContent = "0";
         return;
       }
 
       dateElement.textContent = total.scan_date || "No date returned";
       totalElement.textContent = formatCount(total.total_scan_events);
       successElement.textContent = formatCount(total.successful_scans);
-      failedElement.textContent = formatCount(total.failed_scans);
+      duplicateElement.textContent = formatCount(total.duplicate_scans);
     }
 
     function renderTodayScannerTotals(rows) {
@@ -356,7 +356,7 @@
           <td>${formatCount(row.total_scan_events)}</td>
           <td class="success">${formatCount(row.successful_scans)}</td>
           <td class="failed">${formatCount(row.failed_scans)}</td>
-          <td class="duplicate">${formatCount(row.same_scanner_duplicate_scans)}</td>
+          <td class="duplicate">${formatCount(row.duplicate_scans)}</td>
         `;
 
         tbody.appendChild(tr);

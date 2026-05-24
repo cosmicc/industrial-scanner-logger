@@ -426,8 +426,8 @@ def dashboard_total_row(scan_date: date, row: Optional[dict] = None) -> dict:
         "successful_scans": int(row.get("successful_scans") or 0),
         "failed_scans": int(row.get("failed_scans") or 0),
         "duplicate_scans": int(row.get("duplicate_scans") or 0),
-        "same_scanner_duplicate_scans": int(
-            row.get("same_scanner_duplicate_scans") or 0
+        "cross_scanner_duplicate_scans": int(
+            row.get("cross_scanner_duplicate_scans") or 0
         ),
     }
 
@@ -445,10 +445,12 @@ def fetch_dashboard_daily_totals(
             count(*) AS total_scan_events,
             count(*) FILTER (WHERE is_success) AS successful_scans,
             count(*) FILTER (WHERE is_success = false) AS failed_scans,
-            count(*) FILTER (WHERE is_duplicate) AS duplicate_scans,
             count(*) FILTER (
                 WHERE is_duplicate AND is_cross_scanner_duplicate = false
-            ) AS same_scanner_duplicate_scans
+            ) AS duplicate_scans,
+            count(*) FILTER (
+                WHERE is_cross_scanner_duplicate
+            ) AS cross_scanner_duplicate_scans
         FROM scanner_logger.scan_events
         WHERE scan_date IN (%s, %s)
         GROUP BY scan_date
@@ -474,10 +476,12 @@ def fetch_dashboard_today_scanner_totals(db, config, current_day: date) -> list[
             count(*) AS total_scan_events,
             count(*) FILTER (WHERE is_success) AS successful_scans,
             count(*) FILTER (WHERE is_success = false) AS failed_scans,
-            count(*) FILTER (WHERE is_duplicate) AS duplicate_scans,
             count(*) FILTER (
                 WHERE is_duplicate AND is_cross_scanner_duplicate = false
-            ) AS same_scanner_duplicate_scans
+            ) AS duplicate_scans,
+            count(*) FILTER (
+                WHERE is_cross_scanner_duplicate
+            ) AS cross_scanner_duplicate_scans
         FROM scanner_logger.scan_events
         WHERE scan_date = %s
         GROUP BY scanner_id
@@ -506,8 +510,8 @@ def dashboard_scanner_total_row(config, row: dict) -> dict:
         "successful_scans": int(row.get("successful_scans") or 0),
         "failed_scans": int(row.get("failed_scans") or 0),
         "duplicate_scans": int(row.get("duplicate_scans") or 0),
-        "same_scanner_duplicate_scans": int(
-            row.get("same_scanner_duplicate_scans") or 0
+        "cross_scanner_duplicate_scans": int(
+            row.get("cross_scanner_duplicate_scans") or 0
         ),
     }
 
@@ -591,9 +595,7 @@ def daily_csv_log_row(config, csv_path: Path, scan_date: date) -> dict:
         ),
         "has_scans": has_scans,
         "scan_count": scan_count,
-        "same_scanner_duplicate_count": scan_summary[
-            "same_scanner_duplicate_count"
-        ],
+        "duplicate_count": scan_summary["duplicate_count"],
         "download_url": download_url,
     }
 
@@ -604,7 +606,7 @@ def count_daily_csv_scan_rows(csv_path: Path) -> int:
 
 def daily_csv_scan_summary(csv_path: Path) -> dict:
     scan_count = 0
-    same_scanner_duplicate_count = 0
+    duplicate_count = 0
 
     with csv_path.open("r", newline="", encoding="utf-8", errors="replace") as f:
         reader = csv.DictReader(f)
@@ -618,11 +620,11 @@ def daily_csv_scan_summary(csv_path: Path) -> dict:
             if csv_truthy(row.get("is_duplicate")) and not csv_truthy(
                 row.get("is_cross_scanner_duplicate")
             ):
-                same_scanner_duplicate_count += 1
+                duplicate_count += 1
 
     return {
         "scan_count": scan_count,
-        "same_scanner_duplicate_count": same_scanner_duplicate_count,
+        "duplicate_count": duplicate_count,
     }
 
 

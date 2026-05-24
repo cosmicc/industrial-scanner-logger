@@ -137,8 +137,8 @@ class ApiQueryTests(unittest.TestCase):
                         "total_scan_events": 16,
                         "successful_scans": 14,
                         "failed_scans": 2,
-                        "duplicate_scans": 3,
-                        "same_scanner_duplicate_scans": 2,
+                        "duplicate_scans": 2,
+                        "cross_scanner_duplicate_scans": 1,
                     }
                 ]
 
@@ -168,8 +168,8 @@ class ApiQueryTests(unittest.TestCase):
                     "total_scan_events": 16,
                     "successful_scans": 14,
                     "failed_scans": 2,
-                    "duplicate_scans": 3,
-                    "same_scanner_duplicate_scans": 2,
+                    "duplicate_scans": 2,
+                    "cross_scanner_duplicate_scans": 1,
                 },
                 "yesterday": {
                     "scan_date": "2026-05-17",
@@ -177,7 +177,7 @@ class ApiQueryTests(unittest.TestCase):
                     "successful_scans": 0,
                     "failed_scans": 0,
                     "duplicate_scans": 0,
-                    "same_scanner_duplicate_scans": 0,
+                    "cross_scanner_duplicate_scans": 0,
                 },
                 "today_by_scanner": [],
             },
@@ -209,8 +209,8 @@ class ApiQueryTests(unittest.TestCase):
                         "total_scan_events": 8,
                         "successful_scans": 7,
                         "failed_scans": 1,
-                        "duplicate_scans": 3,
-                        "same_scanner_duplicate_scans": 2,
+                        "duplicate_scans": 2,
+                        "cross_scanner_duplicate_scans": 1,
                     },
                     {
                         "scanner_id": 21,
@@ -218,8 +218,8 @@ class ApiQueryTests(unittest.TestCase):
                         "total_scan_events": 4,
                         "successful_scans": 4,
                         "failed_scans": 0,
-                        "duplicate_scans": 1,
-                        "same_scanner_duplicate_scans": 0,
+                        "duplicate_scans": 0,
+                        "cross_scanner_duplicate_scans": 1,
                     },
                 ]
 
@@ -248,8 +248,8 @@ class ApiQueryTests(unittest.TestCase):
                     "total_scan_events": 8,
                     "successful_scans": 7,
                     "failed_scans": 1,
-                    "duplicate_scans": 3,
-                    "same_scanner_duplicate_scans": 2,
+                    "duplicate_scans": 2,
+                    "cross_scanner_duplicate_scans": 1,
                 },
                 {
                     "scanner_id": 21,
@@ -258,8 +258,8 @@ class ApiQueryTests(unittest.TestCase):
                     "total_scan_events": 4,
                     "successful_scans": 4,
                     "failed_scans": 0,
-                    "duplicate_scans": 1,
-                    "same_scanner_duplicate_scans": 0,
+                    "duplicate_scans": 0,
+                    "cross_scanner_duplicate_scans": 1,
                 },
             ],
         )
@@ -310,12 +310,12 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(rows[0]["filename"], "Test_2026-05-17.csv")
         self.assertTrue(rows[0]["has_scans"])
         self.assertEqual(rows[0]["scan_count"], 3)
-        self.assertEqual(rows[0]["same_scanner_duplicate_count"], 1)
+        self.assertEqual(rows[0]["duplicate_count"], 1)
         self.assertEqual(rows[0]["download_url"], "/v1/logs/daily-csv/2026-05-17")
         self.assertEqual(rows[1]["scan_date"], "2026-05-16")
         self.assertFalse(rows[1]["has_scans"])
         self.assertEqual(rows[1]["scan_count"], 0)
-        self.assertEqual(rows[1]["same_scanner_duplicate_count"], 0)
+        self.assertEqual(rows[1]["duplicate_count"], 0)
         self.assertIsNone(rows[1]["download_url"])
 
     def test_current_scan_rate_uses_rolling_one_minute_window(self):
