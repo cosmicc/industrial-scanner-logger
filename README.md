@@ -31,15 +31,6 @@ Industrial Scanner Logger is a Python 3, Debian/Ubuntu compatible, systemd-manag
 - Logs repeated successful tracking numbers from the same or different scanners.
 - Marks a successful scan as a duplicate only after the 3 different successful tracking number repeat threshold is met.
 
-## Windows USB Scanner Client
-
-USB barcode scanners connected to a Windows computer can be used with
-[cosmicc/usb-scanner-client](https://github.com/cosmicc/usb-scanner-client).
-The Windows client treats a USB scanner like an industrial scanner by reading
-scanner input locally and sending each scan over TCP to the Industrial Scanner
-Logger server, where it is logged and processed the same way as scans received
-from fixed-mount industrial scanners.
-
 ## Requirements
 
 - Python 3.9 or newer
@@ -510,6 +501,15 @@ GitHub repository:
 ```text
 https://github.com/cosmicc/industrial-scanner-logger
 ```
+
+## Windows USB Scanner Client
+
+USB barcode scanners connected to a Windows computer can be used with
+[cosmicc/usb-scanner-client](https://github.com/cosmicc/usb-scanner-client).
+The Windows client treats a USB scanner like an industrial scanner by reading
+scanner input locally and sending each scan over TCP to the Industrial Scanner
+Logger server, where it is logged and processed the same way as scans received
+from fixed-mount industrial scanners.
 
 ## License
 
