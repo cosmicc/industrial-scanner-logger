@@ -647,16 +647,6 @@ tr:last-child td {
   font-size: 76px;
 }
 
-.tv-footer {
-  position: absolute;
-  top: 44px;
-  left: 40px;
-  color: var(--muted);
-  font-size: 24px;
-  font-weight: 800;
-  text-align: left;
-}
-
 .tv-duplicate-alert {
   position: fixed;
   inset: 0;
@@ -794,11 +784,6 @@ tr:last-child td {
 
   .tv-day-title {
     font-size: 34px;
-  }
-
-  .tv-footer {
-    font-size: 18px;
-    text-align: left;
   }
 
   .tv-duplicate-kicker {

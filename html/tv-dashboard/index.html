@@ -62,9 +62,6 @@
       </div>
     </section>
 
-    <footer class="tv-footer">
-      <span id="tv-generated">Updated pending</span>
-    </footer>
   </main>
 
   <div id="tv-duplicate-alert" class="tv-duplicate-alert" role="alert" aria-live="assertive" hidden>
@@ -91,7 +88,6 @@
     const DEFAULT_TV_DUPLICATE_ALERT_SECONDS = 60;
     let tvRefreshTimer = null;
     let tvRefreshIntervalMs = null;
-    let lastGeneratedAt = null;
     let activeDuplicateAlertId = null;
     let duplicateAlertTimer = null;
     let duplicateAlarmInterval = null;
@@ -110,7 +106,6 @@
       } catch (error) {
         document.getElementById("tv-status").textContent = "Offline";
         document.getElementById("tv-status").classList.add("offline");
-        document.getElementById("tv-generated").textContent = error.message;
       }
     }
 
@@ -124,8 +119,6 @@
 
       status.textContent = (data.status || "unknown").toUpperCase();
       status.classList.toggle("offline", data.status !== "ok");
-      lastGeneratedAt = data.generated_at || null;
-      renderGeneratedAt();
       configureTvRefresh(data.tv_dashboard_refresh_seconds);
 
       if (mandatoryScanners.warning) {
@@ -374,22 +367,6 @@
       });
     }
 
-    function renderGeneratedAt() {
-      if (!lastGeneratedAt) {
-        setText("tv-generated", "Updated pending");
-        return;
-      }
-
-      const parsed = new Date(lastGeneratedAt);
-
-      if (Number.isNaN(parsed.getTime())) {
-        setText("tv-generated", `Updated ${lastGeneratedAt}`);
-        return;
-      }
-
-      setText("tv-generated", `Updated ${formatElapsedSince(parsed, -1)}`);
-    }
-
     function configureTvRefresh(refreshSeconds) {
       const intervalMs = refreshIntervalMs(refreshSeconds, DEFAULT_TV_REFRESH_SECONDS);
 
@@ -542,7 +519,6 @@
 
     loadDashboard();
     configureTvRefresh(DEFAULT_TV_REFRESH_SECONDS);
-    window.setInterval(renderGeneratedAt, 1000);
   </script>
 </body>
 </html>
