@@ -372,6 +372,8 @@ log_level = warning
                 success_length=34,
             )
 
+            self.assertEqual(list(output_dir.glob("*.backup-*")), [])
+
             with totals_path.open(newline="", encoding="utf-8") as f:
                 rows = list(csv.DictReader(f))
 
@@ -410,6 +412,8 @@ log_level = warning
                 scanner_names={"21": "Last Scanner"},
             )
 
+            self.assertEqual(list(output_dir.glob("*.backup-*")), [])
+
             with csv_path.open(newline="", encoding="utf-8") as f:
                 reader = csv.reader(f)
                 header = next(reader)
@@ -427,6 +431,41 @@ log_level = warning
             self.assertEqual(rows[0]["is_cross_scanner_duplicate"], "false")
             self.assertEqual(rows[0]["is_repaired"], "false")
             self.assertEqual(rows[0]["tracking"], valid_tracking)
+
+    def test_failed_scans_migration_does_not_create_backup_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            output_dir = Path(temp_dir)
+            failed_scans_path = output_dir / "failed_scans.csv"
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            with failed_scans_path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["date", "time", "tracking"])
+                writer.writerow(["2026-05-16", "08:00:00", "BADSCAN"])
+
+            DailyCsvLogger(
+                output_dir=output_dir,
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+            )
+
+            self.assertEqual(list(output_dir.glob("*.backup-*")), [])
+
+            with failed_scans_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(
+                rows,
+                [
+                    {
+                        "date": "2026-05-16",
+                        "time": "08:00:00",
+                        "scanner_id": "UNKNOWN",
+                        "failed_barcode": "BADSCAN",
+                    }
+                ],
+            )
 
     def test_client_handler_closes_oversized_undelimited_frame(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):

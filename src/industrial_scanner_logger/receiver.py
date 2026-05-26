@@ -38,7 +38,6 @@ import configparser
 import csv
 import logging
 import re
-import shutil
 import socket
 import sys
 import threading
@@ -1342,12 +1341,6 @@ class DailyCsvLogger:
 
         return value
 
-    def _backup_file(self, path: Path):
-        if path.exists():
-            backup_path = path.with_name(f"{path.name}.backup-{self._timestamp_string()}")
-            shutil.copy2(path, backup_path)
-            SCRIPT_LOGGER.info("Backup created: %s", backup_path)
-
     def _classify_scan(self, barcode: str) -> str:
         """
         SUCCESS only if the decoded value is exactly 34 numeric digits.
@@ -1401,7 +1394,6 @@ class DailyCsvLogger:
         if current_header == expected_header:
             return
 
-        self._backup_file(csv_path)
         temp_path = self._migration_temp_path(csv_path)
 
         try:
@@ -1527,7 +1519,6 @@ class DailyCsvLogger:
         if current_header == expected_header:
             return
 
-        self._backup_file(self.totals_path)
         temp_path = self._migration_temp_path(self.totals_path)
 
         try:
@@ -1604,7 +1595,6 @@ class DailyCsvLogger:
         if current_header == expected_header:
             return
 
-        self._backup_file(self.failed_scans_path)
         temp_path = self._migration_temp_path(self.failed_scans_path)
 
         try:
