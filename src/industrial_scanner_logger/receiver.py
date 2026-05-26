@@ -70,6 +70,7 @@ DEFAULT_MANDATORY_SCANNER_IDS = ""
 DEFAULT_CURRENT_SCAN_RATE_STALE_SECONDS = 60
 DEFAULT_HEALTH_PAGE_REFRESH_SECONDS = 3
 DEFAULT_TV_DASHBOARD_REFRESH_SECONDS = 1
+DEFAULT_TV_DUPLICATE_ALERT_SECONDS = 60
 LOG_BARCODE_PREVIEW_CHARS = 120
 MIN_MAX_BARCODE_CHARS = 64
 TRACKING_REPAIR_MIN_OVERLAP_CHARS = 4
@@ -141,6 +142,7 @@ CONFIG_DEFAULTS = {
         ),
         "health_page_refresh_seconds": str(DEFAULT_HEALTH_PAGE_REFRESH_SECONDS),
         "tv_dashboard_refresh_seconds": str(DEFAULT_TV_DASHBOARD_REFRESH_SECONDS),
+        "tv_duplicate_alert_seconds": str(DEFAULT_TV_DUPLICATE_ALERT_SECONDS),
     },
     "api": {
         "enabled": "true",
@@ -476,6 +478,10 @@ def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
             tv_dashboard_refresh_seconds=validate_positive_int(
                 config.getint("dashboard", "tv_dashboard_refresh_seconds"),
                 "dashboard.tv_dashboard_refresh_seconds",
+            ),
+            tv_duplicate_alert_seconds=validate_positive_int(
+                config.getint("dashboard", "tv_duplicate_alert_seconds"),
+                "dashboard.tv_duplicate_alert_seconds",
             ),
             api_enabled=config.getboolean("api", "enabled"),
             api_host=config.get("api", "host"),

@@ -242,6 +242,7 @@ mandatory_scanner_ids = 20, 21
 current_scan_rate_stale_seconds = 120
 health_page_refresh_seconds = 4
 tv_dashboard_refresh_seconds = 2
+tv_duplicate_alert_seconds = 75
 
 [api]
 enabled = true
@@ -291,6 +292,7 @@ log_level = warning
             self.assertEqual(config.current_scan_rate_stale_seconds, 120)
             self.assertEqual(config.health_page_refresh_seconds, 4)
             self.assertEqual(config.tv_dashboard_refresh_seconds, 2)
+            self.assertEqual(config.tv_duplicate_alert_seconds, 75)
             self.assertEqual(config.api_host, "0.0.0.0")
             self.assertEqual(config.api_port, 8080)
             self.assertEqual(config.api_root_path, "/api")

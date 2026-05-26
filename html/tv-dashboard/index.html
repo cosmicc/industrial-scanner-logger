@@ -29,19 +29,19 @@
       <div class="tv-day-title">Today</div>
       <div id="tv-today-date" class="tv-date">Loading...</div>
       <div class="tv-stat-row">
-        <div>
+        <div class="tv-stat-card">
           <div class="tv-label">Total</div>
           <div id="tv-today-total" class="tv-value">0</div>
         </div>
-        <div>
+        <div class="tv-stat-card">
           <div class="tv-label">Successful</div>
           <div id="tv-today-success" class="tv-value success">0</div>
         </div>
-        <div>
+        <div class="tv-stat-card">
           <div class="tv-label">Duplicates</div>
           <div id="tv-today-duplicates" class="tv-value duplicate">0</div>
         </div>
-        <div>
+        <div class="tv-stat-card">
           <div class="tv-label">Failed</div>
           <div id="tv-today-failed" class="tv-value failed">0</div>
         </div>
@@ -67,12 +67,35 @@
     </footer>
   </main>
 
+  <div id="tv-duplicate-alert" class="tv-duplicate-alert" role="alert" aria-live="assertive" hidden>
+    <div class="tv-duplicate-alert-content">
+      <div class="tv-duplicate-kicker">Duplicate Package</div>
+      <div class="tv-duplicate-action">Remove This Package</div>
+      <div class="tv-duplicate-details">
+        <div>
+          <div class="tv-duplicate-label">Last 10 Barcode Digits</div>
+          <div id="tv-duplicate-barcode" class="tv-duplicate-value">----------</div>
+        </div>
+        <div>
+          <div class="tv-duplicate-label">Scanner</div>
+          <div id="tv-duplicate-scanner" class="tv-duplicate-value">Unknown</div>
+        </div>
+      </div>
+      <div id="tv-duplicate-time" class="tv-duplicate-time">Detected now</div>
+    </div>
+  </div>
+
   <script>
     const API_URL = "/api/v1/dashboard/health";
     const DEFAULT_TV_REFRESH_SECONDS = 1;
+    const DEFAULT_TV_DUPLICATE_ALERT_SECONDS = 60;
     let tvRefreshTimer = null;
     let tvRefreshIntervalMs = null;
     let lastGeneratedAt = null;
+    let activeDuplicateAlertId = null;
+    let duplicateAlertTimer = null;
+    let duplicateAlarmInterval = null;
+    let duplicateAudioContext = null;
 
     async function loadDashboard() {
       try {
@@ -122,6 +145,10 @@
       setText("tv-today-duplicates", formatNumber(today.duplicate_scans));
       setText("tv-today-failed", formatNumber(today.failed_scans));
 
+      renderDuplicateAlert(
+        data.duplicate_alert,
+        data.tv_duplicate_alert_seconds || DEFAULT_TV_DUPLICATE_ALERT_SECONDS
+      );
       renderLastReceived(data.last_received);
       renderConnectedScanners(data);
     }
@@ -206,6 +233,132 @@
       }
 
       return "";
+    }
+
+    function renderDuplicateAlert(alert, configuredSeconds) {
+      if (!alert) {
+        hideDuplicateAlert();
+        return;
+      }
+
+      const alertId = String(
+        alert.id ?? `${alert.scan_date || ""}-${alert.scan_time || ""}-${alert.barcode || ""}`
+      );
+      const remainingSeconds = Number(
+        alert.alert_remaining_seconds || configuredSeconds || DEFAULT_TV_DUPLICATE_ALERT_SECONDS
+      );
+      const displaySeconds = Number.isFinite(remainingSeconds) && remainingSeconds > 0
+        ? remainingSeconds
+        : DEFAULT_TV_DUPLICATE_ALERT_SECONDS;
+      const overlay = document.getElementById("tv-duplicate-alert");
+      const barcodeDigits = alert.barcode_last_10 || lastDigits(
+        alert.barcode || alert.tracking_number || "",
+        10
+      );
+      const scannerName = scannerDisplayName(alert) || "Unknown Scanner";
+
+      setText("tv-duplicate-barcode", barcodeDigits || "Unknown");
+      setText("tv-duplicate-scanner", scannerName);
+      setText(
+        "tv-duplicate-time",
+        `Detected ${formatScanDateTime(alert.scan_date, alert.scan_time) || "now"}`
+      );
+
+      overlay.hidden = false;
+      document.body.classList.add("tv-alert-active");
+
+      if (activeDuplicateAlertId !== alertId) {
+        activeDuplicateAlertId = alertId;
+      }
+
+      startDuplicateAlarm();
+
+      if (duplicateAlertTimer) {
+        window.clearTimeout(duplicateAlertTimer);
+      }
+
+      duplicateAlertTimer = window.setTimeout(
+        hideDuplicateAlert,
+        Math.max(1000, displaySeconds * 1000)
+      );
+    }
+
+    function hideDuplicateAlert() {
+      const overlay = document.getElementById("tv-duplicate-alert");
+
+      if (overlay) {
+        overlay.hidden = true;
+      }
+
+      document.body.classList.remove("tv-alert-active");
+      activeDuplicateAlertId = null;
+
+      if (duplicateAlertTimer) {
+        window.clearTimeout(duplicateAlertTimer);
+        duplicateAlertTimer = null;
+      }
+
+      stopDuplicateAlarm();
+    }
+
+    function startDuplicateAlarm() {
+      if (duplicateAlarmInterval) {
+        return;
+      }
+
+      playDuplicateBeep();
+      duplicateAlarmInterval = window.setInterval(playDuplicateBeep, 900);
+    }
+
+    function stopDuplicateAlarm() {
+      if (duplicateAlarmInterval) {
+        window.clearInterval(duplicateAlarmInterval);
+        duplicateAlarmInterval = null;
+      }
+    }
+
+    function playDuplicateBeep() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+
+      if (!AudioContextClass) {
+        return;
+      }
+
+      try {
+        if (!duplicateAudioContext) {
+          duplicateAudioContext = new AudioContextClass();
+        }
+
+        if (duplicateAudioContext.state === "suspended") {
+          duplicateAudioContext.resume().catch(() => {});
+        }
+
+        const now = duplicateAudioContext.currentTime;
+        const oscillator = duplicateAudioContext.createOscillator();
+        const gain = duplicateAudioContext.createGain();
+
+        oscillator.type = "square";
+        oscillator.frequency.setValueAtTime(740, now);
+        oscillator.frequency.setValueAtTime(1040, now + 0.22);
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.7, now + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.62);
+
+        oscillator.connect(gain);
+        gain.connect(duplicateAudioContext.destination);
+        oscillator.start(now);
+        oscillator.stop(now + 0.65);
+        oscillator.onended = () => {
+          oscillator.disconnect();
+          gain.disconnect();
+        };
+      } catch (_error) {
+        stopDuplicateAlarm();
+      }
+    }
+
+    function lastDigits(value, digitCount) {
+      return String(value || "").replace(/\D/g, "").slice(-digitCount);
     }
 
     function formatNumber(value) {

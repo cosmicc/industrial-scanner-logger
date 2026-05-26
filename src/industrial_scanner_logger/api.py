@@ -17,6 +17,7 @@ from psycopg.rows import dict_row
 from industrial_scanner_logger._version import __version__
 from industrial_scanner_logger.receiver import (
     DEFAULT_CONFIG_FILE,
+    DEFAULT_TV_DUPLICATE_ALERT_SECONDS,
     load_receiver_config,
     validate_positive_int,
 )
@@ -194,6 +195,12 @@ VIEW_DEFINITIONS = {
 def build_dashboard_health(config):
     current_day = date.today()
     previous_day = current_day - timedelta(days=1)
+    generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    tv_duplicate_alert_seconds = getattr(
+        config,
+        "tv_duplicate_alert_seconds",
+        DEFAULT_TV_DUPLICATE_ALERT_SECONDS,
+    )
 
     services = {
         "scanner": systemd_service_status(SCANNER_SERVICE_UNIT),
@@ -214,6 +221,7 @@ def build_dashboard_health(config):
     recent_scans = []
     daily_totals = empty_daily_totals(current_day, previous_day)
     current_scan_rate = empty_current_scan_rate()
+    duplicate_alert = None
 
     try:
         db = connect_db(config)
@@ -286,6 +294,11 @@ def build_dashboard_health(config):
                 current_day,
             )
             current_scan_rate = fetch_current_scan_rate(db)
+            duplicate_alert = fetch_active_duplicate_alert(
+                db,
+                config,
+                tv_duplicate_alert_seconds,
+            )
 
             database = {
                 "active": True,
@@ -312,7 +325,7 @@ def build_dashboard_health(config):
     return {
         "status": "ok" if overall_ok else "degraded",
         "version": __version__,
-        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "generated_at": generated_at,
         "current_scan_rate_stale_seconds": getattr(
             config,
             "current_scan_rate_stale_seconds",
@@ -328,6 +341,7 @@ def build_dashboard_health(config):
             "tv_dashboard_refresh_seconds",
             1,
         ),
+        "tv_duplicate_alert_seconds": tv_duplicate_alert_seconds,
         "services": services,
         "database": database,
         "connected_scanner_ids": connected_scanner_ids,
@@ -338,6 +352,7 @@ def build_dashboard_health(config):
         "recent_scans": recent_scans,
         "daily_totals": daily_totals,
         "current_scan_rate": current_scan_rate,
+        "duplicate_alert": duplicate_alert,
         "script_log": script_log,
     }
 
@@ -603,6 +618,62 @@ def fetch_current_scan_rate(db) -> dict:
         int(row.get("scan_count") or 0),
         int(row.get("hour_scan_count") or 0),
     )
+
+
+def fetch_active_duplicate_alert(db, config, alert_seconds: int) -> Optional[dict]:
+    row = fetch_one(
+        db,
+        """
+        SELECT
+            id,
+            scan_date,
+            scan_time,
+            scanner_id,
+            scanner_name,
+            scanner_role,
+            last_scanner_id,
+            is_duplicate,
+            is_cross_scanner_duplicate,
+            is_repaired,
+            tracking_number,
+            barcode,
+            barcode_length,
+            is_success,
+            failure_reason,
+            EXTRACT(EPOCH FROM (localtimestamp - (scan_date + scan_time)))
+                AS alert_age_seconds
+        FROM scanner_logger.scan_events
+        WHERE is_success
+          AND is_duplicate
+          AND is_cross_scanner_duplicate = false
+          AND (scan_date + scan_time) >= (localtimestamp - %s)
+        ORDER BY scan_date DESC, scan_time DESC, id DESC
+        LIMIT 1
+        """,
+        [timedelta(seconds=alert_seconds)],
+    )
+
+    if not row:
+        return None
+
+    alert = scan_row_with_display_name(config, row)
+    alert_age_seconds = float(alert.get("alert_age_seconds") or 0)
+    alert["alert_seconds"] = alert_seconds
+    alert["alert_age_seconds"] = round(alert_age_seconds, 3)
+    alert["alert_remaining_seconds"] = max(
+        0,
+        round(alert_seconds - alert_age_seconds, 3),
+    )
+    alert["barcode_last_10"] = last_digits(
+        alert.get("barcode") or alert.get("tracking_number") or "",
+        10,
+    )
+    return alert
+
+
+def last_digits(value, digit_count: int) -> str:
+    digits = "".join(character for character in str(value or "") if character.isdigit())
+    return digits[-digit_count:]
 
 
 def daily_csv_log_path(config, scan_date: date) -> Path:

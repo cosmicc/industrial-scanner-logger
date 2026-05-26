@@ -378,6 +378,66 @@ class ApiQueryTests(unittest.TestCase):
             },
         )
 
+    def test_active_duplicate_alert_returns_latest_non_cross_scanner_duplicate(self):
+        from types import SimpleNamespace
+
+        from industrial_scanner_logger.api import fetch_active_duplicate_alert
+
+        class FakeCursor:
+            def __init__(self):
+                self.params = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return None
+
+            def execute(self, _query, params):
+                self.params = params
+
+            def fetchone(self):
+                return {
+                    "id": 42,
+                    "scan_date": date(2026, 5, 18),
+                    "scan_time": "08:15:30",
+                    "scanner_id": 20,
+                    "scanner_name": "",
+                    "scanner_role": "standard",
+                    "last_scanner_id": 21,
+                    "is_duplicate": True,
+                    "is_cross_scanner_duplicate": False,
+                    "is_repaired": False,
+                    "tracking_number": "9612345678901234567890123456789012",
+                    "barcode": "9612345678901234567890123456789012",
+                    "barcode_length": 34,
+                    "is_success": True,
+                    "failure_reason": None,
+                    "alert_age_seconds": 12.25,
+                }
+
+        class FakeDb:
+            def __init__(self):
+                self.cursor_instance = FakeCursor()
+
+            def cursor(self):
+                return self.cursor_instance
+
+        db = FakeDb()
+        alert = fetch_active_duplicate_alert(
+            db,
+            SimpleNamespace(scanner_names={"20": "Lane 1 Scanner"}),
+            60,
+        )
+
+        self.assertEqual(db.cursor_instance.params, [timedelta(seconds=60)])
+        self.assertEqual(alert["id"], 42)
+        self.assertEqual(alert["display_name"], "Lane 1 Scanner")
+        self.assertEqual(alert["barcode_last_10"], "1234567890123456789012"[-10:])
+        self.assertEqual(alert["alert_seconds"], 60)
+        self.assertEqual(alert["alert_age_seconds"], 12.25)
+        self.assertEqual(alert["alert_remaining_seconds"], 47.75)
+
     def test_dashboard_mandatory_scanners_reports_missing_required_ids(self):
         from types import SimpleNamespace
 

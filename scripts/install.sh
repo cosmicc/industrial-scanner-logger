@@ -36,6 +36,7 @@ MANDATORY_SCANNER_IDS="${MANDATORY_SCANNER_IDS:-}"
 CURRENT_SCAN_RATE_STALE_SECONDS="${CURRENT_SCAN_RATE_STALE_SECONDS:-60}"
 HEALTH_PAGE_REFRESH_SECONDS="${HEALTH_PAGE_REFRESH_SECONDS:-3}"
 TV_DASHBOARD_REFRESH_SECONDS="${TV_DASHBOARD_REFRESH_SECONDS:-1}"
+TV_DUPLICATE_ALERT_SECONDS="${TV_DUPLICATE_ALERT_SECONDS:-60}"
 API_ENABLED="${API_ENABLED:-1}"
 API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-8000}"
@@ -94,6 +95,7 @@ Options:
   --current-scan-rate-stale-seconds SEC seconds before health scan-rate indicator turns red [${CURRENT_SCAN_RATE_STALE_SECONDS}]
   --health-page-refresh-seconds SEC health page automatic refresh interval [${HEALTH_PAGE_REFRESH_SECONDS}]
   --tv-dashboard-refresh-seconds SEC TV dashboard automatic refresh interval [${TV_DASHBOARD_REFRESH_SECONDS}]
+  --tv-duplicate-alert-seconds SEC TV duplicate alert display duration [${TV_DUPLICATE_ALERT_SECONDS}]
   --enable-api             enable and start the REST API service [default]
   --disable-api            install but disable the REST API service
   --api-host HOST          REST API bind address [${API_HOST}]
@@ -449,6 +451,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --tv-dashboard-refresh-seconds)
             TV_DASHBOARD_REFRESH_SECONDS="$2"
+            shift 2
+            ;;
+        --tv-duplicate-alert-seconds)
+            TV_DUPLICATE_ALERT_SECONDS="$2"
             shift 2
             ;;
         --enable-api)
@@ -831,6 +837,10 @@ health_page_refresh_seconds = ${HEALTH_PAGE_REFRESH_SECONDS}
 # Seconds between automatic TV dashboard refreshes.
 # Default: 1. Range: greater than 0. Example: 5 refreshes the TV dashboard every 5 seconds.
 tv_dashboard_refresh_seconds = ${TV_DASHBOARD_REFRESH_SECONDS}
+
+# Seconds the TV dashboard full-screen duplicate warning stays visible after a non-cross-scanner duplicate.
+# Default: 60. Range: greater than 0. Example: 30 clears the duplicate alert after 30 seconds.
+tv_duplicate_alert_seconds = ${TV_DUPLICATE_ALERT_SECONDS}
 
 [api]
 # Enables the REST API systemd service installed alongside the receiver.
