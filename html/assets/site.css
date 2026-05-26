@@ -153,12 +153,14 @@ h1 {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 32px;
-  padding: 7px 14px;
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 2px 8px;
   border: 1px solid transparent;
-  border-radius: 999px;
-  font-weight: 800;
-  line-height: 1;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.15;
   white-space: nowrap;
 }
 
@@ -201,7 +203,7 @@ table {
 
 th,
 td {
-  padding: 10px;
+  padding: 7px 10px;
   border-bottom: 1px solid var(--border);
   text-align: left;
   font-size: 14px;
@@ -382,12 +384,14 @@ tr:last-child td {
   display: grid;
   align-content: start;
   gap: 12px;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(31, 41, 55, 0.72), rgba(17, 24, 39, 0.98));
+  border: 1px solid rgba(148, 163, 184, 0.26);
   border-radius: 8px;
   color: var(--text);
   padding: 18px;
   text-decoration: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .home-link-card:hover,
@@ -395,12 +399,6 @@ tr:last-child td {
   border-color: rgba(34, 197, 94, 0.78);
   outline: none;
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.16);
-}
-
-.home-link-card.primary {
-  background:
-    linear-gradient(180deg, rgba(5, 46, 22, 0.84), rgba(17, 24, 39, 0.96));
-  border-color: rgba(34, 197, 94, 0.72);
 }
 
 .home-link-title {
@@ -412,10 +410,6 @@ tr:last-child td {
   color: var(--muted);
   font-size: 14px;
   line-height: 1.45;
-}
-
-.home-link-card.primary .home-link-detail {
-  color: #d1fae5;
 }
 
 .home-notice {
