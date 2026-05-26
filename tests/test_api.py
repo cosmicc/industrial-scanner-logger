@@ -438,6 +438,58 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(alert["alert_age_seconds"], 12.25)
         self.assertEqual(alert["alert_remaining_seconds"], 47.75)
 
+    def test_dashboard_health_skips_duplicate_alert_when_disabled(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from industrial_scanner_logger import api
+
+        class FakeDb:
+            def close(self):
+                return None
+
+        config = SimpleNamespace(
+            port=55256,
+            mandatory_scanner_ids=[],
+            scanner_names={},
+            last_scanner_id="",
+            current_scan_rate_stale_seconds=60,
+            health_page_refresh_seconds=3,
+            tv_dashboard_refresh_seconds=1,
+            tv_duplicate_alert_enabled=False,
+            tv_duplicate_alert_seconds=60,
+        )
+
+        with (
+            patch.object(
+                api,
+                "systemd_service_status",
+                return_value={"active": True, "state": "active"},
+            ),
+            patch.object(api, "connected_scanner_ids_from_ss", return_value=[]),
+            patch.object(api, "read_last_log_lines", return_value={"lines": []}),
+            patch.object(api, "connect_db", return_value=FakeDb()),
+            patch.object(api, "fetch_one", return_value=None),
+            patch.object(api, "fetch_all", return_value=[]),
+            patch.object(
+                api,
+                "fetch_dashboard_daily_totals",
+                return_value={
+                    "today": {},
+                    "yesterday": {},
+                    "today_by_scanner": [],
+                },
+            ),
+            patch.object(api, "fetch_dashboard_today_scanner_totals", return_value=[]),
+            patch.object(api, "fetch_current_scan_rate", return_value={}),
+            patch.object(api, "fetch_active_duplicate_alert") as duplicate_alert,
+        ):
+            payload = api.build_dashboard_health(config)
+
+        duplicate_alert.assert_not_called()
+        self.assertFalse(payload["tv_duplicate_alert_enabled"])
+        self.assertIsNone(payload["duplicate_alert"])
+
     def test_dashboard_mandatory_scanners_reports_missing_required_ids(self):
         from types import SimpleNamespace
 

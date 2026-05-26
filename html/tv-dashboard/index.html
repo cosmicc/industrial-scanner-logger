@@ -146,6 +146,7 @@
       setText("tv-today-failed", formatNumber(today.failed_scans));
 
       renderDuplicateAlert(
+        data.tv_duplicate_alert_enabled !== false,
         data.duplicate_alert,
         data.tv_duplicate_alert_seconds || DEFAULT_TV_DUPLICATE_ALERT_SECONDS
       );
@@ -235,8 +236,8 @@
       return "";
     }
 
-    function renderDuplicateAlert(alert, configuredSeconds) {
-      if (!alert) {
+    function renderDuplicateAlert(enabled, alert, configuredSeconds) {
+      if (!enabled || !alert) {
         hideDuplicateAlert();
         return;
       }

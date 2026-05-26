@@ -36,6 +36,7 @@ MANDATORY_SCANNER_IDS="${MANDATORY_SCANNER_IDS:-}"
 CURRENT_SCAN_RATE_STALE_SECONDS="${CURRENT_SCAN_RATE_STALE_SECONDS:-60}"
 HEALTH_PAGE_REFRESH_SECONDS="${HEALTH_PAGE_REFRESH_SECONDS:-3}"
 TV_DASHBOARD_REFRESH_SECONDS="${TV_DASHBOARD_REFRESH_SECONDS:-1}"
+TV_DUPLICATE_ALERT_ENABLED="${TV_DUPLICATE_ALERT_ENABLED:-1}"
 TV_DUPLICATE_ALERT_SECONDS="${TV_DUPLICATE_ALERT_SECONDS:-60}"
 API_ENABLED="${API_ENABLED:-1}"
 API_HOST="${API_HOST:-127.0.0.1}"
@@ -95,6 +96,8 @@ Options:
   --current-scan-rate-stale-seconds SEC seconds before health scan-rate indicator turns red [${CURRENT_SCAN_RATE_STALE_SECONDS}]
   --health-page-refresh-seconds SEC health page automatic refresh interval [${HEALTH_PAGE_REFRESH_SECONDS}]
   --tv-dashboard-refresh-seconds SEC TV dashboard automatic refresh interval [${TV_DASHBOARD_REFRESH_SECONDS}]
+  --enable-tv-duplicate-alert enable TV duplicate flashing screen and alarm [default]
+  --disable-tv-duplicate-alert disable TV duplicate flashing screen and alarm
   --tv-duplicate-alert-seconds SEC TV duplicate alert display duration [${TV_DUPLICATE_ALERT_SECONDS}]
   --enable-api             enable and start the REST API service [default]
   --disable-api            install but disable the REST API service
@@ -453,6 +456,14 @@ while [[ $# -gt 0 ]]; do
             TV_DASHBOARD_REFRESH_SECONDS="$2"
             shift 2
             ;;
+        --enable-tv-duplicate-alert)
+            TV_DUPLICATE_ALERT_ENABLED=1
+            shift
+            ;;
+        --disable-tv-duplicate-alert)
+            TV_DUPLICATE_ALERT_ENABLED=0
+            shift
+            ;;
         --tv-duplicate-alert-seconds)
             TV_DUPLICATE_ALERT_SECONDS="$2"
             shift 2
@@ -697,6 +708,11 @@ if [[ "${API_ENABLED}" -eq 1 ]]; then
     API_ENABLED_TEXT="true"
 fi
 
+TV_DUPLICATE_ALERT_ENABLED_TEXT="false"
+if [[ "${TV_DUPLICATE_ALERT_ENABLED}" -eq 1 ]]; then
+    TV_DUPLICATE_ALERT_ENABLED_TEXT="true"
+fi
+
 TRACKING_REPAIR_ENABLED_TEXT="false"
 if [[ "${TRACKING_REPAIR_ENABLED}" -eq 1 ]]; then
     TRACKING_REPAIR_ENABLED_TEXT="true"
@@ -837,6 +853,10 @@ health_page_refresh_seconds = ${HEALTH_PAGE_REFRESH_SECONDS}
 # Seconds between automatic TV dashboard refreshes.
 # Default: 1. Range: greater than 0. Example: 5 refreshes the TV dashboard every 5 seconds.
 tv_dashboard_refresh_seconds = ${TV_DASHBOARD_REFRESH_SECONDS}
+
+# Enables the TV dashboard full-screen duplicate warning and alarm for non-cross-scanner duplicates.
+# Default: true. Set false to show duplicate counts without interrupting the TV dashboard.
+tv_duplicate_alert_enabled = ${TV_DUPLICATE_ALERT_ENABLED_TEXT}
 
 # Seconds the TV dashboard full-screen duplicate warning stays visible after a non-cross-scanner duplicate.
 # Default: 60. Range: greater than 0. Example: 30 clears the duplicate alert after 30 seconds.

@@ -196,6 +196,11 @@ def build_dashboard_health(config):
     current_day = date.today()
     previous_day = current_day - timedelta(days=1)
     generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    tv_duplicate_alert_enabled = getattr(
+        config,
+        "tv_duplicate_alert_enabled",
+        True,
+    )
     tv_duplicate_alert_seconds = getattr(
         config,
         "tv_duplicate_alert_seconds",
@@ -294,11 +299,12 @@ def build_dashboard_health(config):
                 current_day,
             )
             current_scan_rate = fetch_current_scan_rate(db)
-            duplicate_alert = fetch_active_duplicate_alert(
-                db,
-                config,
-                tv_duplicate_alert_seconds,
-            )
+            if tv_duplicate_alert_enabled:
+                duplicate_alert = fetch_active_duplicate_alert(
+                    db,
+                    config,
+                    tv_duplicate_alert_seconds,
+                )
 
             database = {
                 "active": True,
@@ -341,6 +347,7 @@ def build_dashboard_health(config):
             "tv_dashboard_refresh_seconds",
             1,
         ),
+        "tv_duplicate_alert_enabled": tv_duplicate_alert_enabled,
         "tv_duplicate_alert_seconds": tv_duplicate_alert_seconds,
         "services": services,
         "database": database,
