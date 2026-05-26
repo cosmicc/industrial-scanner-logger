@@ -230,9 +230,10 @@
         const badge = document.createElement("span");
         const missing = scanner.connected === false || missingScannerIds.has(scannerIdText);
         const scannerLabel = scanner.display_name || scanner.scanner_name || `Scanner ${scannerIdText}`;
+        const connected = !missing;
 
-        badge.className = `badge${missing ? " missing" : ""}`;
-        badge.textContent = `${scannerLabel}${missing ? " missing" : ""}`;
+        badge.className = `result-pill result-pill-${connected ? "connected" : "disconnected"}`;
+        badge.textContent = `${scannerLabel} ${connected ? "Connected" : "Disconnected"}`;
         container.appendChild(badge);
       }
     }
@@ -270,10 +271,10 @@
 
       for (const row of rows) {
         const tr = document.createElement("tr");
-        const statusClass = row.is_success ? "success" : "failed";
-        const statusText = row.is_success ? "SUCCESS" : "FAILED";
-        const duplicateText = row.is_duplicate ? "Yes" : "No";
-        const repairedText = row.is_repaired ? "Yes" : "No";
+        const statusCell = resultPill(
+          row.is_success ? "Success" : "Failed",
+          row.is_success ? "success" : "failed"
+        );
         tr.className = scanAgeClass(row.scan_date, row.scan_time);
 
         tr.innerHTML = `
@@ -281,9 +282,9 @@
           <td>${formatTime12(row.scan_date, row.scan_time)}</td>
           <td>${escapeHtml(scannerDisplayName(row))}</td>
           <td>${escapeHtml(row.scanner_role ?? "")}</td>
-          <td class="${statusClass}">${statusText}</td>
-          <td>${duplicateText}</td>
-          <td>${repairedText}</td>
+          <td>${statusCell}</td>
+          <td>${yesNoPill(row.is_duplicate)}</td>
+          <td>${yesNoPill(row.is_repaired)}</td>
           <td>${escapeHtml(row.tracking_number ?? "")}</td>
           <td>${escapeHtml(row.barcode ?? "")}</td>
           <td>${escapeHtml(row.failure_reason ?? "")}</td>
@@ -559,6 +560,14 @@
 
     function formatElapsedPart(value, label) {
       return `${value.toLocaleString()} ${label}${value === 1 ? "" : "s"}`;
+    }
+
+    function yesNoPill(value) {
+      return resultPill(value ? "Yes" : "No", value ? "warning" : "success");
+    }
+
+    function resultPill(label, tone) {
+      return `<span class="result-pill result-pill-${tone}">${escapeHtml(label)}</span>`;
     }
 
     function escapeHtml(value) {

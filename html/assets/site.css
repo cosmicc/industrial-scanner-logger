@@ -149,6 +149,45 @@ h1 {
   color: #fde68a;
 }
 
+.result-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.result-pill-success,
+.result-pill-connected {
+  background: rgba(20, 83, 45, 0.72);
+  border-color: rgba(34, 197, 94, 0.75);
+  color: #bbf7d0;
+}
+
+.result-pill-failed,
+.result-pill-disconnected {
+  background: rgba(69, 10, 10, 0.72);
+  border-color: rgba(239, 68, 68, 0.75);
+  color: #fecaca;
+}
+
+.result-pill-warning {
+  background: rgba(69, 26, 3, 0.72);
+  border-color: rgba(245, 158, 11, 0.78);
+  color: #fde68a;
+}
+
+.result-pill-neutral {
+  background: rgba(31, 41, 55, 0.72);
+  border-color: rgba(148, 163, 184, 0.45);
+  color: #e5e7eb;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
