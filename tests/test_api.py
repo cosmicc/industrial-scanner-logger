@@ -24,6 +24,7 @@ class ApiQueryTests(unittest.TestCase):
         self.assertIn("/v1/logs/daily-csv", route_paths)
         self.assertIn("/v1/logs/daily-csv/{scan_date}", route_paths)
         self.assertIn("/v1/scans", route_paths)
+        self.assertIn("/v1/scans/count", route_paths)
         self.assertIn("/v1/scanners", route_paths)
         self.assertNotIn("/api/v1/health", route_paths)
 
@@ -102,6 +103,37 @@ class ApiQueryTests(unittest.TestCase):
                 True,
                 25,
                 50,
+            ],
+        )
+
+    def test_build_scan_events_count_query_collects_filters_without_pagination(self):
+        from industrial_scanner_logger.api import build_scan_events_count_query
+
+        _query, params = build_scan_events_count_query(
+            start_date=date(2026, 5, 17),
+            end_date=date(2026, 5, 18),
+            scanner_id=20,
+            barcode="1234567890",
+            is_success=True,
+            is_duplicate=True,
+            is_repaired=False,
+        )
+
+        self.assertEqual(
+            params,
+            [
+                date(2026, 5, 17),
+                date(2026, 5, 18),
+                20,
+                "1234567890",
+                10,
+                "1234567890",
+                "1234567890",
+                10,
+                "1234567890",
+                True,
+                True,
+                False,
             ],
         )
 

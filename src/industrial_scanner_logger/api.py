@@ -1050,6 +1050,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             "endpoints": [
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/health"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans"),
+                external_path(request_root_path, f"{API_VERSION_PREFIX}/scans/count"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans/{{scan_id}}"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scanners"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/views"),
@@ -1105,6 +1106,29 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             scan_row_with_display_name(config, row)
             for row in fetch_all(db, query, params)
         ]
+
+    @app.get(f"{API_VERSION_PREFIX}/scans/count")
+    def count_scans(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        scanner_id: Optional[int] = Query(default=None, ge=0, le=255),
+        barcode: Optional[str] = None,
+        is_success: Optional[bool] = None,
+        is_duplicate: Optional[bool] = None,
+        is_repaired: Optional[bool] = None,
+        db=Depends(get_db),
+    ):
+        query, params = build_scan_events_count_query(
+            start_date=start_date,
+            end_date=end_date,
+            scanner_id=scanner_id,
+            barcode=barcode,
+            is_success=is_success,
+            is_duplicate=is_duplicate,
+            is_repaired=is_repaired,
+        )
+        row = fetch_one(db, query, params)
+        return {"total_results": int(row.get("total_results") or 0)}
 
     @app.get(f"{API_VERSION_PREFIX}/scans/{{scan_id}}")
     def get_scan(scan_id: int, db=Depends(get_db), config=Depends(get_config)):
@@ -1232,7 +1256,7 @@ def column_list(columns):
     return sql.SQL(", ").join(sql.Identifier(column) for column in columns)
 
 
-def build_scan_events_query(
+def scan_events_filter_conditions(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     scanner_id: Optional[int] = None,
@@ -1240,8 +1264,6 @@ def build_scan_events_query(
     is_success: Optional[bool] = None,
     is_duplicate: Optional[bool] = None,
     is_repaired: Optional[bool] = None,
-    limit: int = DEFAULT_LIMIT,
-    offset: int = 0,
 ):
     conditions = []
     params = []
@@ -1262,6 +1284,29 @@ def build_scan_events_query(
 
     add_boolean_filter(conditions, params, "is_duplicate", is_duplicate)
     add_boolean_filter(conditions, params, "is_repaired", is_repaired)
+    return conditions, params
+
+
+def build_scan_events_query(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    scanner_id: Optional[int] = None,
+    barcode: Optional[str] = None,
+    is_success: Optional[bool] = None,
+    is_duplicate: Optional[bool] = None,
+    is_repaired: Optional[bool] = None,
+    limit: int = DEFAULT_LIMIT,
+    offset: int = 0,
+):
+    conditions, params = scan_events_filter_conditions(
+        start_date=start_date,
+        end_date=end_date,
+        scanner_id=scanner_id,
+        barcode=barcode,
+        is_success=is_success,
+        is_duplicate=is_duplicate,
+        is_repaired=is_repaired,
+    )
 
     query = sql.SQL("SELECT {} FROM scanner_logger.scan_events{} {} LIMIT %s OFFSET %s").format(
         column_list(SCAN_EVENT_COLUMNS),
@@ -1269,6 +1314,30 @@ def build_scan_events_query(
         sql.SQL("ORDER BY scan_date DESC, scan_time DESC, id DESC"),
     )
     params.extend([limit, offset])
+    return query, params
+
+
+def build_scan_events_count_query(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    scanner_id: Optional[int] = None,
+    barcode: Optional[str] = None,
+    is_success: Optional[bool] = None,
+    is_duplicate: Optional[bool] = None,
+    is_repaired: Optional[bool] = None,
+):
+    conditions, params = scan_events_filter_conditions(
+        start_date=start_date,
+        end_date=end_date,
+        scanner_id=scanner_id,
+        barcode=barcode,
+        is_success=is_success,
+        is_duplicate=is_duplicate,
+        is_repaired=is_repaired,
+    )
+    query = sql.SQL("SELECT count(*) AS total_results FROM scanner_logger.scan_events{}").format(
+        where_clause(conditions)
+    )
     return query, params
 
 

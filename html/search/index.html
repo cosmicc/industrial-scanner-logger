@@ -121,6 +121,7 @@
 
   <script>
     const SEARCH_API_URL = "/api/v1/scans";
+    const SEARCH_COUNT_API_URL = "/api/v1/scans/count";
     const SCANNERS_API_URL = "/api/v1/scanners";
     const DEFAULT_PAGE_SIZE = 25;
     const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 200];
@@ -286,12 +287,19 @@
       lastSearchRequest = request;
       updateFedExTrackingLink(request.mode.requiresTracking ? trackingNumber : "");
       statusElement.textContent = `Loading page ${request.page} for ${searchDescription(request)} from the database...`;
-      summaryElement.textContent = `Loading ${formatCount(request.pageSize)} results for page ${request.page}...`;
+      summaryElement.textContent = `Counting matching rows and loading ${formatCount(request.pageSize)} results for page ${request.page}...`;
       renderEmptyResults("Loading results from the database...");
       updatePaginationControls(request, false, true);
 
       try {
-        const resultPage = await fetchResultPage(request, searchToken);
+        const totalResults = Number.isFinite(request.totalResults)
+          ? request.totalResults
+          : await fetchSearchCount(request, searchToken);
+        request.totalResults = totalResults;
+
+        const resultPage = totalResults > 0
+          ? await fetchResultPage(request, searchToken)
+          : { rows: [] };
 
         if (searchToken !== activeSearchToken) {
           return;
@@ -311,12 +319,55 @@
       }
     }
 
-    async function fetchResultPage(request, searchToken) {
+    async function fetchSearchCount(request, searchToken) {
       if (searchToken !== activeSearchToken) {
-        return { rows: [], hasNext: false };
+        return 0;
       }
 
-      const url = new URL(SEARCH_API_URL, window.location.origin);
+      const response = await fetch(buildSearchUrl(SEARCH_COUNT_API_URL, request), {
+        cache: "no-store"
+      });
+
+      if (!response.ok) {
+        throw new Error(`API returned HTTP ${response.status}`);
+      }
+
+      const payload = await response.json();
+      const totalResults = Number(payload?.total_results);
+
+      if (!Number.isFinite(totalResults) || totalResults < 0) {
+        throw new Error("API returned an unexpected count response.");
+      }
+
+      return totalResults;
+    }
+
+    async function fetchResultPage(request, searchToken) {
+      if (searchToken !== activeSearchToken) {
+        return { rows: [] };
+      }
+
+      const url = buildSearchUrl(SEARCH_API_URL, request);
+      url.searchParams.set("limit", String(request.pageSize));
+      url.searchParams.set("offset", String((request.page - 1) * request.pageSize));
+
+      const response = await fetch(url, { cache: "no-store" });
+
+      if (!response.ok) {
+        throw new Error(`API returned HTTP ${response.status}`);
+      }
+
+      const pageRows = await response.json();
+
+      if (!Array.isArray(pageRows)) {
+        throw new Error("API returned an unexpected response.");
+      }
+
+      return { rows: pageRows };
+    }
+
+    function buildSearchUrl(apiUrl, request) {
+      const url = new URL(apiUrl, window.location.origin);
       if (request.mode.requiresTracking) {
         url.searchParams.set("barcode", request.trackingNumber);
       }
@@ -332,25 +383,7 @@
       for (const [key, value] of Object.entries(request.mode.params)) {
         url.searchParams.set(key, value);
       }
-      url.searchParams.set("limit", String(request.pageSize + 1));
-      url.searchParams.set("offset", String((request.page - 1) * request.pageSize));
-
-      const response = await fetch(url, { cache: "no-store" });
-
-      if (!response.ok) {
-        throw new Error(`API returned HTTP ${response.status}`);
-      }
-
-      const pageRows = await response.json();
-
-      if (!Array.isArray(pageRows)) {
-        throw new Error("API returned an unexpected response.");
-      }
-
-      return {
-        rows: pageRows.slice(0, request.pageSize),
-        hasNext: pageRows.length > request.pageSize
-      };
+      return url;
     }
 
     function renderResults(request, resultPage) {
@@ -366,13 +399,12 @@
 
       const firstRowNumber = (request.page - 1) * request.pageSize + 1;
       const lastRowNumber = firstRowNumber + rows.length - 1;
-      const moreText = resultPage.hasNext ? " More results are available." : "";
       summaryElement.textContent =
-        `Showing ${formatCount(firstRowNumber)}-${formatCount(lastRowNumber)} for ${searchDescription(request)}.${moreText}`;
+        `Showing ${formatCount(firstRowNumber)}-${formatCount(lastRowNumber)} for ${searchDescription(request)}.`;
       updateFedExTrackingLink(
         request.mode.requiresTracking ? trackingValueForFedEx(rows[0]) : ""
       );
-      updatePaginationControls(request, resultPage.hasNext);
+      updatePaginationControls(request, hasNextPage(request));
       resultsBody.innerHTML = "";
 
       for (const row of rows) {
@@ -428,9 +460,18 @@
       paginationControls.hidden = false;
       previousPageButton.disabled = isLoading || request.page <= 1;
       nextPageButton.disabled = isLoading || !hasNext;
+      const totalPages = totalPageCount(request);
       pageStatusElement.textContent = isLoading
         ? `Loading page ${request.page}...`
-        : `Page ${request.page}`;
+        : `Page ${request.page} of ${formatCount(totalPages)} · Total results found: ${formatCount(request.totalResults)}`;
+    }
+
+    function totalPageCount(request) {
+      return Math.max(1, Math.ceil(Number(request.totalResults || 0) / request.pageSize));
+    }
+
+    function hasNextPage(request) {
+      return request.page < totalPageCount(request);
     }
 
     function updateSearchModeState() {

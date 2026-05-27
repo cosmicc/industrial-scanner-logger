@@ -375,6 +375,7 @@ GET /api/v1/dashboard/health
 GET /api/v1/logs/daily-csv
 GET /api/v1/logs/daily-csv/{scan_date}
 GET /api/v1/scans
+GET /api/v1/scans/count
 GET /api/v1/scans/{scan_id}
 GET /api/v1/scanners
 GET /api/v1/views
@@ -393,7 +394,8 @@ The `barcode` filter matches either the received barcode or repaired tracking
 number when both fields are available. Numeric 10-digit barcode filters also
 match the end of those tracking fields so users can search by the last 10
 digits. Full 34-digit tracking numbers are matched exactly. `/api/v1/scans`
-also supports `is_success`, `is_duplicate`, and `is_repaired`.
+and `/api/v1/scans/count` also support `is_success`, `is_duplicate`, and
+`is_repaired`.
 
 `/api/v1/logs/daily-csv` lists completed daily CSV files for download and
 excludes the current day because that file may still be open for writing.

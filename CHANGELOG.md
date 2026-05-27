@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 - Remove the extra duplicate category and keep one regular duplicate flag.
 - Silently drop same-scanner repeats until 3 different successful scans have been accepted on that scanner.
 - Page search results from PostgreSQL with selectable 10, 25, 50, 100, or 200 row pages.
+- Show total search result counts from PostgreSQL alongside the search page controls.
 
 ## 1.2.1 - 2026-05-24 (Pre-release)
 
