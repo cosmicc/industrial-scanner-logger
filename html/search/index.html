@@ -70,7 +70,24 @@
 
     <section class="card">
       <h2>Results</h2>
-      <div id="result-summary" class="detail">No search has been run.</div>
+      <div class="result-toolbar">
+        <div id="result-summary" class="detail">No search has been run.</div>
+        <label class="search-label result-page-size" for="page-size">
+          Rows per page
+          <select id="page-size" class="search-select" name="page-size">
+            <option value="10">10</option>
+            <option value="25" selected>25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+          </select>
+        </label>
+      </div>
+      <div id="pagination-controls" class="pagination" hidden>
+        <button id="previous-page" class="button" type="button">Previous</button>
+        <span id="page-status" class="pagination-label">Page 1</span>
+        <button id="next-page" class="button" type="button">Next</button>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -105,8 +122,10 @@
   <script>
     const SEARCH_API_URL = "/api/v1/scans";
     const SCANNERS_API_URL = "/api/v1/scanners";
-    const PAGE_SIZE = 1000;
+    const DEFAULT_PAGE_SIZE = 25;
+    const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 200];
     const FEDEX_TRACKING_DIGITS = 34;
+    const NO_RESULTS_MESSAGE = "No results were found based on your search";
     const SEARCH_MODES = {
       tracking: {
         label: "Tracking Number / Barcode",
@@ -148,10 +167,12 @@
       }
     };
     let activeSearchToken = 0;
+    let lastSearchRequest = null;
 
     const form = document.getElementById("search-form");
     const modeSelect = document.getElementById("search-mode");
     const scannerSelect = document.getElementById("scanner-filter");
+    const pageSizeSelect = document.getElementById("page-size");
     const input = document.getElementById("tracking-number");
     const startDateInput = document.getElementById("start-date");
     const endDateInput = document.getElementById("end-date");
@@ -160,20 +181,44 @@
     const fedexTrackingAnchor = document.getElementById("fedex-tracking-anchor");
     const summaryElement = document.getElementById("result-summary");
     const resultsBody = document.getElementById("search-results");
+    const paginationControls = document.getElementById("pagination-controls");
+    const previousPageButton = document.getElementById("previous-page");
+    const nextPageButton = document.getElementById("next-page");
+    const pageStatusElement = document.getElementById("page-status");
 
     form.addEventListener("submit", (event) => {
       event.preventDefault();
-      activeSearchToken += 1;
-      runSearch(currentSearchRequest(), activeSearchToken);
+      startSearch(1);
     });
 
     modeSelect.addEventListener("change", updateSearchModeState);
 
     scannerSelect.addEventListener("change", () => {
-      if (summaryElement.textContent !== "No search has been run.") {
-        activeSearchToken += 1;
-        runSearch(currentSearchRequest(), activeSearchToken);
+      if (lastSearchRequest) {
+        startSearch(1);
       }
+    });
+
+    pageSizeSelect.addEventListener("change", () => {
+      if (lastSearchRequest) {
+        startSearch(1);
+      }
+    });
+
+    previousPageButton.addEventListener("click", () => {
+      if (!lastSearchRequest || lastSearchRequest.page <= 1) {
+        return;
+      }
+
+      runPage(lastSearchRequest.page - 1);
+    });
+
+    nextPageButton.addEventListener("click", () => {
+      if (!lastSearchRequest) {
+        return;
+      }
+
+      runPage(lastSearchRequest.page + 1);
     });
 
     function setDefaultDates() {
@@ -185,7 +230,24 @@
       endDateInput.value = formatDateInput(today);
     }
 
-    function currentSearchRequest() {
+    function startSearch(page = 1) {
+      activeSearchToken += 1;
+      runSearch(currentSearchRequest(page), activeSearchToken);
+    }
+
+    function runPage(page) {
+      activeSearchToken += 1;
+      runSearch(
+        {
+          ...lastSearchRequest,
+          page,
+          pageSize: selectedPageSize()
+        },
+        activeSearchToken
+      );
+    }
+
+    function currentSearchRequest(page = 1) {
       const mode = SEARCH_MODES[modeSelect.value] || SEARCH_MODES.tracking;
 
       return {
@@ -194,7 +256,9 @@
         scannerId: scannerSelect.value,
         scannerLabel: selectedScannerLabel(),
         startDate: startDateInput.value,
-        endDate: endDateInput.value
+        endDate: endDateInput.value,
+        page,
+        pageSize: selectedPageSize()
       };
     }
 
@@ -206,6 +270,8 @@
         updateFedExTrackingLink("");
         summaryElement.textContent = "No search has been run.";
         renderEmptyResults("Search results will appear here.");
+        updatePaginationControls(null, false);
+        lastSearchRequest = null;
         return;
       }
 
@@ -213,23 +279,26 @@
         statusElement.innerHTML = `<span class="error">Start date must be on or before end date.</span>`;
         summaryElement.textContent = "No search has been run.";
         renderEmptyResults("Fix the date range and search again.", true);
+        updatePaginationControls(null, false);
         return;
       }
 
+      lastSearchRequest = request;
       updateFedExTrackingLink(request.mode.requiresTracking ? trackingNumber : "");
-      statusElement.textContent = `Searching ${searchDescription(request)}...`;
-      summaryElement.textContent = "Loading results...";
-      renderEmptyResults("Loading...");
+      statusElement.textContent = `Loading page ${request.page} for ${searchDescription(request)} from the database...`;
+      summaryElement.textContent = `Loading ${formatCount(request.pageSize)} results for page ${request.page}...`;
+      renderEmptyResults("Loading results from the database...");
+      updatePaginationControls(request, false, true);
 
       try {
-        const rows = await fetchAllRows(request, searchToken);
+        const resultPage = await fetchResultPage(request, searchToken);
 
         if (searchToken !== activeSearchToken) {
           return;
         }
 
         statusElement.textContent = `Search complete for ${searchDescription(request)}.`;
-        renderResults(request, rows);
+        renderResults(request, resultPage);
       } catch (error) {
         if (searchToken !== activeSearchToken) {
           return;
@@ -238,71 +307,72 @@
         statusElement.innerHTML = `<span class="error">Search failed.</span>`;
         summaryElement.textContent = error.message;
         renderEmptyResults("Unable to load search results.", true);
+        updatePaginationControls(request, false);
       }
     }
 
-    async function fetchAllRows(request, searchToken) {
-      const rows = [];
-      let offset = 0;
-
-      while (true) {
-        if (searchToken !== activeSearchToken) {
-          return rows;
-        }
-
-        const url = new URL(SEARCH_API_URL, window.location.origin);
-        if (request.mode.requiresTracking) {
-          url.searchParams.set("barcode", request.trackingNumber);
-        }
-        if (request.scannerId) {
-          url.searchParams.set("scanner_id", request.scannerId);
-        }
-        if (request.startDate) {
-          url.searchParams.set("start_date", request.startDate);
-        }
-        if (request.endDate) {
-          url.searchParams.set("end_date", request.endDate);
-        }
-        for (const [key, value] of Object.entries(request.mode.params)) {
-          url.searchParams.set(key, value);
-        }
-        url.searchParams.set("limit", String(PAGE_SIZE));
-        url.searchParams.set("offset", String(offset));
-
-        const response = await fetch(url, { cache: "no-store" });
-
-        if (!response.ok) {
-          throw new Error(`API returned HTTP ${response.status}`);
-        }
-
-        const pageRows = await response.json();
-
-        if (!Array.isArray(pageRows)) {
-          throw new Error("API returned an unexpected response.");
-        }
-
-        rows.push(...pageRows);
-
-        if (pageRows.length < PAGE_SIZE) {
-          return rows;
-        }
-
-        offset += PAGE_SIZE;
+    async function fetchResultPage(request, searchToken) {
+      if (searchToken !== activeSearchToken) {
+        return { rows: [], hasNext: false };
       }
+
+      const url = new URL(SEARCH_API_URL, window.location.origin);
+      if (request.mode.requiresTracking) {
+        url.searchParams.set("barcode", request.trackingNumber);
+      }
+      if (request.scannerId) {
+        url.searchParams.set("scanner_id", request.scannerId);
+      }
+      if (request.startDate) {
+        url.searchParams.set("start_date", request.startDate);
+      }
+      if (request.endDate) {
+        url.searchParams.set("end_date", request.endDate);
+      }
+      for (const [key, value] of Object.entries(request.mode.params)) {
+        url.searchParams.set(key, value);
+      }
+      url.searchParams.set("limit", String(request.pageSize + 1));
+      url.searchParams.set("offset", String((request.page - 1) * request.pageSize));
+
+      const response = await fetch(url, { cache: "no-store" });
+
+      if (!response.ok) {
+        throw new Error(`API returned HTTP ${response.status}`);
+      }
+
+      const pageRows = await response.json();
+
+      if (!Array.isArray(pageRows)) {
+        throw new Error("API returned an unexpected response.");
+      }
+
+      return {
+        rows: pageRows.slice(0, request.pageSize),
+        hasNext: pageRows.length > request.pageSize
+      };
     }
 
-    function renderResults(request, rows) {
+    function renderResults(request, resultPage) {
+      const rows = resultPage.rows || [];
+
       if (!rows || rows.length === 0) {
-        summaryElement.textContent = `No scans found for ${searchDescription(request)}.`;
+        summaryElement.textContent = NO_RESULTS_MESSAGE;
         updateFedExTrackingLink(request.mode.requiresTracking ? request.trackingNumber : "");
-        renderEmptyResults("No scan rows found.");
+        renderEmptyResults(NO_RESULTS_MESSAGE);
+        updatePaginationControls(null, false);
         return;
       }
 
-      summaryElement.textContent = `${formatCount(rows.length)} scan row${rows.length === 1 ? "" : "s"} found for ${searchDescription(request)}.`;
+      const firstRowNumber = (request.page - 1) * request.pageSize + 1;
+      const lastRowNumber = firstRowNumber + rows.length - 1;
+      const moreText = resultPage.hasNext ? " More results are available." : "";
+      summaryElement.textContent =
+        `Showing ${formatCount(firstRowNumber)}-${formatCount(lastRowNumber)} for ${searchDescription(request)}.${moreText}`;
       updateFedExTrackingLink(
         request.mode.requiresTracking ? trackingValueForFedEx(rows[0]) : ""
       );
+      updatePaginationControls(request, resultPage.hasNext);
       resultsBody.innerHTML = "";
 
       for (const row of rows) {
@@ -344,6 +414,23 @@
 
         resultsBody.appendChild(tr);
       }
+    }
+
+    function updatePaginationControls(request, hasNext, isLoading = false) {
+      if (!request) {
+        paginationControls.hidden = true;
+        previousPageButton.disabled = true;
+        nextPageButton.disabled = true;
+        pageStatusElement.textContent = "Page 1";
+        return;
+      }
+
+      paginationControls.hidden = false;
+      previousPageButton.disabled = isLoading || request.page <= 1;
+      nextPageButton.disabled = isLoading || !hasNext;
+      pageStatusElement.textContent = isLoading
+        ? `Loading page ${request.page}...`
+        : `Page ${request.page}`;
     }
 
     function updateSearchModeState() {
@@ -398,6 +485,11 @@
     function selectedScannerLabel() {
       const option = scannerSelect.selectedOptions[0];
       return option ? option.textContent : "All Scanners";
+    }
+
+    function selectedPageSize() {
+      const pageSize = Number(pageSizeSelect.value);
+      return PAGE_SIZE_OPTIONS.includes(pageSize) ? pageSize : DEFAULT_PAGE_SIZE;
     }
 
     function searchDescription(request) {
@@ -478,7 +570,7 @@
       resultsBody.innerHTML = "";
       const tr = document.createElement("tr");
       const td = document.createElement("td");
-      td.colSpan = 12;
+      td.colSpan = 11;
       td.textContent = message;
 
       if (isError) {

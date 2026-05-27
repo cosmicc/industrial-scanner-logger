@@ -443,6 +443,21 @@ tr:last-child td {
   gap: 12px;
 }
 
+.result-toolbar {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.result-page-size {
+  display: grid;
+  gap: 6px;
+  min-width: 140px;
+}
+
 .search-label {
   color: var(--muted);
   font-size: 13px;
@@ -538,6 +553,11 @@ tr:last-child td {
 .pagination-label {
   color: var(--muted);
   font-weight: 700;
+}
+
+.pagination .button {
+  border-radius: 8px;
+  padding: 8px 12px;
 }
 
 .tv-body {
