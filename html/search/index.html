@@ -78,7 +78,10 @@
 
     <section class="card results-card">
       <div class="results-header">
-        <h2>Results</h2>
+        <div class="results-title-stack">
+          <h2>Results</h2>
+          <div id="result-summary" class="result-summary">No search has been run.</div>
+        </div>
         <label class="search-label result-page-size" for="page-size">
           Rows per page
           <select id="page-size" class="search-select" name="page-size">
@@ -90,7 +93,6 @@
           </select>
         </label>
       </div>
-      <div id="result-summary" class="result-summary">No search has been run.</div>
       <div id="pagination-controls" class="pagination" hidden>
         <button id="previous-page" class="button" type="button">Previous</button>
         <span id="page-status" class="pagination-label">Page 1</span>

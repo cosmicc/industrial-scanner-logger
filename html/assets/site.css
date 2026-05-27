@@ -449,7 +449,13 @@ tr:last-child td {
   flex-wrap: wrap;
   gap: 10px;
   justify-content: space-between;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
+}
+
+.results-title-stack {
+  display: grid;
+  gap: 3px;
+  min-width: 260px;
 }
 
 .results-card h2 {
@@ -460,13 +466,13 @@ tr:last-child td {
   color: var(--muted);
   font-size: 14px;
   line-height: 1.35;
-  margin: 0 0 4px 0;
+  margin: 0;
   word-break: break-word;
 }
 
 .result-page-size {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   min-width: 140px;
 }
 
@@ -583,7 +589,7 @@ tr:last-child td {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 4px 0 6px;
+  margin: 0 0 5px;
 }
 
 .pagination:empty {
