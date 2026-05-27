@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Remove the extra duplicate category and keep one regular duplicate flag.
+- Silently drop same-scanner repeats until 3 different successful scans have been accepted on that scanner.
+
 ## 1.2.1 - 2026-05-24 (Pre-release)
 
 - Add configurable health page and TV dashboard refresh intervals.
@@ -16,7 +19,6 @@ All notable changes to this project will be documented in this file.
 
 - Log same-scanner repeated successful scans instead of silently ignoring them.
 - Add `is_duplicate` scan metadata and mark repeats only after the 3 different successful tracking number threshold is met.
-- Keep `is_cross_scanner_duplicate` as a narrower flag for duplicate scans previously accepted from another scanner.
 - Make PostgreSQL mandatory for receiver startup, duplicate lookups, and scan-event writes.
 - Remove obsolete PostgreSQL `enabled` and `required` config options.
 - Use PostgreSQL scan history for duplicate decisions over the previous 30 days.
@@ -33,7 +35,6 @@ All notable changes to this project will be documented in this file.
 - Display webpage times with 12-hour am/pm formatting.
 - Rewrite the home page as an app hub with live status, version metadata, bug-report link, and GitHub source link.
 - Show daily CSV total scan and duplicate counts, and add today's per-scanner totals to the health page.
-- Restrict `is_cross_scanner_duplicate` to the configured last scanner; other scanner repeats remain regular duplicates.
 - Add a configurable health dashboard scan-rate stale threshold and color recent scan rows by age.
 - Show failed scan counts alongside totals, successful scans, and duplicates on health daily total cards.
 - Add `refresh-app-config` for syncing `/etc/industrial-scanner-logger.conf` with the default config schema while preserving existing values.

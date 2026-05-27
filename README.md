@@ -307,13 +307,11 @@ health_page_refresh_seconds = 3
 tv_dashboard_refresh_seconds = 1
 ```
 
-Repeated successful scans are logged from the same scanner and across scanners.
-A same-scanner repeat is marked `is_duplicate = true` only when that scanner
-accepted 3 different successful tracking numbers between the previous accepted
-scan of that tracking number in the previous 30 days and the current scan.
-Cross-scanner repeats also set `is_cross_scanner_duplicate = true` when that
-threshold is met across the previous 30 days of successful scans and the
-tracking number was previously accepted from a different scanner.
+Repeated successful scans use one duplicate flag. A repeat from the same scanner
+is silently dropped until that scanner has accepted 3 different successful
+tracking numbers since the previous accepted scan of that tracking number in the
+previous 30 days. After that threshold is met, the repeat is logged with
+`is_duplicate = true`.
 
 Set `[receiver] tracking_repair_enabled = true` to allow conservative repair of
 short numeric failed scans. A short scan is repaired only when successful scans
@@ -378,6 +376,7 @@ GET /api/v1/logs/daily-csv
 GET /api/v1/logs/daily-csv/{scan_date}
 GET /api/v1/scans
 GET /api/v1/scans/{scan_id}
+GET /api/v1/scanners
 GET /api/v1/views
 GET /api/v1/views/daily-scan-totals
 GET /api/v1/views/daily-scan-totals-all-scanners
@@ -394,7 +393,7 @@ The `barcode` filter matches either the received barcode or repaired tracking
 number when both fields are available. Numeric 10-digit barcode filters also
 match the end of those tracking fields so users can search by the last 10
 digits. Full 34-digit tracking numbers are matched exactly. `/api/v1/scans`
-also supports `is_success`.
+also supports `is_success`, `is_duplicate`, and `is_repaired`.
 
 `/api/v1/logs/daily-csv` lists completed daily CSV files for download and
 excludes the current day because that file may still be open for writing.
@@ -452,7 +451,7 @@ Site_Shipped_Tracking_2026-05-16.csv
 Daily scan CSV columns:
 
 ```text
-date,time,scanner_id,scanner_name,scanner_role,status,is_duplicate,is_cross_scanner_duplicate,is_repaired,tracking
+date,time,scanner_id,scanner_name,scanner_role,status,is_duplicate,is_repaired,tracking
 ```
 
 Failed scan CSV columns:
@@ -472,12 +471,11 @@ scanner `10.10.10.20` is recorded as scanner `20`. `scan_totals.csv` includes
 one row per scanner plus an `ALL` row for the full day.
 
 `scanner_role` is `last` only for the configured final outbound scanner.
-`is_duplicate` is `true` only for successful scans that repeat after the 3
-different successful tracking number threshold is met. `is_cross_scanner_duplicate`
-is `true` only for duplicate successful scans whose tracking number was already
-accepted from another scanner within the duplicate lookback window.
-`is_repaired` is `true` only when tracking-number repair reconstructed a short
-numeric failed scan into a valid tracking number.
+`is_duplicate` is `true` only for successful scans that repeat on the same
+scanner after the 3 different successful tracking number threshold is met.
+Pre-threshold repeats from the same scanner are silently dropped. `is_repaired`
+is `true` only when tracking-number repair reconstructed a short numeric failed
+scan into a valid tracking number.
 
 ## Development
 

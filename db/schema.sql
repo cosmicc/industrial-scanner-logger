@@ -19,8 +19,6 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
 
     is_duplicate BOOLEAN NOT NULL DEFAULT false,
 
-    is_cross_scanner_duplicate BOOLEAN NOT NULL DEFAULT false,
-
     is_repaired BOOLEAN NOT NULL DEFAULT false,
 
     tracking_number TEXT NOT NULL CHECK (btrim(tracking_number, E' \t\r\n') <> ''),
@@ -60,6 +58,8 @@ DROP VIEW IF EXISTS scanner_logger.failed_scans;
 DROP VIEW IF EXISTS scanner_logger.daily_scan_totals_all_scanners;
 DROP VIEW IF EXISTS scanner_logger.daily_scan_totals;
 
+DROP INDEX IF EXISTS scanner_logger.idx_scan_events_cross_scanner_duplicate;
+
 ALTER TABLE scanner_logger.scan_events
     ADD COLUMN IF NOT EXISTS scanner_name TEXT;
 
@@ -73,7 +73,7 @@ ALTER TABLE scanner_logger.scan_events
     ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE scanner_logger.scan_events
-    ADD COLUMN IF NOT EXISTS is_cross_scanner_duplicate BOOLEAN NOT NULL DEFAULT false;
+    DROP COLUMN IF EXISTS is_cross_scanner_duplicate;
 
 ALTER TABLE scanner_logger.scan_events
     ADD COLUMN IF NOT EXISTS is_repaired BOOLEAN NOT NULL DEFAULT false;
@@ -171,7 +171,7 @@ ALTER TABLE scanner_logger.raw_scan_events
     ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE scanner_logger.raw_scan_events
-    ADD COLUMN IF NOT EXISTS is_cross_scanner_duplicate BOOLEAN NOT NULL DEFAULT false;
+    DROP COLUMN IF EXISTS is_cross_scanner_duplicate;
 
 CREATE INDEX IF NOT EXISTS idx_scan_events_scan_date_time
     ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC);
@@ -207,10 +207,6 @@ DROP INDEX IF EXISTS scanner_logger.idx_scan_events_scanner_barcode_scan_date_ti
 CREATE INDEX IF NOT EXISTS idx_scan_events_scanner_tracking_scan_date_time
     ON scanner_logger.scan_events (scanner_id, tracking_number, scan_date DESC, scan_time DESC, id DESC)
     WHERE is_success = true;
-
-CREATE INDEX IF NOT EXISTS idx_scan_events_cross_scanner_duplicate
-    ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC)
-    WHERE is_cross_scanner_duplicate = true;
 
 DROP INDEX IF EXISTS scanner_logger.idx_scan_events_last_scanner_tracking;
 
@@ -268,7 +264,6 @@ SELECT
     scanner_role,
     last_scanner_id,
     is_duplicate,
-    is_cross_scanner_duplicate,
     is_repaired,
     tracking_number,
     barcode,
@@ -287,7 +282,6 @@ SELECT
     scanner_role,
     last_scanner_id,
     is_duplicate,
-    is_cross_scanner_duplicate,
     is_repaired,
     tracking_number,
     barcode,
@@ -339,8 +333,6 @@ SELECT
     ) AS scan_sequence,
     scanner_counts.scanner_count,
     events.is_duplicate,
-    scanner_counts.scanner_count > 1 AS has_cross_scanner_duplicate,
-    events.is_cross_scanner_duplicate,
     events.is_repaired
 FROM scanner_logger.scan_events AS events
 JOIN scanner_counts

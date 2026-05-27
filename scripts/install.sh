@@ -854,11 +854,11 @@ health_page_refresh_seconds = ${HEALTH_PAGE_REFRESH_SECONDS}
 # Default: 1. Range: greater than 0. Example: 5 refreshes the TV dashboard every 5 seconds.
 tv_dashboard_refresh_seconds = ${TV_DASHBOARD_REFRESH_SECONDS}
 
-# Enables the TV dashboard full-screen duplicate warning and alarm for non-cross-scanner duplicates.
+# Enables the TV dashboard full-screen duplicate warning and alarm for duplicates.
 # Default: true. Set false to show duplicate counts without interrupting the TV dashboard.
 tv_duplicate_alert_enabled = ${TV_DUPLICATE_ALERT_ENABLED_TEXT}
 
-# Seconds the TV dashboard full-screen duplicate warning stays visible after a non-cross-scanner duplicate.
+# Seconds the TV dashboard full-screen duplicate warning stays visible after a duplicate.
 # Default: 60. Range: greater than 0. Example: 30 clears the duplicate alert after 30 seconds.
 tv_duplicate_alert_seconds = ${TV_DUPLICATE_ALERT_SECONDS}
 

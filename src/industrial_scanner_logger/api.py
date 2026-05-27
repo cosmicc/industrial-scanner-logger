@@ -44,7 +44,6 @@ SCAN_EVENT_COLUMNS = [
     "scanner_role",
     "last_scanner_id",
     "is_duplicate",
-    "is_cross_scanner_duplicate",
     "is_repaired",
     "tracking_number",
     "barcode",
@@ -93,7 +92,6 @@ VIEW_DEFINITIONS = {
             "scanner_role",
             "last_scanner_id",
             "is_duplicate",
-            "is_cross_scanner_duplicate",
             "is_repaired",
             "tracking_number",
             "barcode",
@@ -117,7 +115,6 @@ VIEW_DEFINITIONS = {
             "scanner_role",
             "last_scanner_id",
             "is_duplicate",
-            "is_cross_scanner_duplicate",
             "is_repaired",
             "tracking_number",
             "barcode",
@@ -160,8 +157,6 @@ VIEW_DEFINITIONS = {
             "scan_sequence",
             "scanner_count",
             "is_duplicate",
-            "has_cross_scanner_duplicate",
-            "is_cross_scanner_duplicate",
             "is_repaired",
         ],
         "date_column": "scan_date",
@@ -243,7 +238,6 @@ def build_dashboard_health(config):
                     scanner_role,
                     last_scanner_id,
                     is_duplicate,
-                    is_cross_scanner_duplicate,
                     is_repaired,
                     tracking_number,
                     barcode,
@@ -273,7 +267,6 @@ def build_dashboard_health(config):
                         scanner_role,
                         last_scanner_id,
                         is_duplicate,
-                        is_cross_scanner_duplicate,
                         is_repaired,
                         tracking_number,
                         barcode,
@@ -485,6 +478,91 @@ def scan_row_with_display_name(config, row: dict) -> dict:
     return scan_row
 
 
+def fetch_scanner_options(db, config) -> list[dict]:
+    scanners = configured_scanner_options(config)
+    rows = fetch_all(
+        db,
+        """
+        SELECT
+            scanner_id,
+            max(scanner_name) FILTER (
+                WHERE scanner_name IS NOT NULL AND scanner_name <> ''
+            ) AS scanner_name,
+            bool_or(scanner_role = 'last') AS has_last_role,
+            max(scan_date) AS last_scan_date
+        FROM scanner_logger.scan_events
+        WHERE scanner_id IS NOT NULL
+        GROUP BY scanner_id
+        ORDER BY scanner_id ASC
+        """,
+        [],
+    )
+
+    for row in rows:
+        scanner_id = scanner_id_int(row.get("scanner_id"))
+        if scanner_id is None:
+            continue
+
+        existing = scanners.get(scanner_id, {})
+        scanner_id_text = str(scanner_id)
+        fallback_name = row.get("scanner_name") or existing.get("scanner_name", "")
+        role = "last" if row.get("has_last_role") else existing.get("scanner_role", "standard")
+        if getattr(config, "last_scanner_id", "") == scanner_id_text:
+            role = "last"
+
+        scanners[scanner_id] = {
+            "scanner_id": scanner_id,
+            "scanner_name": scanner_name_value(config, scanner_id_text, fallback_name),
+            "display_name": scanner_display_name(config, scanner_id_text, fallback_name),
+            "scanner_role": role,
+            "last_scan_date": row.get("last_scan_date"),
+        }
+
+    return [scanners[scanner_id] for scanner_id in sorted(scanners)]
+
+
+def configured_scanner_options(config) -> dict[int, dict]:
+    scanners = {}
+    scanner_names = getattr(config, "scanner_names", {}) or {}
+    configured_ids = set(scanner_names)
+    configured_ids.update(getattr(config, "mandatory_scanner_ids", []) or [])
+    if getattr(config, "last_scanner_id", ""):
+        configured_ids.add(config.last_scanner_id)
+
+    for scanner_id_value in configured_ids:
+        scanner_id = scanner_id_int(scanner_id_value)
+        if scanner_id is None:
+            continue
+
+        scanner_id_text = str(scanner_id)
+        scanner_name = scanner_name_value(config, scanner_id_text)
+        scanners[scanner_id] = {
+            "scanner_id": scanner_id,
+            "scanner_name": scanner_name,
+            "display_name": scanner_display_name(config, scanner_id_text, scanner_name),
+            "scanner_role": (
+                "last"
+                if getattr(config, "last_scanner_id", "") == scanner_id_text
+                else "standard"
+            ),
+            "last_scan_date": None,
+        }
+
+    return scanners
+
+
+def scanner_id_int(value) -> Optional[int]:
+    try:
+        scanner_id = int(value)
+    except (TypeError, ValueError):
+        return None
+
+    if 0 <= scanner_id <= 255:
+        return scanner_id
+
+    return None
+
+
 def dashboard_total_row(scan_date: date, row: Optional[dict] = None) -> dict:
     row = row or {}
     return {
@@ -493,9 +571,6 @@ def dashboard_total_row(scan_date: date, row: Optional[dict] = None) -> dict:
         "successful_scans": int(row.get("successful_scans") or 0),
         "failed_scans": int(row.get("failed_scans") or 0),
         "duplicate_scans": int(row.get("duplicate_scans") or 0),
-        "cross_scanner_duplicate_scans": int(
-            row.get("cross_scanner_duplicate_scans") or 0
-        ),
     }
 
 
@@ -512,12 +587,7 @@ def fetch_dashboard_daily_totals(
             count(*) AS total_scan_events,
             count(*) FILTER (WHERE is_success) AS successful_scans,
             count(*) FILTER (WHERE is_success = false) AS failed_scans,
-            count(*) FILTER (
-                WHERE is_duplicate AND is_cross_scanner_duplicate = false
-            ) AS duplicate_scans,
-            count(*) FILTER (
-                WHERE is_cross_scanner_duplicate
-            ) AS cross_scanner_duplicate_scans
+            count(*) FILTER (WHERE is_duplicate) AS duplicate_scans
         FROM scanner_logger.scan_events
         WHERE scan_date IN (%s, %s)
         GROUP BY scan_date
@@ -543,12 +613,7 @@ def fetch_dashboard_today_scanner_totals(db, config, current_day: date) -> list[
             count(*) AS total_scan_events,
             count(*) FILTER (WHERE is_success) AS successful_scans,
             count(*) FILTER (WHERE is_success = false) AS failed_scans,
-            count(*) FILTER (
-                WHERE is_duplicate AND is_cross_scanner_duplicate = false
-            ) AS duplicate_scans,
-            count(*) FILTER (
-                WHERE is_cross_scanner_duplicate
-            ) AS cross_scanner_duplicate_scans
+            count(*) FILTER (WHERE is_duplicate) AS duplicate_scans
         FROM scanner_logger.scan_events
         WHERE scan_date = %s
         GROUP BY scanner_id
@@ -577,9 +642,6 @@ def dashboard_scanner_total_row(config, row: dict) -> dict:
         "successful_scans": int(row.get("successful_scans") or 0),
         "failed_scans": int(row.get("failed_scans") or 0),
         "duplicate_scans": int(row.get("duplicate_scans") or 0),
-        "cross_scanner_duplicate_scans": int(
-            row.get("cross_scanner_duplicate_scans") or 0
-        ),
     }
 
 
@@ -640,7 +702,6 @@ def fetch_active_duplicate_alert(db, config, alert_seconds: int) -> Optional[dic
             scanner_role,
             last_scanner_id,
             is_duplicate,
-            is_cross_scanner_duplicate,
             is_repaired,
             tracking_number,
             barcode,
@@ -652,7 +713,6 @@ def fetch_active_duplicate_alert(db, config, alert_seconds: int) -> Optional[dic
         FROM scanner_logger.scan_events
         WHERE is_success
           AND is_duplicate
-          AND is_cross_scanner_duplicate = false
           AND (scan_date + scan_time) >= (localtimestamp - %s)
         ORDER BY scan_date DESC, scan_time DESC, id DESC
         LIMIT 1
@@ -740,9 +800,7 @@ def daily_csv_scan_summary(csv_path: Path) -> dict:
 
             scan_count += 1
 
-            if csv_truthy(row.get("is_duplicate")) and not csv_truthy(
-                row.get("is_cross_scanner_duplicate")
-            ):
+            if csv_truthy(row.get("is_duplicate")):
                 duplicate_count += 1
 
     return {
@@ -993,6 +1051,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/health"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans/{{scan_id}}"),
+                external_path(request_root_path, f"{API_VERSION_PREFIX}/scanners"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/views"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/views/{{view_name}}"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/logs/daily-csv"),
@@ -1024,6 +1083,8 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
         scanner_id: Optional[int] = Query(default=None, ge=0, le=255),
         barcode: Optional[str] = None,
         is_success: Optional[bool] = None,
+        is_duplicate: Optional[bool] = None,
+        is_repaired: Optional[bool] = None,
         limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
         offset: int = Query(default=0, ge=0),
         db=Depends(get_db),
@@ -1035,6 +1096,8 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             scanner_id=scanner_id,
             barcode=barcode,
             is_success=is_success,
+            is_duplicate=is_duplicate,
+            is_repaired=is_repaired,
             limit=limit,
             offset=offset,
         )
@@ -1055,6 +1118,10 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             raise HTTPException(status_code=404, detail="scan event not found")
 
         return scan_row_with_display_name(config, rows[0])
+
+    @app.get(f"{API_VERSION_PREFIX}/scanners")
+    def list_scanners(db=Depends(get_db), config=Depends(get_config)):
+        return {"scanners": fetch_scanner_options(db, config)}
 
     @app.get(f"{API_VERSION_PREFIX}/views")
     def list_views():
@@ -1171,6 +1238,8 @@ def build_scan_events_query(
     scanner_id: Optional[int] = None,
     barcode: Optional[str] = None,
     is_success: Optional[bool] = None,
+    is_duplicate: Optional[bool] = None,
+    is_repaired: Optional[bool] = None,
     limit: int = DEFAULT_LIMIT,
     offset: int = 0,
 ):
@@ -1191,6 +1260,9 @@ def build_scan_events_query(
         conditions.append(sql.SQL("is_success = %s"))
         params.append(is_success)
 
+    add_boolean_filter(conditions, params, "is_duplicate", is_duplicate)
+    add_boolean_filter(conditions, params, "is_repaired", is_repaired)
+
     query = sql.SQL("SELECT {} FROM scanner_logger.scan_events{} {} LIMIT %s OFFSET %s").format(
         column_list(SCAN_EVENT_COLUMNS),
         where_clause(conditions),
@@ -1198,6 +1270,19 @@ def build_scan_events_query(
     )
     params.extend([limit, offset])
     return query, params
+
+
+def add_boolean_filter(
+    conditions: list,
+    params: list,
+    column_name: str,
+    value: Optional[bool],
+):
+    if value is None:
+        return
+
+    conditions.append(sql.SQL("{} = %s").format(sql.Identifier(column_name)))
+    params.append(value)
 
 
 def build_view_query(

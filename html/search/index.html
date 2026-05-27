@@ -3,30 +3,50 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tracking Number Search</title>
+  <title>Scan Search</title>
   <link rel="stylesheet" href="/assets/site.css">
 </head>
 <body>
   <main class="page">
-    <h1>Tracking Number Search</h1>
+    <h1>Scan Search</h1>
     <div class="subhead">
-      Search scan history by full tracking number or last 10 digits.
+      Search scan history by tracking number, duplicate status, repair state, scanner, and date range.
     </div>
 
     <section class="card">
       <h2>Search</h2>
       <form id="search-form" class="search-form">
-        <label class="search-label" for="tracking-number">Tracking Number</label>
-        <div class="search-controls">
-          <input
-            id="tracking-number"
-            class="search-input"
-            type="text"
-            name="tracking-number"
-            autocomplete="off"
-            inputmode="numeric"
-            placeholder="Enter tracking number"
-          >
+        <div class="search-option-grid">
+          <label class="search-label search-field" for="search-mode">
+            Search Type
+            <select id="search-mode" class="search-select" name="search-mode">
+              <option value="tracking">Tracking Number / Barcode</option>
+              <option value="all">All Scan Rows</option>
+              <option value="successful">Successful Scans</option>
+              <option value="failed">Failed Scans</option>
+              <option value="duplicates">All Duplicates</option>
+              <option value="repaired">Repaired Scans</option>
+              <option value="unrepaired-failed">Unrepaired Failed Scans</option>
+            </select>
+          </label>
+          <label class="search-label search-field" for="scanner-filter">
+            Scanner
+            <select id="scanner-filter" class="search-select" name="scanner-filter">
+              <option value="">All Scanners</option>
+            </select>
+          </label>
+          <label class="search-label search-field search-field-wide" for="tracking-number">
+            Tracking Number
+            <input
+              id="tracking-number"
+              class="search-input"
+              type="text"
+              name="tracking-number"
+              autocomplete="off"
+              inputmode="numeric"
+              placeholder="Enter tracking number"
+            >
+          </label>
           <button class="button primary" type="submit">Search</button>
         </div>
         <div class="date-controls">
@@ -84,11 +104,54 @@
 
   <script>
     const SEARCH_API_URL = "/api/v1/scans";
+    const SCANNERS_API_URL = "/api/v1/scanners";
     const PAGE_SIZE = 1000;
     const FEDEX_TRACKING_DIGITS = 34;
+    const SEARCH_MODES = {
+      tracking: {
+        label: "Tracking Number / Barcode",
+        requiresTracking: true,
+        params: {}
+      },
+      all: {
+        label: "All Scan Rows",
+        requiresTracking: false,
+        params: {}
+      },
+      successful: {
+        label: "Successful Scans",
+        requiresTracking: false,
+        params: { is_success: "true" }
+      },
+      failed: {
+        label: "Failed Scans",
+        requiresTracking: false,
+        params: { is_success: "false" }
+      },
+      duplicates: {
+        label: "All Duplicates",
+        requiresTracking: false,
+        params: { is_duplicate: "true" }
+      },
+      repaired: {
+        label: "Repaired Scans",
+        requiresTracking: false,
+        params: { is_repaired: "true" }
+      },
+      "unrepaired-failed": {
+        label: "Unrepaired Failed Scans",
+        requiresTracking: false,
+        params: {
+          is_success: "false",
+          is_repaired: "false"
+        }
+      }
+    };
     let activeSearchToken = 0;
 
     const form = document.getElementById("search-form");
+    const modeSelect = document.getElementById("search-mode");
+    const scannerSelect = document.getElementById("scanner-filter");
     const input = document.getElementById("tracking-number");
     const startDateInput = document.getElementById("start-date");
     const endDateInput = document.getElementById("end-date");
@@ -101,7 +164,16 @@
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       activeSearchToken += 1;
-      runSearch(input.value, startDateInput.value, endDateInput.value, activeSearchToken);
+      runSearch(currentSearchRequest(), activeSearchToken);
+    });
+
+    modeSelect.addEventListener("change", updateSearchModeState);
+
+    scannerSelect.addEventListener("change", () => {
+      if (summaryElement.textContent !== "No search has been run.") {
+        activeSearchToken += 1;
+        runSearch(currentSearchRequest(), activeSearchToken);
+      }
     });
 
     function setDefaultDates() {
@@ -113,10 +185,23 @@
       endDateInput.value = formatDateInput(today);
     }
 
-    async function runSearch(rawTrackingNumber, startDate, endDate, searchToken) {
-      const trackingNumber = rawTrackingNumber.trim();
+    function currentSearchRequest() {
+      const mode = SEARCH_MODES[modeSelect.value] || SEARCH_MODES.tracking;
 
-      if (!trackingNumber) {
+      return {
+        mode,
+        trackingNumber: input.value.trim(),
+        scannerId: scannerSelect.value,
+        scannerLabel: selectedScannerLabel(),
+        startDate: startDateInput.value,
+        endDate: endDateInput.value
+      };
+    }
+
+    async function runSearch(request, searchToken) {
+      const trackingNumber = request.trackingNumber;
+
+      if (request.mode.requiresTracking && !trackingNumber) {
         statusElement.textContent = "Enter a tracking number and date range to search scan history.";
         updateFedExTrackingLink("");
         summaryElement.textContent = "No search has been run.";
@@ -124,32 +209,27 @@
         return;
       }
 
-      if (startDate && endDate && startDate > endDate) {
+      if (request.startDate && request.endDate && request.startDate > request.endDate) {
         statusElement.innerHTML = `<span class="error">Start date must be on or before end date.</span>`;
         summaryElement.textContent = "No search has been run.";
         renderEmptyResults("Fix the date range and search again.", true);
         return;
       }
 
-      updateFedExTrackingLink(trackingNumber);
-      statusElement.textContent = `Searching for ${trackingNumber}...`;
+      updateFedExTrackingLink(request.mode.requiresTracking ? trackingNumber : "");
+      statusElement.textContent = `Searching ${searchDescription(request)}...`;
       summaryElement.textContent = "Loading results...";
       renderEmptyResults("Loading...");
 
       try {
-        const rows = await fetchAllTrackingRows(
-          trackingNumber,
-          startDate,
-          endDate,
-          searchToken
-        );
+        const rows = await fetchAllRows(request, searchToken);
 
         if (searchToken !== activeSearchToken) {
           return;
         }
 
-        statusElement.textContent = `Search complete for ${trackingNumber}.`;
-        renderResults(trackingNumber, rows);
+        statusElement.textContent = `Search complete for ${searchDescription(request)}.`;
+        renderResults(request, rows);
       } catch (error) {
         if (searchToken !== activeSearchToken) {
           return;
@@ -161,7 +241,7 @@
       }
     }
 
-    async function fetchAllTrackingRows(trackingNumber, startDate, endDate, searchToken) {
+    async function fetchAllRows(request, searchToken) {
       const rows = [];
       let offset = 0;
 
@@ -171,12 +251,20 @@
         }
 
         const url = new URL(SEARCH_API_URL, window.location.origin);
-        url.searchParams.set("barcode", trackingNumber);
-        if (startDate) {
-          url.searchParams.set("start_date", startDate);
+        if (request.mode.requiresTracking) {
+          url.searchParams.set("barcode", request.trackingNumber);
         }
-        if (endDate) {
-          url.searchParams.set("end_date", endDate);
+        if (request.scannerId) {
+          url.searchParams.set("scanner_id", request.scannerId);
+        }
+        if (request.startDate) {
+          url.searchParams.set("start_date", request.startDate);
+        }
+        if (request.endDate) {
+          url.searchParams.set("end_date", request.endDate);
+        }
+        for (const [key, value] of Object.entries(request.mode.params)) {
+          url.searchParams.set(key, value);
         }
         url.searchParams.set("limit", String(PAGE_SIZE));
         url.searchParams.set("offset", String(offset));
@@ -203,16 +291,18 @@
       }
     }
 
-    function renderResults(trackingNumber, rows) {
+    function renderResults(request, rows) {
       if (!rows || rows.length === 0) {
-        summaryElement.textContent = `No scans found for ${trackingNumber}.`;
-        updateFedExTrackingLink(trackingNumber);
+        summaryElement.textContent = `No scans found for ${searchDescription(request)}.`;
+        updateFedExTrackingLink(request.mode.requiresTracking ? request.trackingNumber : "");
         renderEmptyResults("No scan rows found.");
         return;
       }
 
-      summaryElement.textContent = `${formatCount(rows.length)} scan row${rows.length === 1 ? "" : "s"} found for ${trackingNumber}.`;
-      updateFedExTrackingLink(trackingValueForFedEx(rows[0]));
+      summaryElement.textContent = `${formatCount(rows.length)} scan row${rows.length === 1 ? "" : "s"} found for ${searchDescription(request)}.`;
+      updateFedExTrackingLink(
+        request.mode.requiresTracking ? trackingValueForFedEx(rows[0]) : ""
+      );
       resultsBody.innerHTML = "";
 
       for (const row of rows) {
@@ -254,6 +344,74 @@
 
         resultsBody.appendChild(tr);
       }
+    }
+
+    function updateSearchModeState() {
+      const mode = SEARCH_MODES[modeSelect.value] || SEARCH_MODES.tracking;
+      input.disabled = !mode.requiresTracking;
+      input.placeholder = mode.requiresTracking
+        ? "Enter tracking number"
+        : "Not used for this search";
+      if (!mode.requiresTracking) {
+        updateFedExTrackingLink("");
+      }
+    }
+
+    async function loadScannerOptions() {
+      try {
+        const response = await fetch(SCANNERS_API_URL, { cache: "no-store" });
+
+        if (!response.ok) {
+          throw new Error(`API returned HTTP ${response.status}`);
+        }
+
+        const payload = await response.json();
+        const scanners = Array.isArray(payload?.scanners) ? payload.scanners : [];
+        renderScannerOptions(scanners);
+      } catch (_error) {
+        scannerSelect.innerHTML = `<option value="">All Scanners</option>`;
+      }
+    }
+
+    function renderScannerOptions(scanners) {
+      const selectedValue = scannerSelect.value;
+      scannerSelect.innerHTML = `<option value="">All Scanners</option>`;
+
+      for (const scanner of scanners) {
+        const scannerId = scanner.scanner_id;
+        if (scannerId === null || scannerId === undefined || scannerId === "") {
+          continue;
+        }
+
+        const option = document.createElement("option");
+        option.value = String(scannerId);
+        option.textContent = scanner.display_name || `Scanner ${scannerId}`;
+        scannerSelect.appendChild(option);
+      }
+
+      scannerSelect.value = selectedValue;
+      if (scannerSelect.value !== selectedValue) {
+        scannerSelect.value = "";
+      }
+    }
+
+    function selectedScannerLabel() {
+      const option = scannerSelect.selectedOptions[0];
+      return option ? option.textContent : "All Scanners";
+    }
+
+    function searchDescription(request) {
+      const parts = [
+        request.mode.requiresTracking
+          ? `tracking ${request.trackingNumber}`
+          : request.mode.label
+      ];
+
+      if (request.scannerId) {
+        parts.push(request.scannerLabel);
+      }
+
+      return parts.join(" on ");
     }
 
     function updateFedExTrackingLink(trackingNumber) {
@@ -320,7 +478,7 @@
       resultsBody.innerHTML = "";
       const tr = document.createElement("tr");
       const td = document.createElement("td");
-      td.colSpan = 11;
+      td.colSpan = 12;
       td.textContent = message;
 
       if (isError) {
@@ -403,6 +561,8 @@
     }
 
     setDefaultDates();
+    updateSearchModeState();
+    loadScannerOptions();
   </script>
 </body>
 </html>
