@@ -58,6 +58,14 @@
             End Date
             <input id="end-date" class="date-input" type="date" name="end-date">
           </label>
+          <div class="date-preset-controls" aria-label="Date presets">
+            <button class="date-preset-button" type="button" data-date-preset="today">Today</button>
+            <button class="date-preset-button" type="button" data-date-preset="yesterday">Yesterday</button>
+            <button class="date-preset-button" type="button" data-date-preset="last-7">Last 7 Days</button>
+            <button class="date-preset-button" type="button" data-date-preset="last-30">Last 30 Days</button>
+            <button class="date-preset-button" type="button" data-date-preset="last-year">Last Year</button>
+            <button class="date-preset-button" type="button" data-date-preset="all-time">All Time</button>
+          </div>
         </div>
       </form>
       <div id="search-status" class="detail">Enter a tracking number and date range to search scan history.</div>
@@ -68,15 +76,15 @@
       </div>
     </section>
 
-    <section class="card">
+    <section class="card results-card">
       <h2>Results</h2>
       <div class="result-toolbar">
-        <div id="result-summary" class="detail">No search has been run.</div>
+        <div id="result-summary" class="result-summary">No search has been run.</div>
         <label class="search-label result-page-size" for="page-size">
           Rows per page
           <select id="page-size" class="search-select" name="page-size">
-            <option value="10">10</option>
-            <option value="25" selected>25</option>
+            <option value="10" selected>10</option>
+            <option value="25">25</option>
             <option value="50">50</option>
             <option value="100">100</option>
             <option value="200">200</option>
@@ -123,7 +131,7 @@
     const SEARCH_API_URL = "/api/v1/scans";
     const SEARCH_COUNT_API_URL = "/api/v1/scans/count";
     const SCANNERS_API_URL = "/api/v1/scanners";
-    const DEFAULT_PAGE_SIZE = 25;
+    const DEFAULT_PAGE_SIZE = 10;
     const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 200];
     const FEDEX_TRACKING_DIGITS = 34;
     const NO_RESULTS_MESSAGE = "No results were found based on your search";
@@ -177,6 +185,7 @@
     const input = document.getElementById("tracking-number");
     const startDateInput = document.getElementById("start-date");
     const endDateInput = document.getElementById("end-date");
+    const datePresetButtons = Array.from(document.querySelectorAll("[data-date-preset]"));
     const statusElement = document.getElementById("search-status");
     const fedexTrackingLink = document.getElementById("fedex-tracking-link");
     const fedexTrackingAnchor = document.getElementById("fedex-tracking-anchor");
@@ -222,6 +231,12 @@
       runPage(lastSearchRequest.page + 1);
     });
 
+    for (const button of datePresetButtons) {
+      button.addEventListener("click", () => {
+        applyDatePreset(button.dataset.datePreset);
+      });
+    }
+
     function setDefaultDates() {
       const today = new Date();
       const start = new Date(today);
@@ -229,6 +244,47 @@
 
       startDateInput.value = formatDateInput(start);
       endDateInput.value = formatDateInput(today);
+    }
+
+    function applyDatePreset(preset) {
+      const today = new Date();
+      const start = new Date(today);
+      const end = new Date(today);
+
+      switch (preset) {
+        case "today":
+          break;
+        case "yesterday":
+          start.setDate(today.getDate() - 1);
+          end.setDate(today.getDate() - 1);
+          break;
+        case "last-7":
+          start.setDate(today.getDate() - 7);
+          break;
+        case "last-30":
+          start.setDate(today.getDate() - 30);
+          break;
+        case "last-year":
+          start.setDate(today.getDate() - 365);
+          break;
+        case "all-time":
+          startDateInput.value = "";
+          endDateInput.value = "";
+          rerunSearchAfterDatePreset();
+          return;
+        default:
+          return;
+      }
+
+      startDateInput.value = formatDateInput(start);
+      endDateInput.value = formatDateInput(end);
+      rerunSearchAfterDatePreset();
+    }
+
+    function rerunSearchAfterDatePreset() {
+      if (lastSearchRequest) {
+        startSearch(1);
+      }
     }
 
     function startSearch(page = 1) {

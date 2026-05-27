@@ -443,13 +443,25 @@ tr:last-child td {
   gap: 12px;
 }
 
+.results-card h2 {
+  margin-bottom: 5px;
+}
+
 .result-toolbar {
-  align-items: end;
+  align-items: start;
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
+}
+
+.result-summary {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.35;
+  margin-top: 2px;
+  word-break: break-word;
 }
 
 .result-page-size {
@@ -486,6 +498,7 @@ tr:last-child td {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  align-items: end;
 }
 
 .date-controls .search-label {
@@ -512,6 +525,33 @@ tr:last-child td {
 
 .date-input {
   flex-basis: 180px;
+}
+
+.date-preset-controls {
+  display: flex;
+  flex: 1 1 420px;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
+.date-preset-button {
+  background: #020617;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 10px 12px;
+}
+
+.date-preset-button:hover,
+.date-preset-button:focus {
+  border-color: rgba(34, 197, 94, 0.78);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.16);
 }
 
 .search-input:focus,
