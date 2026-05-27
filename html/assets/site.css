@@ -443,24 +443,24 @@ tr:last-child td {
   gap: 12px;
 }
 
-.results-card h2 {
-  margin-bottom: 5px;
-}
-
-.result-toolbar {
+.results-header {
   align-items: start;
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 10px;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
+}
+
+.results-card h2 {
+  margin: 0;
 }
 
 .result-summary {
   color: var(--muted);
   font-size: 14px;
   line-height: 1.35;
-  margin-top: 2px;
+  margin: 0 0 4px 0;
   word-break: break-word;
 }
 
@@ -582,8 +582,8 @@ tr:last-child td {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin: 12px 0;
+  gap: 8px;
+  margin: 4px 0 6px;
 }
 
 .pagination:empty {
