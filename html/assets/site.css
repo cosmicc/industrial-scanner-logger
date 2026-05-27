@@ -592,6 +592,10 @@ tr:last-child td {
   margin: 0 0 5px;
 }
 
+.pagination-bottom {
+  margin: 7px 0 0;
+}
+
 .pagination:empty {
   display: none;
 }
@@ -599,6 +603,8 @@ tr:last-child td {
 .pagination-label {
   color: var(--muted);
   font-weight: 700;
+  margin-left: 2px;
+  white-space: nowrap;
 }
 
 .pagination .button {

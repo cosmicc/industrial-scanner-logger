@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - Add search date preset buttons for Today, Yesterday, Last 7 Days, Last 30 Days, Last Year, and All Time.
 - Default search results to 10 rows per page and tighten the Results card header controls.
 - Add Last-page and compact numbered page controls to search result pagination.
+- Mirror search pagination below the results table and clarify tracking search length options.
 
 ## 1.2.1 - 2026-05-24 (Pre-release)
 

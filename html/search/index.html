@@ -36,7 +36,7 @@
             </select>
           </label>
           <label class="search-label search-field search-field-wide" for="tracking-number">
-            Tracking Number
+            Tracking Number (full 34 digits or last 10)
             <input
               id="tracking-number"
               class="search-input"
@@ -93,12 +93,12 @@
           </select>
         </label>
       </div>
-      <div id="pagination-controls" class="pagination" hidden>
-        <button id="previous-page" class="button" type="button">Previous</button>
-        <div id="page-number-controls" class="page-number-controls" aria-label="Page selector"></div>
-        <span id="page-status" class="pagination-label">Page 1</span>
-        <button id="next-page" class="button" type="button">Next</button>
-        <button id="last-page" class="button" type="button">Last</button>
+      <div class="pagination" data-pagination-placement="top" hidden>
+        <button class="button page-previous" type="button">Previous</button>
+        <div class="page-number-controls" aria-label="Page selector"></div>
+        <button class="button page-next" type="button">Next</button>
+        <button class="button page-last" type="button">Last</button>
+        <span class="pagination-label page-status">Total results found: 0</span>
       </div>
       <div class="table-wrap">
         <table>
@@ -123,6 +123,12 @@
             </tr>
           </tbody>
         </table>
+      </div>
+      <div class="pagination pagination-bottom" data-pagination-placement="bottom" hidden>
+        <button class="button page-previous" type="button">Previous</button>
+        <div class="page-number-controls" aria-label="Page selector"></div>
+        <button class="button page-next" type="button">Next</button>
+        <button class="button page-last" type="button">Last</button>
       </div>
     </section>
 
@@ -195,12 +201,7 @@
     const fedexTrackingAnchor = document.getElementById("fedex-tracking-anchor");
     const summaryElement = document.getElementById("result-summary");
     const resultsBody = document.getElementById("search-results");
-    const paginationControls = document.getElementById("pagination-controls");
-    const previousPageButton = document.getElementById("previous-page");
-    const nextPageButton = document.getElementById("next-page");
-    const lastPageButton = document.getElementById("last-page");
-    const pageNumberControls = document.getElementById("page-number-controls");
-    const pageStatusElement = document.getElementById("page-status");
+    const paginationBars = Array.from(document.querySelectorAll("[data-pagination-placement]"));
 
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -221,29 +222,31 @@
       }
     });
 
-    previousPageButton.addEventListener("click", () => {
-      if (!lastSearchRequest || lastSearchRequest.page <= 1) {
-        return;
-      }
+    for (const paginationBar of paginationBars) {
+      paginationBar.querySelector(".page-previous").addEventListener("click", () => {
+        if (!lastSearchRequest || lastSearchRequest.page <= 1) {
+          return;
+        }
 
-      runPage(lastSearchRequest.page - 1);
-    });
+        runPage(lastSearchRequest.page - 1);
+      });
 
-    nextPageButton.addEventListener("click", () => {
-      if (!lastSearchRequest) {
-        return;
-      }
+      paginationBar.querySelector(".page-next").addEventListener("click", () => {
+        if (!lastSearchRequest) {
+          return;
+        }
 
-      runPage(lastSearchRequest.page + 1);
-    });
+        runPage(lastSearchRequest.page + 1);
+      });
 
-    lastPageButton.addEventListener("click", () => {
-      if (!lastSearchRequest) {
-        return;
-      }
+      paginationBar.querySelector(".page-last").addEventListener("click", () => {
+        if (!lastSearchRequest) {
+          return;
+        }
 
-      runPage(totalPageCount(lastSearchRequest));
-    });
+        runPage(totalPageCount(lastSearchRequest));
+      });
+    }
 
     for (const button of datePresetButtons) {
       button.addEventListener("click", () => {
@@ -520,26 +523,42 @@
 
     function updatePaginationControls(request, hasNext, isLoading = false) {
       if (!request) {
-        paginationControls.hidden = true;
-        previousPageButton.disabled = true;
-        nextPageButton.disabled = true;
-        lastPageButton.disabled = true;
-        pageNumberControls.innerHTML = "";
-        pageStatusElement.textContent = "Page 1";
+        for (const paginationBar of paginationBars) {
+          paginationBar.hidden = true;
+          paginationBar.querySelector(".page-previous").disabled = true;
+          paginationBar.querySelector(".page-next").disabled = true;
+          paginationBar.querySelector(".page-last").disabled = true;
+          paginationBar.querySelector(".page-number-controls").innerHTML = "";
+
+          const pageStatusElement = paginationBar.querySelector(".page-status");
+          if (pageStatusElement) {
+            pageStatusElement.textContent = "Total results found: 0";
+          }
+        }
         return;
       }
 
-      paginationControls.hidden = false;
-      previousPageButton.disabled = isLoading || request.page <= 1;
-      nextPageButton.disabled = isLoading || !hasNext;
-      lastPageButton.disabled = isLoading || !hasNext;
-      renderPageNumberControls(request, isLoading);
-      pageStatusElement.textContent = isLoading
-        ? `Loading page ${request.page}...`
-        : `Total results found: ${formatCount(request.totalResults)}`;
+      for (const paginationBar of paginationBars) {
+        paginationBar.hidden = false;
+        paginationBar.querySelector(".page-previous").disabled = isLoading || request.page <= 1;
+        paginationBar.querySelector(".page-next").disabled = isLoading || !hasNext;
+        paginationBar.querySelector(".page-last").disabled = isLoading || !hasNext;
+        renderPageNumberControls(
+          paginationBar.querySelector(".page-number-controls"),
+          request,
+          isLoading
+        );
+
+        const pageStatusElement = paginationBar.querySelector(".page-status");
+        if (pageStatusElement) {
+          pageStatusElement.textContent = isLoading
+            ? `Loading page ${request.page}...`
+            : `Total results found: ${formatCount(request.totalResults)}`;
+        }
+      }
     }
 
-    function renderPageNumberControls(request, isLoading) {
+    function renderPageNumberControls(pageNumberControls, request, isLoading) {
       pageNumberControls.innerHTML = "";
 
       if (!Number.isFinite(Number(request.totalResults))) {
