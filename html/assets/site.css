@@ -606,6 +606,50 @@ tr:last-child td {
   padding: 8px 12px;
 }
 
+.page-number-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.page-number-button {
+  min-width: 34px;
+  background: #020617;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 7px 9px;
+}
+
+.page-number-button:hover,
+.page-number-button:focus {
+  border-color: rgba(34, 197, 94, 0.78);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.16);
+}
+
+.page-number-button.active,
+.page-number-button:disabled {
+  cursor: default;
+}
+
+.page-number-button.active {
+  background: var(--green);
+  border-color: var(--green);
+  color: #052e16;
+}
+
+.page-ellipsis {
+  color: var(--muted);
+  font-weight: 800;
+  padding: 0 3px;
+}
+
 .tv-body {
   background: #081014;
   overflow: hidden;

@@ -95,8 +95,10 @@
       </div>
       <div id="pagination-controls" class="pagination" hidden>
         <button id="previous-page" class="button" type="button">Previous</button>
+        <div id="page-number-controls" class="page-number-controls" aria-label="Page selector"></div>
         <span id="page-status" class="pagination-label">Page 1</span>
         <button id="next-page" class="button" type="button">Next</button>
+        <button id="last-page" class="button" type="button">Last</button>
       </div>
       <div class="table-wrap">
         <table>
@@ -196,6 +198,8 @@
     const paginationControls = document.getElementById("pagination-controls");
     const previousPageButton = document.getElementById("previous-page");
     const nextPageButton = document.getElementById("next-page");
+    const lastPageButton = document.getElementById("last-page");
+    const pageNumberControls = document.getElementById("page-number-controls");
     const pageStatusElement = document.getElementById("page-status");
 
     form.addEventListener("submit", (event) => {
@@ -231,6 +235,14 @@
       }
 
       runPage(lastSearchRequest.page + 1);
+    });
+
+    lastPageButton.addEventListener("click", () => {
+      if (!lastSearchRequest) {
+        return;
+      }
+
+      runPage(totalPageCount(lastSearchRequest));
     });
 
     for (const button of datePresetButtons) {
@@ -511,6 +523,8 @@
         paginationControls.hidden = true;
         previousPageButton.disabled = true;
         nextPageButton.disabled = true;
+        lastPageButton.disabled = true;
+        pageNumberControls.innerHTML = "";
         pageStatusElement.textContent = "Page 1";
         return;
       }
@@ -518,10 +532,100 @@
       paginationControls.hidden = false;
       previousPageButton.disabled = isLoading || request.page <= 1;
       nextPageButton.disabled = isLoading || !hasNext;
-      const totalPages = totalPageCount(request);
+      lastPageButton.disabled = isLoading || !hasNext;
+      renderPageNumberControls(request, isLoading);
       pageStatusElement.textContent = isLoading
         ? `Loading page ${request.page}...`
-        : `Page ${request.page} of ${formatCount(totalPages)} · Total results found: ${formatCount(request.totalResults)}`;
+        : `Total results found: ${formatCount(request.totalResults)}`;
+    }
+
+    function renderPageNumberControls(request, isLoading) {
+      pageNumberControls.innerHTML = "";
+
+      if (!Number.isFinite(Number(request.totalResults))) {
+        return;
+      }
+
+      for (const item of paginationItems(request.page, totalPageCount(request))) {
+        if (item === "ellipsis") {
+          const ellipsis = document.createElement("span");
+          ellipsis.className = "page-ellipsis";
+          ellipsis.textContent = "...";
+          pageNumberControls.appendChild(ellipsis);
+          continue;
+        }
+
+        const button = document.createElement("button");
+        button.className = "page-number-button";
+        button.type = "button";
+        button.textContent = String(item);
+        button.disabled = isLoading || item === request.page;
+        button.setAttribute("aria-label", `Page ${item}`);
+
+        if (item === request.page) {
+          button.classList.add("active");
+          button.setAttribute("aria-current", "page");
+        } else {
+          button.addEventListener("click", () => {
+            runPage(item);
+          });
+        }
+
+        pageNumberControls.appendChild(button);
+      }
+    }
+
+    function paginationItems(currentPage, totalPages) {
+      if (totalPages <= 7) {
+        return pageRange(1, totalPages);
+      }
+
+      const pages = new Set([1, totalPages]);
+
+      if (currentPage <= 4) {
+        for (const page of pageRange(2, 5)) {
+          pages.add(page);
+        }
+      } else if (currentPage >= totalPages - 3) {
+        for (const page of pageRange(totalPages - 4, totalPages - 1)) {
+          pages.add(page);
+        }
+      } else {
+        for (const page of pageRange(currentPage - 2, currentPage + 2)) {
+          pages.add(page);
+        }
+      }
+
+      const sortedPages = Array.from(pages).sort((a, b) => a - b);
+      const items = [];
+
+      for (const page of sortedPages) {
+        const previous = items[items.length - 1];
+
+        if (typeof previous === "number") {
+          const gap = page - previous;
+
+          if (gap === 2) {
+            items.push(previous + 1);
+          } else if (gap > 2) {
+            items.push("ellipsis");
+          }
+        }
+
+        items.push(page);
+      }
+
+      return items;
+    }
+
+    function pageRange(start, end) {
+      const pages = [];
+
+      for (let page = Math.max(1, start); page <= end; page += 1) {
+        pages.push(page);
+      }
+
+      return pages;
     }
 
     function totalPageCount(request) {
