@@ -9,7 +9,7 @@
 <body class="tv-body">
   <main class="tv-page">
     <header class="tv-header">
-      <div id="tv-status" class="tv-status">Checking</div>
+      <div id="tv-status" class="tv-status">CHECKING</div>
     </header>
 
     <div id="tv-warning" class="tv-warning" hidden></div>
@@ -110,7 +110,7 @@
 
     function setSystemStatus(isOk) {
       const status = document.getElementById("tv-status");
-      status.textContent = isOk ? "System Ok" : "System Problem";
+      status.textContent = isOk ? "SYSTEM OK" : "SYSTEM PROBLEM";
       status.classList.toggle("offline", !isOk);
     }
 
