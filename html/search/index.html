@@ -143,7 +143,8 @@
     const SCANNERS_API_URL = "/api/v1/scanners";
     const DEFAULT_PAGE_SIZE = 10;
     const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 200];
-    const FEDEX_TRACKING_DIGITS = 34;
+    const FEDEX_FULL_BARCODE_DIGITS = 34;
+    const FEDEX_TRACKING_DIGITS = 12;
     const NO_RESULTS_MESSAGE = "No results were found based on your search";
     const SEARCH_MODES = {
       tracking: {
@@ -745,7 +746,7 @@
     }
 
     function trackingValueForFedEx(row) {
-      return row.barcode || row.tracking_number || "";
+      return row.tracking_number || row.barcode || "";
     }
 
     function scannerDisplayName(row) {
@@ -781,11 +782,15 @@
     function fedExTrackingNumberFromValue(value) {
       const digits = String(value || "").replace(/\D/g, "");
 
-      if (digits.length < FEDEX_TRACKING_DIGITS) {
-        return "";
+      if (digits.length >= FEDEX_FULL_BARCODE_DIGITS) {
+        return digits.slice(-FEDEX_FULL_BARCODE_DIGITS);
       }
 
-      return digits.slice(-FEDEX_TRACKING_DIGITS);
+      if (digits.length === FEDEX_TRACKING_DIGITS) {
+        return digits;
+      }
+
+      return "";
     }
 
     function renderEmptyResults(message, isError = false) {

@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
 
     scanner_name TEXT,
 
-    scanner_role TEXT NOT NULL DEFAULT 'standard',
+    scanner_role TEXT NOT NULL DEFAULT 'standard'
+        CHECK (scanner_role IN ('standard', 'last')),
 
     last_scanner_id SMALLINT CHECK (last_scanner_id BETWEEN 0 AND 255),
 
@@ -50,209 +51,62 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
     ) STORED
 );
 
-DROP VIEW IF EXISTS scanner_logger.successful_scans_missing_last_scanner;
-DROP VIEW IF EXISTS scanner_logger.successful_scan_progression;
-DROP VIEW IF EXISTS scanner_logger.duplicate_successful_scans;
-DROP VIEW IF EXISTS scanner_logger.successful_scans;
-DROP VIEW IF EXISTS scanner_logger.failed_scans;
-DROP VIEW IF EXISTS scanner_logger.daily_scan_totals_all_scanners;
-DROP VIEW IF EXISTS scanner_logger.daily_scan_totals;
-
-DROP INDEX IF EXISTS scanner_logger.idx_scan_events_cross_scanner_duplicate;
-
-ALTER TABLE scanner_logger.scan_events
-    ADD COLUMN IF NOT EXISTS scanner_name TEXT;
-
-ALTER TABLE scanner_logger.scan_events
-    ADD COLUMN IF NOT EXISTS scanner_role TEXT NOT NULL DEFAULT 'standard';
-
-ALTER TABLE scanner_logger.scan_events
-    ADD COLUMN IF NOT EXISTS last_scanner_id SMALLINT;
-
-ALTER TABLE scanner_logger.scan_events
-    ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN NOT NULL DEFAULT false;
-
-ALTER TABLE scanner_logger.scan_events
-    DROP COLUMN IF EXISTS is_cross_scanner_duplicate;
-
-ALTER TABLE scanner_logger.scan_events
-    ADD COLUMN IF NOT EXISTS is_repaired BOOLEAN NOT NULL DEFAULT false;
-
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-        FROM pg_attribute
-        WHERE attrelid = 'scanner_logger.scan_events'::regclass
-          AND attname = 'barcode'
-          AND attgenerated <> ''
-    ) THEN
-        ALTER TABLE scanner_logger.scan_events
-            ALTER COLUMN barcode DROP EXPRESSION;
-    END IF;
-END $$;
-
-ALTER TABLE scanner_logger.scan_events
-    ADD COLUMN IF NOT EXISTS barcode TEXT;
-
-UPDATE scanner_logger.scan_events
-SET barcode = NULLIF(btrim(tracking_number, E' \t\r\n'), '')
-WHERE barcode IS NULL;
-
-ALTER TABLE scanner_logger.scan_events
-    ALTER COLUMN barcode SET NOT NULL;
-
-ALTER TABLE scanner_logger.scan_events
-    DROP COLUMN IF EXISTS barcode_length;
-
-ALTER TABLE scanner_logger.scan_events
-    ADD COLUMN barcode_length INTEGER GENERATED ALWAYS AS (
-        char_length(NULLIF(btrim(barcode, E' \t\r\n'), ''))
-    ) STORED;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'ck_scan_events_scanner_role'
-          AND conrelid = 'scanner_logger.scan_events'::regclass
-    ) THEN
-        ALTER TABLE scanner_logger.scan_events
-            ADD CONSTRAINT ck_scan_events_scanner_role
-            CHECK (scanner_role IN ('standard', 'last'));
-    END IF;
-
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'ck_scan_events_last_scanner_id'
-          AND conrelid = 'scanner_logger.scan_events'::regclass
-    ) THEN
-        ALTER TABLE scanner_logger.scan_events
-            ADD CONSTRAINT ck_scan_events_last_scanner_id
-            CHECK (last_scanner_id BETWEEN 0 AND 255);
-    END IF;
-
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'ck_scan_events_barcode_present'
-          AND conrelid = 'scanner_logger.scan_events'::regclass
-    ) THEN
-        ALTER TABLE scanner_logger.scan_events
-            ADD CONSTRAINT ck_scan_events_barcode_present
-            CHECK (btrim(barcode, E' \t\r\n') <> '');
-    END IF;
-END $$;
-
 CREATE TABLE IF NOT EXISTS scanner_logger.raw_scan_events (
-    LIKE scanner_logger.scan_events
-    INCLUDING DEFAULTS
-    INCLUDING GENERATED
-    INCLUDING IDENTITY
-    INCLUDING CONSTRAINTS
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+
+    scan_date DATE NOT NULL,
+
+    scan_time TIME(0) NOT NULL,
+
+    scanner_id SMALLINT NOT NULL CHECK (scanner_id BETWEEN 0 AND 255),
+
+    scanner_name TEXT,
+
+    scanner_role TEXT NOT NULL DEFAULT 'standard'
+        CHECK (scanner_role IN ('standard', 'last')),
+
+    last_scanner_id SMALLINT CHECK (last_scanner_id BETWEEN 0 AND 255),
+
+    is_duplicate BOOLEAN NOT NULL DEFAULT false,
+
+    is_repaired BOOLEAN NOT NULL DEFAULT false,
+
+    tracking_number TEXT NOT NULL CHECK (btrim(tracking_number, E' \t\r\n') <> ''),
+
+    barcode TEXT NOT NULL CHECK (btrim(barcode, E' \t\r\n') <> ''),
+
+    barcode_length INTEGER GENERATED ALWAYS AS (
+        char_length(NULLIF(btrim(barcode, E' \t\r\n'), ''))
+    ) STORED,
+
+    is_success BOOLEAN GENERATED ALWAYS AS (
+        COALESCE(NULLIF(btrim(barcode, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
+    ) STORED,
+
+    failure_reason TEXT GENERATED ALWAYS AS (
+        CASE
+            WHEN COALESCE(NULLIF(btrim(barcode, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
+                THEN NULL
+            WHEN NULLIF(btrim(barcode, E' \t\r\n'), '') IS NULL
+                THEN 'empty'
+            WHEN btrim(barcode, E' \t\r\n') !~ '^[0-9]+$'
+                THEN 'non_numeric'
+            WHEN char_length(btrim(barcode, E' \t\r\n')) < 34
+                THEN 'too_short'
+            WHEN char_length(btrim(barcode, E' \t\r\n')) > 34
+                THEN 'too_long'
+            ELSE 'invalid'
+        END
+    ) STORED
 );
-
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'raw_scan_events_pkey'
-          AND conrelid = 'scanner_logger.raw_scan_events'::regclass
-    ) THEN
-        ALTER TABLE scanner_logger.raw_scan_events
-            ADD CONSTRAINT raw_scan_events_pkey PRIMARY KEY (id);
-    END IF;
-END $$;
-
-ALTER TABLE scanner_logger.raw_scan_events
-    ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN NOT NULL DEFAULT false;
-
-ALTER TABLE scanner_logger.raw_scan_events
-    DROP COLUMN IF EXISTS is_cross_scanner_duplicate;
-
-UPDATE scanner_logger.scan_events
-SET barcode = tracking_number
-WHERE tracking_number ~ '^[0-9]{34}$'
-  AND barcode !~ '^[0-9]{34}$';
-
-UPDATE scanner_logger.scan_events
-SET tracking_number = right(barcode, 12)
-WHERE barcode ~ '^[0-9]{34}$';
-
-UPDATE scanner_logger.raw_scan_events
-SET barcode = tracking_number
-WHERE tracking_number ~ '^[0-9]{34}$'
-  AND barcode !~ '^[0-9]{34}$';
-
-UPDATE scanner_logger.raw_scan_events
-SET tracking_number = right(barcode, 12)
-WHERE barcode ~ '^[0-9]{34}$';
-
-ALTER TABLE scanner_logger.scan_events
-    DROP COLUMN IF EXISTS failure_reason;
-
-ALTER TABLE scanner_logger.scan_events
-    DROP COLUMN IF EXISTS is_success;
-
-ALTER TABLE scanner_logger.scan_events
-    ADD COLUMN is_success BOOLEAN GENERATED ALWAYS AS (
-        COALESCE(NULLIF(btrim(barcode, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
-    ) STORED;
-
-ALTER TABLE scanner_logger.scan_events
-    ADD COLUMN failure_reason TEXT GENERATED ALWAYS AS (
-        CASE
-            WHEN COALESCE(NULLIF(btrim(barcode, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
-                THEN NULL
-            WHEN NULLIF(btrim(barcode, E' \t\r\n'), '') IS NULL
-                THEN 'empty'
-            WHEN btrim(barcode, E' \t\r\n') !~ '^[0-9]+$'
-                THEN 'non_numeric'
-            WHEN char_length(btrim(barcode, E' \t\r\n')) < 34
-                THEN 'too_short'
-            WHEN char_length(btrim(barcode, E' \t\r\n')) > 34
-                THEN 'too_long'
-            ELSE 'invalid'
-        END
-    ) STORED;
-
-ALTER TABLE scanner_logger.raw_scan_events
-    DROP COLUMN IF EXISTS failure_reason;
-
-ALTER TABLE scanner_logger.raw_scan_events
-    DROP COLUMN IF EXISTS is_success;
-
-ALTER TABLE scanner_logger.raw_scan_events
-    ADD COLUMN is_success BOOLEAN GENERATED ALWAYS AS (
-        COALESCE(NULLIF(btrim(barcode, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
-    ) STORED;
-
-ALTER TABLE scanner_logger.raw_scan_events
-    ADD COLUMN failure_reason TEXT GENERATED ALWAYS AS (
-        CASE
-            WHEN COALESCE(NULLIF(btrim(barcode, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
-                THEN NULL
-            WHEN NULLIF(btrim(barcode, E' \t\r\n'), '') IS NULL
-                THEN 'empty'
-            WHEN btrim(barcode, E' \t\r\n') !~ '^[0-9]+$'
-                THEN 'non_numeric'
-            WHEN char_length(btrim(barcode, E' \t\r\n')) < 34
-                THEN 'too_short'
-            WHEN char_length(btrim(barcode, E' \t\r\n')) > 34
-                THEN 'too_long'
-            ELSE 'invalid'
-        END
-    ) STORED;
 
 CREATE TABLE IF NOT EXISTS scanner_logger.pending_orders (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 
     order_timestamp TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL DEFAULT localtimestamp(0),
 
-    status TEXT NOT NULL DEFAULT 'pending',
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (btrim(status, E' \t\r\n') <> ''),
 
     tracking_number TEXT,
 
@@ -262,59 +116,6 @@ CREATE TABLE IF NOT EXISTS scanner_logger.pending_orders (
 
     notes TEXT
 );
-
-ALTER TABLE scanner_logger.pending_orders
-    ADD COLUMN IF NOT EXISTS order_timestamp TIMESTAMP(0) WITHOUT TIME ZONE
-    NOT NULL DEFAULT localtimestamp(0);
-
-ALTER TABLE scanner_logger.pending_orders
-    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
-
-ALTER TABLE scanner_logger.pending_orders
-    ADD COLUMN IF NOT EXISTS tracking_number TEXT;
-
-ALTER TABLE scanner_logger.pending_orders
-    ADD COLUMN IF NOT EXISTS so_number TEXT;
-
-ALTER TABLE scanner_logger.pending_orders
-    ADD COLUMN IF NOT EXISTS sku_number TEXT;
-
-ALTER TABLE scanner_logger.pending_orders
-    ADD COLUMN IF NOT EXISTS notes TEXT;
-
-UPDATE scanner_logger.pending_orders
-SET order_timestamp = localtimestamp(0)
-WHERE order_timestamp IS NULL;
-
-ALTER TABLE scanner_logger.pending_orders
-    ALTER COLUMN order_timestamp SET DEFAULT localtimestamp(0);
-
-ALTER TABLE scanner_logger.pending_orders
-    ALTER COLUMN order_timestamp SET NOT NULL;
-
-UPDATE scanner_logger.pending_orders
-SET status = 'pending'
-WHERE status IS NULL OR btrim(status, E' \t\r\n') = '';
-
-ALTER TABLE scanner_logger.pending_orders
-    ALTER COLUMN status SET DEFAULT 'pending';
-
-ALTER TABLE scanner_logger.pending_orders
-    ALTER COLUMN status SET NOT NULL;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'ck_pending_orders_status_present'
-          AND conrelid = 'scanner_logger.pending_orders'::regclass
-    ) THEN
-        ALTER TABLE scanner_logger.pending_orders
-            ADD CONSTRAINT ck_pending_orders_status_present
-            CHECK (btrim(status, E' \t\r\n') <> '');
-    END IF;
-END $$;
 
 CREATE INDEX IF NOT EXISTS idx_scan_events_scan_date_time
     ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC);
@@ -339,19 +140,13 @@ CREATE INDEX IF NOT EXISTS idx_scan_events_duplicate
     ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC)
     WHERE is_duplicate = true;
 
-DROP INDEX IF EXISTS scanner_logger.idx_scan_events_success_barcode_scan_date_time;
-
 CREATE INDEX IF NOT EXISTS idx_scan_events_success_tracking_scan_date_time
     ON scanner_logger.scan_events (tracking_number, scan_date DESC, scan_time DESC, id DESC)
     WHERE is_success = true;
 
-DROP INDEX IF EXISTS scanner_logger.idx_scan_events_scanner_barcode_scan_date_time;
-
 CREATE INDEX IF NOT EXISTS idx_scan_events_scanner_tracking_scan_date_time
     ON scanner_logger.scan_events (scanner_id, tracking_number, scan_date DESC, scan_time DESC, id DESC)
     WHERE is_success = true;
-
-DROP INDEX IF EXISTS scanner_logger.idx_scan_events_last_scanner_tracking;
 
 CREATE INDEX IF NOT EXISTS idx_scan_events_last_scanner_tracking
     ON scanner_logger.scan_events (scan_date, tracking_number, last_scanner_id, scanner_id)
