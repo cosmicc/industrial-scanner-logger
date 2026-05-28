@@ -70,7 +70,7 @@
       <div class="tv-duplicate-action">Remove This Package</div>
       <div class="tv-duplicate-details">
         <div>
-          <div class="tv-duplicate-label">Last 10 Barcode Digits</div>
+          <div class="tv-duplicate-label">Tracking Number</div>
           <div id="tv-duplicate-barcode" class="tv-duplicate-value">----------</div>
         </div>
         <div>
@@ -104,9 +104,14 @@
         const data = await response.json();
         renderDashboard(data);
       } catch (error) {
-        document.getElementById("tv-status").textContent = "Offline";
-        document.getElementById("tv-status").classList.add("offline");
+        setSystemStatus(false);
       }
+    }
+
+    function setSystemStatus(isOk) {
+      const status = document.getElementById("tv-status");
+      status.textContent = isOk ? "System Ok" : "System Problem";
+      status.classList.toggle("offline", !isOk);
     }
 
     function renderDashboard(data) {
@@ -114,11 +119,9 @@
       const totals = data.daily_totals || {};
       const today = totals.today || {};
       const mandatoryScanners = data.mandatory_scanners || {};
-      const status = document.getElementById("tv-status");
       const warning = document.getElementById("tv-warning");
 
-      status.textContent = (data.status || "unknown").toUpperCase();
-      status.classList.toggle("offline", data.status !== "ok");
+      setSystemStatus(data.status === "ok");
       configureTvRefresh(data.tv_dashboard_refresh_seconds);
 
       if (mandatoryScanners.warning) {
@@ -245,9 +248,9 @@
         ? remainingSeconds
         : DEFAULT_TV_DUPLICATE_ALERT_SECONDS;
       const overlay = document.getElementById("tv-duplicate-alert");
-      const barcodeDigits = alert.barcode_last_10 || lastDigits(
+      const barcodeDigits = alert.tracking_number || alert.barcode_last_12 || lastDigits(
         alert.barcode || alert.tracking_number || "",
-        10
+        12
       );
       const scannerName = scannerDisplayName(alert) || "Unknown Scanner";
 

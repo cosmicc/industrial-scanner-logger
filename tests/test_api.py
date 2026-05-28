@@ -1,7 +1,7 @@
 import importlib.util
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 HAS_API_DEPS = all(
@@ -26,6 +26,8 @@ class ApiQueryTests(unittest.TestCase):
         self.assertIn("/v1/scans", route_paths)
         self.assertIn("/v1/scans/count", route_paths)
         self.assertIn("/v1/scanners", route_paths)
+        self.assertIn("/v1/pending-orders", route_paths)
+        self.assertIn("/v1/pending-orders/count", route_paths)
         self.assertNotIn("/api/v1/health", route_paths)
 
     def test_normalize_root_path_rejects_relative_paths(self):
@@ -61,11 +63,11 @@ class ApiQueryTests(unittest.TestCase):
             ],
         )
 
-    def test_build_scan_events_query_matches_last_10_tracking_digits(self):
+    def test_build_scan_events_query_matches_last_12_tracking_digits(self):
         from industrial_scanner_logger.api import build_scan_events_query
 
         _query, params = build_scan_events_query(
-            barcode="1234567890",
+            barcode="123456789012",
             limit=25,
             offset=50,
         )
@@ -73,12 +75,12 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(
             params,
             [
-                "1234567890",
-                10,
-                "1234567890",
-                "1234567890",
-                10,
-                "1234567890",
+                "123456789012",
+                12,
+                "123456789012",
+                "123456789012",
+                12,
+                "123456789012",
                 25,
                 50,
             ],
@@ -113,7 +115,7 @@ class ApiQueryTests(unittest.TestCase):
             start_date=date(2026, 5, 17),
             end_date=date(2026, 5, 18),
             scanner_id=20,
-            barcode="1234567890",
+            barcode="123456789012",
             is_success=True,
             is_duplicate=True,
             is_repaired=False,
@@ -125,26 +127,79 @@ class ApiQueryTests(unittest.TestCase):
                 date(2026, 5, 17),
                 date(2026, 5, 18),
                 20,
-                "1234567890",
-                10,
-                "1234567890",
-                "1234567890",
-                10,
-                "1234567890",
+                "123456789012",
+                12,
+                "123456789012",
+                "123456789012",
+                12,
+                "123456789012",
                 True,
                 True,
                 False,
             ],
         )
 
-    def test_tracking_suffix_search_accepts_only_last_10_digits(self):
+    def test_tracking_suffix_search_accepts_only_last_12_digits(self):
         from industrial_scanner_logger.api import is_tracking_suffix_search
 
-        self.assertTrue(is_tracking_suffix_search("1234567890"))
+        self.assertTrue(is_tracking_suffix_search("123456789012"))
         self.assertFalse(is_tracking_suffix_search("1" * 25))
-        self.assertFalse(is_tracking_suffix_search("1" * 9))
+        self.assertFalse(is_tracking_suffix_search("1" * 10))
+        self.assertFalse(is_tracking_suffix_search("1" * 11))
         self.assertFalse(is_tracking_suffix_search("1" * 34))
-        self.assertFalse(is_tracking_suffix_search("ABC4567890"))
+        self.assertFalse(is_tracking_suffix_search("ABC456789012"))
+
+    def test_build_pending_orders_query_collects_filters_and_pagination(self):
+        from industrial_scanner_logger.api import build_pending_orders_query
+
+        _query, params = build_pending_orders_query(
+            start_date=date(2026, 5, 17),
+            end_date=date(2026, 5, 18),
+            status="pending",
+            tracking_number="123456789012",
+            so_number="SO-100",
+            sku_number="SKU-200",
+            notes="rush",
+            limit=25,
+            offset=50,
+        )
+
+        self.assertEqual(
+            params,
+            [
+                datetime(2026, 5, 17),
+                datetime(2026, 5, 19),
+                "%pending%",
+                "123456789012",
+                12,
+                "123456789012",
+                "%SO-100%",
+                "%SKU-200%",
+                "%rush%",
+                25,
+                50,
+            ],
+        )
+
+    def test_build_pending_orders_count_query_collects_general_search(self):
+        from industrial_scanner_logger.api import build_pending_orders_count_query
+
+        _query, params = build_pending_orders_count_query(
+            search="123456789012",
+        )
+
+        self.assertEqual(
+            params,
+            [
+                "%123456789012%",
+                "%123456789012%",
+                12,
+                "123456789012",
+                "%123456789012%",
+                "%123456789012%",
+                "%123456789012%",
+            ],
+        )
 
     def test_view_query_rejects_unsupported_filters(self):
         from fastapi import HTTPException
@@ -455,7 +510,7 @@ class ApiQueryTests(unittest.TestCase):
                     "last_scanner_id": 21,
                     "is_duplicate": True,
                     "is_repaired": False,
-                    "tracking_number": "9612345678901234567890123456789012",
+                    "tracking_number": "123456789012",
                     "barcode": "9612345678901234567890123456789012",
                     "barcode_length": 34,
                     "is_success": True,
@@ -480,7 +535,7 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(db.cursor_instance.params, [timedelta(seconds=60)])
         self.assertEqual(alert["id"], 42)
         self.assertEqual(alert["display_name"], "Lane 1 Scanner")
-        self.assertEqual(alert["barcode_last_10"], "1234567890123456789012"[-10:])
+        self.assertEqual(alert["barcode_last_12"], "1234567890123456789012"[-12:])
         self.assertEqual(alert["alert_seconds"], 60)
         self.assertEqual(alert["alert_age_seconds"], 12.25)
         self.assertEqual(alert["alert_remaining_seconds"], 47.75)

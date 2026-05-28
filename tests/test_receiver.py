@@ -26,6 +26,7 @@ from industrial_scanner_logger.receiver import (  # noqa: E402
     reset_script_logging,
     scanner_id_for_postgresql,
     scanner_id_from_addr,
+    tracking_number_from_barcode,
 )
 
 
@@ -423,7 +424,7 @@ log_level = warning
             self.assertEqual(rows[0]["status"], "SUCCESS")
             self.assertEqual(rows[0]["is_duplicate"], "false")
             self.assertEqual(rows[0]["is_repaired"], "false")
-            self.assertEqual(rows[0]["tracking"], valid_tracking)
+            self.assertEqual(rows[0]["tracking"], tracking_number_from_barcode(valid_tracking))
 
     def test_failed_scans_migration_does_not_create_backup_file(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
@@ -525,7 +526,10 @@ log_level = warning
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["scanner_id"], "20")
             self.assertEqual(rows[0]["status"], "SUCCESS")
-            self.assertEqual(rows[0]["tracking"], valid_tracking.decode("ascii"))
+            self.assertEqual(
+                rows[0]["tracking"],
+                tracking_number_from_barcode(valid_tracking.decode("ascii")),
+            )
 
     def test_disabled_client_idle_timeout_keeps_scanner_until_data_arrives(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
@@ -579,7 +583,10 @@ log_level = warning
                 rows = list(csv.DictReader(f))
 
             self.assertEqual([row["scanner_id"] for row in rows], ["20", "21"])
-            self.assertEqual([row["tracking"] for row in rows], [valid_tracking] * 2)
+            self.assertEqual(
+                [row["tracking"] for row in rows],
+                [tracking_number_from_barcode(valid_tracking)] * 2,
+            )
             self.assertEqual([row["is_duplicate"] for row in rows], ["false"] * 2)
 
             logger._append_scan_totals_for_day("2026-05-16", logger.scanner_counts)
@@ -637,7 +644,7 @@ log_level = warning
             with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
                 rows = list(csv.DictReader(f))
 
-            self.assertEqual(rows[-1]["tracking"], tracking_a)
+            self.assertEqual(rows[-1]["tracking"], tracking_number_from_barcode(tracking_a))
             self.assertEqual(rows[-1]["is_duplicate"], "true")
 
     def test_same_scanner_repeat_before_three_different_successes_is_dropped(self):
@@ -662,9 +669,9 @@ log_level = warning
                 rows = list(csv.DictReader(f))
 
             self.assertEqual([row["tracking"] for row in rows], [
-                tracking_a,
-                tracking_b,
-                tracking_c,
+                tracking_number_from_barcode(tracking_a),
+                tracking_number_from_barcode(tracking_b),
+                tracking_number_from_barcode(tracking_c),
             ])
             self.assertEqual([row["is_duplicate"] for row in rows], ["false"] * 3)
 
@@ -695,7 +702,7 @@ log_level = warning
             )
             self.assertEqual(
                 postgresql_logger.duplicate_calls[0]["tracking_number"],
-                valid_tracking,
+                tracking_number_from_barcode(valid_tracking),
             )
 
     def test_database_duplicate_state_marks_regular_duplicate(self):
@@ -768,7 +775,10 @@ log_level = warning
                 r"^\d{2}:\d{2}:\d{2}$",
             )
             self.assertEqual(postgresql_logger.rows[0]["scanner_id"], "20")
-            self.assertEqual(postgresql_logger.rows[0]["tracking_number"], valid_tracking)
+            self.assertEqual(
+                postgresql_logger.rows[0]["tracking_number"],
+                tracking_number_from_barcode(valid_tracking),
+            )
             self.assertEqual(postgresql_logger.rows[0]["barcode"], valid_tracking)
             self.assertFalse(postgresql_logger.rows[0]["is_duplicate"])
             self.assertFalse(postgresql_logger.rows[0]["is_repaired"])
@@ -778,7 +788,7 @@ log_level = warning
             self.assertFalse(postgresql_logger.rows[1]["is_repaired"])
             self.assertEqual(
                 [row["tracking_number"] for row in postgresql_logger.raw_rows],
-                [valid_tracking, "__NO_READ__", numeric_short],
+                [tracking_number_from_barcode(valid_tracking), "__NO_READ__", numeric_short],
             )
             self.assertEqual(
                 [row["barcode"] for row in postgresql_logger.raw_rows],
@@ -819,9 +829,9 @@ log_level = warning
 
             self.assertEqual(rows[1]["status"], "SUCCESS")
             self.assertEqual(rows[1]["is_repaired"], "true")
-            self.assertEqual(rows[1]["tracking"], repaired_tracking)
-            self.assertEqual(postgresql_logger.rows[1]["tracking_number"], repaired_tracking)
-            self.assertEqual(postgresql_logger.rows[1]["barcode"], short_tracking)
+            self.assertEqual(rows[1]["tracking"], short_tracking)
+            self.assertEqual(postgresql_logger.rows[1]["tracking_number"], short_tracking)
+            self.assertEqual(postgresql_logger.rows[1]["barcode"], repaired_tracking)
             self.assertTrue(postgresql_logger.rows[1]["is_repaired"])
             self.assertEqual(postgresql_logger.raw_rows[1]["tracking_number"], short_tracking)
             self.assertEqual(postgresql_logger.raw_rows[1]["barcode"], short_tracking)
@@ -1010,7 +1020,7 @@ log_level = warning
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0]["scanner_id"], "UNKNOWN")
             self.assertEqual(rows[0]["status"], "SUCCESS")
-            self.assertEqual(rows[0]["tracking"], valid_tracking)
+            self.assertEqual(rows[0]["tracking"], tracking_number_from_barcode(valid_tracking))
             self.assertEqual(rows[1]["scanner_id"], "UNKNOWN")
             self.assertEqual(rows[1]["status"], "FAILED")
             self.assertEqual(rows[1]["tracking"], "")

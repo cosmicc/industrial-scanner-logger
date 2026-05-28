@@ -33,7 +33,7 @@ SCANNER_SCRIPT_LOG_PATH = Path("/var/log/industrial-scanner-logger.log")
 CURRENT_SCAN_RATE_WINDOW_SECONDS = 60
 CURRENT_SCAN_HOUR_WINDOW_SECONDS = 3600
 DAILY_CSV_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-TRACKING_SUFFIX_SEARCH_LENGTHS = {10}
+TRACKING_SUFFIX_SEARCH_LENGTHS = {12}
 
 SCAN_EVENT_COLUMNS = [
     "id",
@@ -50,6 +50,24 @@ SCAN_EVENT_COLUMNS = [
     "barcode_length",
     "is_success",
     "failure_reason",
+]
+
+PENDING_ORDER_COLUMNS = [
+    "id",
+    "order_timestamp",
+    "status",
+    "tracking_number",
+    "so_number",
+    "sku_number",
+    "notes",
+]
+
+PENDING_ORDER_TEXT_COLUMNS = [
+    "status",
+    "tracking_number",
+    "so_number",
+    "sku_number",
+    "notes",
 ]
 
 VIEW_DEFINITIONS = {
@@ -731,9 +749,9 @@ def fetch_active_duplicate_alert(db, config, alert_seconds: int) -> Optional[dic
         0,
         round(alert_seconds - alert_age_seconds, 3),
     )
-    alert["barcode_last_10"] = last_digits(
+    alert["barcode_last_12"] = last_digits(
         alert.get("barcode") or alert.get("tracking_number") or "",
-        10,
+        12,
     )
     return alert
 
@@ -1052,6 +1070,8 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans/count"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans/{{scan_id}}"),
+                external_path(request_root_path, f"{API_VERSION_PREFIX}/pending-orders"),
+                external_path(request_root_path, f"{API_VERSION_PREFIX}/pending-orders/count"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scanners"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/views"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/views/{{view_name}}"),
@@ -1126,6 +1146,59 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             is_success=is_success,
             is_duplicate=is_duplicate,
             is_repaired=is_repaired,
+        )
+        row = fetch_one(db, query, params)
+        return {"total_results": int(row.get("total_results") or 0)}
+
+    @app.get(f"{API_VERSION_PREFIX}/pending-orders")
+    def list_pending_orders(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        status: Optional[str] = None,
+        tracking_number: Optional[str] = None,
+        so_number: Optional[str] = None,
+        sku_number: Optional[str] = None,
+        notes: Optional[str] = None,
+        search: Optional[str] = None,
+        limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+        offset: int = Query(default=0, ge=0),
+        db=Depends(get_db),
+    ):
+        query, params = build_pending_orders_query(
+            start_date=start_date,
+            end_date=end_date,
+            status=status,
+            tracking_number=tracking_number,
+            so_number=so_number,
+            sku_number=sku_number,
+            notes=notes,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+        return fetch_all(db, query, params)
+
+    @app.get(f"{API_VERSION_PREFIX}/pending-orders/count")
+    def count_pending_orders(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        status: Optional[str] = None,
+        tracking_number: Optional[str] = None,
+        so_number: Optional[str] = None,
+        sku_number: Optional[str] = None,
+        notes: Optional[str] = None,
+        search: Optional[str] = None,
+        db=Depends(get_db),
+    ):
+        query, params = build_pending_orders_count_query(
+            start_date=start_date,
+            end_date=end_date,
+            status=status,
+            tracking_number=tracking_number,
+            so_number=so_number,
+            sku_number=sku_number,
+            notes=notes,
+            search=search,
         )
         row = fetch_one(db, query, params)
         return {"total_results": int(row.get("total_results") or 0)}
@@ -1341,6 +1414,96 @@ def build_scan_events_count_query(
     return query, params
 
 
+def pending_orders_filter_conditions(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    status: Optional[str] = None,
+    tracking_number: Optional[str] = None,
+    so_number: Optional[str] = None,
+    sku_number: Optional[str] = None,
+    notes: Optional[str] = None,
+    search: Optional[str] = None,
+):
+    conditions = []
+    params = []
+
+    if start_date is not None:
+        conditions.append(sql.SQL("order_timestamp >= %s"))
+        params.append(datetime.combine(start_date, datetime.min.time()))
+
+    if end_date is not None:
+        conditions.append(sql.SQL("order_timestamp < %s"))
+        params.append(datetime.combine(end_date + timedelta(days=1), datetime.min.time()))
+
+    add_text_filter(conditions, params, "status", status)
+    add_tracking_filter(conditions, params, "tracking_number", tracking_number)
+    add_text_filter(conditions, params, "so_number", so_number)
+    add_text_filter(conditions, params, "sku_number", sku_number)
+    add_text_filter(conditions, params, "notes", notes)
+    add_pending_order_search_filter(conditions, params, search)
+    return conditions, params
+
+
+def build_pending_orders_query(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    status: Optional[str] = None,
+    tracking_number: Optional[str] = None,
+    so_number: Optional[str] = None,
+    sku_number: Optional[str] = None,
+    notes: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = DEFAULT_LIMIT,
+    offset: int = 0,
+):
+    conditions, params = pending_orders_filter_conditions(
+        start_date=start_date,
+        end_date=end_date,
+        status=status,
+        tracking_number=tracking_number,
+        so_number=so_number,
+        sku_number=sku_number,
+        notes=notes,
+        search=search,
+    )
+
+    query = sql.SQL(
+        "SELECT {} FROM scanner_logger.pending_orders{} {} LIMIT %s OFFSET %s"
+    ).format(
+        column_list(PENDING_ORDER_COLUMNS),
+        where_clause(conditions),
+        sql.SQL("ORDER BY order_timestamp DESC, id DESC"),
+    )
+    params.extend([limit, offset])
+    return query, params
+
+
+def build_pending_orders_count_query(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    status: Optional[str] = None,
+    tracking_number: Optional[str] = None,
+    so_number: Optional[str] = None,
+    sku_number: Optional[str] = None,
+    notes: Optional[str] = None,
+    search: Optional[str] = None,
+):
+    conditions, params = pending_orders_filter_conditions(
+        start_date=start_date,
+        end_date=end_date,
+        status=status,
+        tracking_number=tracking_number,
+        so_number=so_number,
+        sku_number=sku_number,
+        notes=notes,
+        search=search,
+    )
+    query = sql.SQL("SELECT count(*) AS total_results FROM scanner_logger.pending_orders{}").format(
+        where_clause(conditions)
+    )
+    return query, params
+
+
 def add_boolean_filter(
     conditions: list,
     params: list,
@@ -1352,6 +1515,73 @@ def add_boolean_filter(
 
     conditions.append(sql.SQL("{} = %s").format(sql.Identifier(column_name)))
     params.append(value)
+
+
+def add_text_filter(
+    conditions: list,
+    params: list,
+    column_name: str,
+    value: Optional[str],
+):
+    value = clean_search_text(value)
+    if not value:
+        return
+
+    conditions.append(sql.SQL("{} ILIKE %s").format(sql.Identifier(column_name)))
+    params.append(contains_pattern(value))
+
+
+def add_tracking_filter(
+    conditions: list,
+    params: list,
+    column_name: str,
+    value: Optional[str],
+):
+    value = clean_search_text(value)
+    if not value:
+        return
+
+    column = sql.Identifier(column_name)
+    filter_parts = [sql.SQL("{} = %s").format(column)]
+    params.append(value)
+
+    if is_tracking_suffix_search(value):
+        filter_parts.append(sql.SQL("right({}, %s) = %s").format(column))
+        params.extend([len(value), value])
+
+    conditions.append(sql.SQL("(") + sql.SQL(" OR ").join(filter_parts) + sql.SQL(")"))
+
+
+def add_pending_order_search_filter(
+    conditions: list,
+    params: list,
+    value: Optional[str],
+):
+    value = clean_search_text(value)
+    if not value:
+        return
+
+    filter_parts = []
+    pattern = contains_pattern(value)
+
+    for column_name in PENDING_ORDER_TEXT_COLUMNS:
+        column = sql.Identifier(column_name)
+        filter_parts.append(sql.SQL("{} ILIKE %s").format(column))
+        params.append(pattern)
+
+        if column_name == "tracking_number" and is_tracking_suffix_search(value):
+            filter_parts.append(sql.SQL("right({}, %s) = %s").format(column))
+            params.extend([len(value), value])
+
+    conditions.append(sql.SQL("(") + sql.SQL(" OR ").join(filter_parts) + sql.SQL(")"))
+
+
+def clean_search_text(value: Optional[str]) -> str:
+    return str(value or "").strip()
+
+
+def contains_pattern(value: str) -> str:
+    return f"%{value}%"
 
 
 def build_view_query(

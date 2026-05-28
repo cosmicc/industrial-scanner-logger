@@ -23,8 +23,8 @@ Industrial Scanner Logger is a Python 3, Debian/Ubuntu compatible, systemd-manag
 - Writes troubleshooting events to `/var/log/industrial-scanner-logger.log` when installed as a service.
 - Writes raw per-scan event lines to daily logs under `/var/log/industrial-scanner-logger/`.
 - Runs an optional REST API service for querying PostgreSQL scan data.
-- Serves health, search, completed CSV log download, and TV dashboard pages
-  through nginx when installed.
+- Serves health, tracking search, pending order search, completed CSV log
+  download, and TV dashboard pages through nginx when installed.
 - Treats a scan as `SUCCESS` only when the barcode is exactly 34 numeric digits.
 - Treats blank scans, the configured no-read message, wrong lengths, and non-numeric values as `FAILED`.
 - Identifies each scanner by the last octet of its IPv4 address.
@@ -174,6 +174,8 @@ root during install. For example:
 html/index.html -> /var/www/scanner-site/index.html
 html/health/index.html -> /var/www/scanner-site/health/index.html
 html/logs/index.html -> /var/www/scanner-site/logs/index.html
+html/pending-orders/index.html -> /var/www/scanner-site/pending-orders/index.html
+html/search/index.html -> /var/www/scanner-site/search/index.html
 html/tv-dashboard/index.html -> /var/www/scanner-site/tv-dashboard/index.html
 html/assets/site.css -> /var/www/scanner-site/assets/site.css
 ```
@@ -318,10 +320,12 @@ short numeric failed scans. A short scan is repaired only when successful scans
 from the same day provide one unambiguous matching prefix; repaired rows are
 logged to `/var/log/industrial-scanner-logger.log` and marked with
 `is_repaired = true` in CSV and PostgreSQL output. For repaired PostgreSQL rows,
-`barcode` keeps the short value received from the scanner, while
-`tracking_number` stores the repaired full tracking number.
+`tracking_number` stores the 12-digit tracking suffix operators work with, while
+`barcode` stores the repaired full 34-digit barcode.
 
-`scanner_logger.raw_scan_events` stores the scanner value before repair. The
+`scanner_logger.raw_scan_events` stores the scanner value before repair, so a
+short scan that is later repaired remains visible there as the original short
+read. The
 normal `scanner_logger.scan_events` table skips failed nonnumeric scans such as
 no-read markers; those rows remain available in `raw_scan_events`.
 
@@ -377,6 +381,8 @@ GET /api/v1/logs/daily-csv/{scan_date}
 GET /api/v1/scans
 GET /api/v1/scans/count
 GET /api/v1/scans/{scan_id}
+GET /api/v1/pending-orders
+GET /api/v1/pending-orders/count
 GET /api/v1/scanners
 GET /api/v1/views
 GET /api/v1/views/daily-scan-totals
@@ -390,12 +396,18 @@ GET /api/v1/views/successful-scans-missing-last-scanner
 
 The list endpoints support common filters such as `start_date`, `end_date`,
 `scanner_id`, `barcode`, `limit`, and `offset` where those fields exist.
-The `barcode` filter matches either the received barcode or repaired tracking
-number when both fields are available. Numeric 10-digit barcode filters also
-match the end of those tracking fields so users can search by the last 10
-digits. Full 34-digit tracking numbers are matched exactly. `/api/v1/scans`
-and `/api/v1/scans/count` also support `is_success`, `is_duplicate`, and
-`is_repaired`.
+The `barcode` filter matches either the full 34-digit barcode or the 12-digit
+tracking number where those fields exist. Numeric 12-digit filters also match
+the end of full barcode fields. `/api/v1/scans` and `/api/v1/scans/count` also
+support `is_success`, `is_duplicate`, and `is_repaired`.
+
+`/api/v1/pending-orders` and `/api/v1/pending-orders/count` read the separate
+`scanner_logger.pending_orders` table. Pending order rows include an order
+timestamp, status, 12-digit tracking number, SO number, SKU number, and notes. The
+endpoints support `start_date`, `end_date`, `status`, `tracking_number`,
+`so_number`, `sku_number`, `notes`, `search`, `limit`, and `offset` filters.
+Numeric 12-digit tracking filters also match the end of the pending order
+tracking number.
 
 `/api/v1/logs/daily-csv` lists completed daily CSV files for download and
 excludes the current day because that file may still be open for writing.
@@ -456,6 +468,10 @@ Daily scan CSV columns:
 date,time,scanner_id,scanner_name,scanner_role,status,is_duplicate,is_repaired,tracking
 ```
 
+The daily CSV `tracking` value is the 12-digit tracking suffix for successful
+and repaired scans. The full 34-digit barcode is stored in PostgreSQL as
+`barcode` and is shown on search result pages.
+
 Failed scan CSV columns:
 
 ```text
@@ -477,7 +493,7 @@ one row per scanner plus an `ALL` row for the full day.
 scanner after the 3 different successful tracking number threshold is met.
 Pre-threshold repeats from the same scanner are silently dropped. `is_repaired`
 is `true` only when tracking-number repair reconstructed a short numeric failed
-scan into a valid tracking number.
+scan into a valid full 34-digit barcode.
 
 ## Development
 

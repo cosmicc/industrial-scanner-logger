@@ -30,20 +30,20 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
     ) STORED,
 
     is_success BOOLEAN GENERATED ALWAYS AS (
-        COALESCE(NULLIF(btrim(tracking_number, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
+        COALESCE(NULLIF(btrim(barcode, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
     ) STORED,
 
     failure_reason TEXT GENERATED ALWAYS AS (
         CASE
-            WHEN COALESCE(NULLIF(btrim(tracking_number, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
+            WHEN COALESCE(NULLIF(btrim(barcode, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
                 THEN NULL
-            WHEN NULLIF(btrim(tracking_number, E' \t\r\n'), '') IS NULL
+            WHEN NULLIF(btrim(barcode, E' \t\r\n'), '') IS NULL
                 THEN 'empty'
-            WHEN btrim(tracking_number, E' \t\r\n') !~ '^[0-9]+$'
+            WHEN btrim(barcode, E' \t\r\n') !~ '^[0-9]+$'
                 THEN 'non_numeric'
-            WHEN char_length(btrim(tracking_number, E' \t\r\n')) < 34
+            WHEN char_length(btrim(barcode, E' \t\r\n')) < 34
                 THEN 'too_short'
-            WHEN char_length(btrim(tracking_number, E' \t\r\n')) > 34
+            WHEN char_length(btrim(barcode, E' \t\r\n')) > 34
                 THEN 'too_long'
             ELSE 'invalid'
         END
@@ -173,6 +173,149 @@ ALTER TABLE scanner_logger.raw_scan_events
 ALTER TABLE scanner_logger.raw_scan_events
     DROP COLUMN IF EXISTS is_cross_scanner_duplicate;
 
+UPDATE scanner_logger.scan_events
+SET barcode = tracking_number
+WHERE tracking_number ~ '^[0-9]{34}$'
+  AND barcode !~ '^[0-9]{34}$';
+
+UPDATE scanner_logger.scan_events
+SET tracking_number = right(barcode, 12)
+WHERE barcode ~ '^[0-9]{34}$';
+
+UPDATE scanner_logger.raw_scan_events
+SET barcode = tracking_number
+WHERE tracking_number ~ '^[0-9]{34}$'
+  AND barcode !~ '^[0-9]{34}$';
+
+UPDATE scanner_logger.raw_scan_events
+SET tracking_number = right(barcode, 12)
+WHERE barcode ~ '^[0-9]{34}$';
+
+ALTER TABLE scanner_logger.scan_events
+    DROP COLUMN IF EXISTS failure_reason;
+
+ALTER TABLE scanner_logger.scan_events
+    DROP COLUMN IF EXISTS is_success;
+
+ALTER TABLE scanner_logger.scan_events
+    ADD COLUMN is_success BOOLEAN GENERATED ALWAYS AS (
+        COALESCE(NULLIF(btrim(barcode, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
+    ) STORED;
+
+ALTER TABLE scanner_logger.scan_events
+    ADD COLUMN failure_reason TEXT GENERATED ALWAYS AS (
+        CASE
+            WHEN COALESCE(NULLIF(btrim(barcode, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
+                THEN NULL
+            WHEN NULLIF(btrim(barcode, E' \t\r\n'), '') IS NULL
+                THEN 'empty'
+            WHEN btrim(barcode, E' \t\r\n') !~ '^[0-9]+$'
+                THEN 'non_numeric'
+            WHEN char_length(btrim(barcode, E' \t\r\n')) < 34
+                THEN 'too_short'
+            WHEN char_length(btrim(barcode, E' \t\r\n')) > 34
+                THEN 'too_long'
+            ELSE 'invalid'
+        END
+    ) STORED;
+
+ALTER TABLE scanner_logger.raw_scan_events
+    DROP COLUMN IF EXISTS failure_reason;
+
+ALTER TABLE scanner_logger.raw_scan_events
+    DROP COLUMN IF EXISTS is_success;
+
+ALTER TABLE scanner_logger.raw_scan_events
+    ADD COLUMN is_success BOOLEAN GENERATED ALWAYS AS (
+        COALESCE(NULLIF(btrim(barcode, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
+    ) STORED;
+
+ALTER TABLE scanner_logger.raw_scan_events
+    ADD COLUMN failure_reason TEXT GENERATED ALWAYS AS (
+        CASE
+            WHEN COALESCE(NULLIF(btrim(barcode, E' \t\r\n'), '') ~ '^[0-9]{34}$', false)
+                THEN NULL
+            WHEN NULLIF(btrim(barcode, E' \t\r\n'), '') IS NULL
+                THEN 'empty'
+            WHEN btrim(barcode, E' \t\r\n') !~ '^[0-9]+$'
+                THEN 'non_numeric'
+            WHEN char_length(btrim(barcode, E' \t\r\n')) < 34
+                THEN 'too_short'
+            WHEN char_length(btrim(barcode, E' \t\r\n')) > 34
+                THEN 'too_long'
+            ELSE 'invalid'
+        END
+    ) STORED;
+
+CREATE TABLE IF NOT EXISTS scanner_logger.pending_orders (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+
+    order_timestamp TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL DEFAULT localtimestamp(0),
+
+    status TEXT NOT NULL DEFAULT 'pending',
+
+    tracking_number TEXT,
+
+    so_number TEXT,
+
+    sku_number TEXT,
+
+    notes TEXT
+);
+
+ALTER TABLE scanner_logger.pending_orders
+    ADD COLUMN IF NOT EXISTS order_timestamp TIMESTAMP(0) WITHOUT TIME ZONE
+    NOT NULL DEFAULT localtimestamp(0);
+
+ALTER TABLE scanner_logger.pending_orders
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
+
+ALTER TABLE scanner_logger.pending_orders
+    ADD COLUMN IF NOT EXISTS tracking_number TEXT;
+
+ALTER TABLE scanner_logger.pending_orders
+    ADD COLUMN IF NOT EXISTS so_number TEXT;
+
+ALTER TABLE scanner_logger.pending_orders
+    ADD COLUMN IF NOT EXISTS sku_number TEXT;
+
+ALTER TABLE scanner_logger.pending_orders
+    ADD COLUMN IF NOT EXISTS notes TEXT;
+
+UPDATE scanner_logger.pending_orders
+SET order_timestamp = localtimestamp(0)
+WHERE order_timestamp IS NULL;
+
+ALTER TABLE scanner_logger.pending_orders
+    ALTER COLUMN order_timestamp SET DEFAULT localtimestamp(0);
+
+ALTER TABLE scanner_logger.pending_orders
+    ALTER COLUMN order_timestamp SET NOT NULL;
+
+UPDATE scanner_logger.pending_orders
+SET status = 'pending'
+WHERE status IS NULL OR btrim(status, E' \t\r\n') = '';
+
+ALTER TABLE scanner_logger.pending_orders
+    ALTER COLUMN status SET DEFAULT 'pending';
+
+ALTER TABLE scanner_logger.pending_orders
+    ALTER COLUMN status SET NOT NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'ck_pending_orders_status_present'
+          AND conrelid = 'scanner_logger.pending_orders'::regclass
+    ) THEN
+        ALTER TABLE scanner_logger.pending_orders
+            ADD CONSTRAINT ck_pending_orders_status_present
+            CHECK (btrim(status, E' \t\r\n') <> '');
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_scan_events_scan_date_time
     ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC);
 
@@ -225,6 +368,21 @@ CREATE INDEX IF NOT EXISTS idx_raw_scan_events_barcode
 
 CREATE INDEX IF NOT EXISTS idx_raw_scan_events_tracking_number
     ON scanner_logger.raw_scan_events (tracking_number);
+
+CREATE INDEX IF NOT EXISTS idx_pending_orders_order_timestamp
+    ON scanner_logger.pending_orders (order_timestamp DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_pending_orders_status
+    ON scanner_logger.pending_orders (status);
+
+CREATE INDEX IF NOT EXISTS idx_pending_orders_tracking_number
+    ON scanner_logger.pending_orders (tracking_number);
+
+CREATE INDEX IF NOT EXISTS idx_pending_orders_so_number
+    ON scanner_logger.pending_orders (so_number);
+
+CREATE INDEX IF NOT EXISTS idx_pending_orders_sku_number
+    ON scanner_logger.pending_orders (sku_number);
 
 CREATE OR REPLACE VIEW scanner_logger.daily_scan_totals AS
 SELECT
@@ -292,7 +450,7 @@ WHERE is_success = true;
 CREATE OR REPLACE VIEW scanner_logger.duplicate_successful_scans AS
 SELECT
     tracking_number,
-    tracking_number AS barcode,
+    max(barcode) AS barcode,
     count(*) AS scan_count,
     count(DISTINCT scanner_id) AS scanner_count,
     array_agg(DISTINCT scanner_id ORDER BY scanner_id) AS scanner_ids,
@@ -344,7 +502,7 @@ CREATE OR REPLACE VIEW scanner_logger.successful_scans_missing_last_scanner AS
 SELECT
     source.scan_date,
     source.tracking_number,
-    source.tracking_number AS barcode,
+    max(source.barcode) AS barcode,
     source.last_scanner_id,
     min(source.scan_date + source.scan_time) AS first_seen_at,
     max(source.scan_date + source.scan_time) AS last_seen_at,
@@ -376,6 +534,7 @@ BEGIN
         EXECUTE 'GRANT USAGE ON SCHEMA scanner_logger TO scannerlogger';
         EXECUTE 'GRANT INSERT, SELECT ON scanner_logger.scan_events TO scannerlogger';
         EXECUTE 'GRANT INSERT, SELECT ON scanner_logger.raw_scan_events TO scannerlogger';
+        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON scanner_logger.pending_orders TO scannerlogger';
         EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA scanner_logger TO scannerlogger';
     END IF;
 END $$;

@@ -12,6 +12,11 @@ All notable changes to this project will be documented in this file.
 - Default search results to 10 rows per page and tighten the Results card header controls.
 - Add Last-page and compact numbered page controls to search result pagination.
 - Mirror search pagination below the results table and clarify tracking search length options.
+- Make the TV dashboard system status banner consistently full-width and label it System Ok or System Problem.
+- Change tracking suffix search from the last 10 digits to the last 12 digits.
+- Add a separate pending orders table, API search/count endpoints, pending orders search page, and home page navigation card.
+- Store scan tracking numbers as the 12-digit operator value while keeping the full 34-digit value in the barcode field.
+- Invert repair storage so repaired rows keep the 12-digit tracking value and write the reconstructed full value to barcode, while raw scan rows keep the original short read.
 
 ## 1.2.1 - 2026-05-24 (Pre-release)
 
@@ -30,7 +35,7 @@ All notable changes to this project will be documented in this file.
 - Use PostgreSQL scan history for duplicate decisions over the previous 30 days.
 - Add `/logs` for downloading completed daily CSV scan files while excluding the current day.
 - Add `/tv-dashboard` for 1920x1080 display of scan-rate, successful-scan, and duplicate totals.
-- Update tracking search to use an explicit one-year date range, support last-10-digit searches, and open FedEx links from result rows.
+- Update tracking search to use an explicit one-year date range, support suffix searches, and open FedEx links from result rows.
 - Add `refresh-nginx-config` for re-rendering the installed nginx site from `/etc/industrial-scanner-logger.conf`.
 - Add mandatory scanner connection warnings to the health page and TV dashboard.
 - Show last received data and connected scanner count on the TV dashboard.
