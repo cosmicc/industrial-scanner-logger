@@ -372,9 +372,10 @@ tr:last-child td {
 }
 
 .home-title {
-  font-size: 48px;
+  font-size: 44px;
   line-height: 1.08;
-  max-width: 820px;
+  max-width: none;
+  white-space: nowrap;
 }
 
 .home-summary {
@@ -1074,7 +1075,7 @@ tr:last-child td {
   }
 
   .home-title {
-    font-size: 34px;
+    font-size: 24px;
   }
 
   .search-option-grid {
@@ -1087,5 +1088,17 @@ tr:last-child td {
 
   .search-field-wide {
     grid-column: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .home-title {
+    font-size: 19px;
+  }
+}
+
+@media (max-width: 360px) {
+  .home-title {
+    font-size: 16px;
   }
 }
