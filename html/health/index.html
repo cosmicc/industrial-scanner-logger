@@ -8,6 +8,14 @@
 </head>
 <body>
   <main class="page">
+    <nav class="page-nav" aria-label="Page navigation">
+      <a class="page-nav-link" href="/">Home</a>
+      <a class="page-nav-link" href="/search">Scan Search</a>
+      <a class="page-nav-link" href="/pending-orders">Pending Orders</a>
+      <a class="page-nav-link current" href="/health" aria-current="page">Health Dashboard</a>
+      <a class="page-nav-link" href="/logs">CSV Logs</a>
+      <a class="page-nav-link" href="/tv-dashboard">TV Dashboard</a>
+    </nav>
     <h1>Industrial Scanner Logger Health</h1>
     <div class="subhead">
       Auto-refreshes <span id="health-refresh-label">every 3 seconds</span>.
@@ -143,27 +151,29 @@
 
     <section class="card">
       <h2>Last 10 Raw Scan Rows</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>Time</th>
-            <th>Scanner</th>
-            <th>Role</th>
-            <th>Status</th>
-            <th>Duplicate</th>
-            <th>Repaired</th>
-            <th>Tracking Number</th>
-            <th>Barcode (Full 34)</th>
-            <th>Failure Reason</th>
-          </tr>
-        </thead>
-        <tbody id="recent-scans">
-          <tr>
-            <td colspan="10">Checking...</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Time</th>
+              <th>Scanner</th>
+              <th>Role</th>
+              <th>Status</th>
+              <th>Duplicate</th>
+              <th>Repaired</th>
+              <th>Tracking Number</th>
+              <th>Barcode (Full 34)</th>
+              <th>Failure Reason</th>
+            </tr>
+          </thead>
+          <tbody id="recent-scans">
+            <tr>
+              <td colspan="10">Checking...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section class="card">
@@ -173,8 +183,6 @@
     </section>
 
     <div class="footer">
-      <a href="/">Home</a> | <a href="/search">Search</a> | <a href="/pending-orders">Pending Orders</a> | <a href="/logs">CSV Logs</a> | <a href="/tv-dashboard">TV Dashboard</a>
-      <br>
       App version: <span id="app-version">Loading...</span>
       <br>
       Last page update: <span id="page-updated">never</span>

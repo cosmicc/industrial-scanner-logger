@@ -8,6 +8,14 @@
 </head>
 <body>
   <main class="page">
+    <nav class="page-nav" aria-label="Page navigation">
+      <a class="page-nav-link" href="/">Home</a>
+      <a class="page-nav-link" href="/search">Scan Search</a>
+      <a class="page-nav-link" href="/pending-orders">Pending Orders</a>
+      <a class="page-nav-link" href="/health">Health Dashboard</a>
+      <a class="page-nav-link current" href="/logs" aria-current="page">CSV Logs</a>
+      <a class="page-nav-link" href="/tv-dashboard">TV Dashboard</a>
+    </nav>
     <h1>Daily Scan Logs</h1>
     <div class="subhead">
       Completed daily CSV files are available for download.
@@ -39,9 +47,6 @@
       <div id="logs-pagination-bottom" class="pagination"></div>
     </section>
 
-    <div class="footer">
-      <a href="/">Home</a> | <a href="/health">Health Dashboard</a> | <a href="/search">Search</a> | <a href="/pending-orders">Pending Orders</a> | <a href="/tv-dashboard">TV Dashboard</a>
-    </div>
   </main>
 
   <script>

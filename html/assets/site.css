@@ -38,6 +38,42 @@ h1 {
   margin-bottom: 24px;
 }
 
+.page-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.page-nav-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: rgba(31, 41, 55, 0.78);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.1;
+  text-decoration: none;
+}
+
+.page-nav-link:hover,
+.page-nav-link:focus {
+  border-color: rgba(34, 197, 94, 0.78);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.16);
+}
+
+.page-nav-link.current {
+  background: rgba(5, 46, 22, 0.82);
+  border-color: rgba(34, 197, 94, 0.68);
+  color: #bbf7d0;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -683,6 +719,17 @@ tr:last-child td {
     linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(8, 16, 20, 0.98)),
     #081014;
   color: var(--text);
+}
+
+.tv-page-nav {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+}
+
+.tv-page-nav .page-nav-link {
+  min-height: 32px;
+  padding: 7px 10px;
+  font-size: 12px;
 }
 
 .tv-header {
