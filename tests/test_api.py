@@ -540,6 +540,92 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(alert["alert_age_seconds"], 12.25)
         self.assertEqual(alert["alert_remaining_seconds"], 47.75)
 
+    def test_active_package_alerts_returns_duplicates_and_do_not_ship_alerts(self):
+        from types import SimpleNamespace
+
+        from industrial_scanner_logger.api import fetch_active_package_alerts
+
+        class FakeCursor:
+            def __init__(self):
+                self.calls = []
+                self.rows = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return None
+
+            def execute(self, query, params):
+                self.calls.append((str(query), params))
+                if "EXISTS" in str(query):
+                    self.rows = [
+                        {
+                            "id": 43,
+                            "scan_date": date(2026, 5, 18),
+                            "scan_time": "08:16:30",
+                            "scanner_id": 20,
+                            "scanner_name": "",
+                            "scanner_role": "standard",
+                            "last_scanner_id": None,
+                            "is_duplicate": False,
+                            "is_repaired": False,
+                            "tracking_number": "123456789012",
+                            "barcode": "9612345678901234567890123456789012",
+                            "barcode_length": 34,
+                            "is_success": True,
+                            "failure_reason": None,
+                            "alert_age_seconds": 4.5,
+                        }
+                    ]
+                else:
+                    self.rows = [
+                        {
+                            "id": 42,
+                            "scan_date": date(2026, 5, 18),
+                            "scan_time": "08:15:30",
+                            "scanner_id": 20,
+                            "scanner_name": "",
+                            "scanner_role": "standard",
+                            "last_scanner_id": 21,
+                            "is_duplicate": True,
+                            "is_repaired": False,
+                            "tracking_number": "987654321098",
+                            "barcode": "9612345678901234567890987654321098",
+                            "barcode_length": 34,
+                            "is_success": True,
+                            "failure_reason": None,
+                            "alert_age_seconds": 12.25,
+                        }
+                    ]
+
+            def fetchall(self):
+                return self.rows
+
+        class FakeDb:
+            def __init__(self):
+                self.cursor_instance = FakeCursor()
+
+            def cursor(self):
+                return self.cursor_instance
+
+        db = FakeDb()
+        alerts = fetch_active_package_alerts(
+            db,
+            SimpleNamespace(scanner_names={"20": "Lane 1 Scanner"}),
+            60,
+        )
+
+        self.assertEqual(
+            [params for _query, params in db.cursor_instance.calls],
+            [[timedelta(seconds=60)], [timedelta(seconds=60)]],
+        )
+        self.assertEqual([alert["alert_type"] for alert in alerts], ["duplicate", "do_not_ship"])
+        self.assertEqual(alerts[0]["alert_id"], "duplicate:42")
+        self.assertEqual(alerts[0]["display_name"], "Lane 1 Scanner")
+        self.assertEqual(alerts[1]["alert_id"], "do_not_ship:43")
+        self.assertNotIn("pending_orders", alerts[1])
+
     def test_dashboard_health_skips_duplicate_alert_when_disabled(self):
         from types import SimpleNamespace
         from unittest.mock import patch

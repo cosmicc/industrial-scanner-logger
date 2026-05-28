@@ -64,21 +64,21 @@
 
   </main>
 
-  <div id="tv-duplicate-alert" class="tv-duplicate-alert" role="alert" aria-live="assertive" hidden>
+  <div id="tv-package-alert" class="tv-duplicate-alert" role="alert" aria-live="assertive" hidden>
     <div class="tv-duplicate-alert-content">
-      <div class="tv-duplicate-kicker">Duplicate Package</div>
-      <div class="tv-duplicate-action">Remove This Package</div>
+      <div id="tv-alert-kicker" class="tv-duplicate-kicker">Duplicate Package</div>
+      <div id="tv-alert-action" class="tv-duplicate-action">Remove This Package</div>
       <div class="tv-duplicate-details">
         <div>
           <div class="tv-duplicate-label">Tracking Number</div>
-          <div id="tv-duplicate-barcode" class="tv-duplicate-value">----------</div>
+          <div id="tv-alert-tracking" class="tv-duplicate-value">----------</div>
         </div>
         <div>
           <div class="tv-duplicate-label">Scanner</div>
-          <div id="tv-duplicate-scanner" class="tv-duplicate-value">Unknown</div>
+          <div id="tv-alert-scanner" class="tv-duplicate-value">Unknown</div>
         </div>
       </div>
-      <div id="tv-duplicate-time" class="tv-duplicate-time">Detected now</div>
+      <div id="tv-alert-time" class="tv-duplicate-time">Detected now</div>
     </div>
   </div>
 
@@ -86,12 +86,15 @@
     const API_URL = "/api/v1/dashboard/health";
     const DEFAULT_TV_REFRESH_SECONDS = 1;
     const DEFAULT_TV_DUPLICATE_ALERT_SECONDS = 60;
+    const MAX_SEEN_PACKAGE_ALERT_IDS = 300;
     let tvRefreshTimer = null;
     let tvRefreshIntervalMs = null;
-    let activeDuplicateAlertId = null;
-    let duplicateAlertTimer = null;
-    let duplicateAlarmInterval = null;
-    let duplicateAudioContext = null;
+    let activePackageAlert = null;
+    let packageAlertQueue = [];
+    let packageAlertTimer = null;
+    let packageAlarmInterval = null;
+    let packageAudioContext = null;
+    const seenPackageAlertIds = new Set();
 
     async function loadDashboard() {
       try {
@@ -141,9 +144,8 @@
       setText("tv-today-duplicates", formatNumber(today.duplicate_scans));
       setText("tv-today-failed", formatNumber(today.failed_scans));
 
-      renderDuplicateAlert(
-        data.tv_duplicate_alert_enabled !== false,
-        data.duplicate_alert,
+      queuePackageAlerts(
+        packageAlertsFromPayload(data),
         data.tv_duplicate_alert_seconds || DEFAULT_TV_DUPLICATE_ALERT_SECONDS
       );
       renderLastReceived(data.last_received);
@@ -232,89 +234,153 @@
       return "";
     }
 
-    function renderDuplicateAlert(enabled, alert, configuredSeconds) {
-      if (!enabled || !alert) {
-        hideDuplicateAlert();
+    function packageAlertsFromPayload(data) {
+      if (Array.isArray(data.package_alerts)) {
+        return data.package_alerts;
+      }
+
+      if (data.duplicate_alert) {
+        return [{ ...data.duplicate_alert, alert_type: "duplicate" }];
+      }
+
+      return [];
+    }
+
+    function queuePackageAlerts(alerts, configuredSeconds) {
+      for (const alert of alerts) {
+        const alertId = packageAlertId(alert);
+
+        if (!alertId || seenPackageAlertIds.has(alertId)) {
+          continue;
+        }
+
+        seenPackageAlertIds.add(alertId);
+        trimSeenPackageAlertIds();
+        packageAlertQueue.push({
+          ...alert,
+          alert_id: alertId,
+          display_seconds: alertDisplaySeconds(alert, configuredSeconds)
+        });
+      }
+
+      if (!activePackageAlert) {
+        showNextPackageAlert();
+      }
+    }
+
+    function showNextPackageAlert() {
+      if (packageAlertTimer) {
+        window.clearTimeout(packageAlertTimer);
+        packageAlertTimer = null;
+      }
+
+      activePackageAlert = packageAlertQueue.shift() || null;
+
+      if (!activePackageAlert) {
+        hidePackageAlert();
         return;
       }
 
-      const alertId = String(
-        alert.id ?? `${alert.scan_date || ""}-${alert.scan_time || ""}-${alert.barcode || ""}`
+      renderPackageAlert(activePackageAlert);
+      startPackageAlarm();
+
+      packageAlertTimer = window.setTimeout(
+        finishActivePackageAlert,
+        Math.max(1000, activePackageAlert.display_seconds * 1000)
       );
-      const remainingSeconds = Number(
-        alert.alert_remaining_seconds || configuredSeconds || DEFAULT_TV_DUPLICATE_ALERT_SECONDS
-      );
-      const displaySeconds = Number.isFinite(remainingSeconds) && remainingSeconds > 0
-        ? remainingSeconds
-        : DEFAULT_TV_DUPLICATE_ALERT_SECONDS;
-      const overlay = document.getElementById("tv-duplicate-alert");
-      const barcodeDigits = alert.tracking_number || alert.barcode_last_12 || lastDigits(
-        alert.barcode || alert.tracking_number || "",
+    }
+
+    function renderPackageAlert(alert) {
+      const overlay = document.getElementById("tv-package-alert");
+      const alertType = String(alert.alert_type || "duplicate");
+      const isDoNotShipAlert = alertType === "do_not_ship";
+      const barcodeDigits = alert.barcode_last_12 || lastDigits(
+        alert.tracking_number || alert.barcode || "",
         12
       );
       const scannerName = scannerDisplayName(alert) || "Unknown Scanner";
 
-      setText("tv-duplicate-barcode", barcodeDigits || "Unknown");
-      setText("tv-duplicate-scanner", scannerName);
+      setText("tv-alert-kicker", isDoNotShipAlert ? "Do Not Ship" : "Duplicate Package");
+      setText("tv-alert-action", isDoNotShipAlert ? "Pull This Package" : "Remove This Package");
+      setText("tv-alert-tracking", barcodeDigits || "Unknown");
+      setText("tv-alert-scanner", scannerName);
       setText(
-        "tv-duplicate-time",
+        "tv-alert-time",
         `Detected ${formatScanDateTime(alert.scan_date, alert.scan_time) || "now"}`
       );
 
       overlay.hidden = false;
       document.body.classList.add("tv-alert-active");
-
-      if (activeDuplicateAlertId !== alertId) {
-        activeDuplicateAlertId = alertId;
-      }
-
-      startDuplicateAlarm();
-
-      if (duplicateAlertTimer) {
-        window.clearTimeout(duplicateAlertTimer);
-      }
-
-      duplicateAlertTimer = window.setTimeout(
-        hideDuplicateAlert,
-        Math.max(1000, displaySeconds * 1000)
-      );
     }
 
-    function hideDuplicateAlert() {
-      const overlay = document.getElementById("tv-duplicate-alert");
+    function finishActivePackageAlert() {
+      activePackageAlert = null;
+      showNextPackageAlert();
+    }
+
+    function hidePackageAlert() {
+      const overlay = document.getElementById("tv-package-alert");
 
       if (overlay) {
         overlay.hidden = true;
       }
 
       document.body.classList.remove("tv-alert-active");
-      activeDuplicateAlertId = null;
+      activePackageAlert = null;
 
-      if (duplicateAlertTimer) {
-        window.clearTimeout(duplicateAlertTimer);
-        duplicateAlertTimer = null;
+      if (packageAlertTimer) {
+        window.clearTimeout(packageAlertTimer);
+        packageAlertTimer = null;
       }
 
-      stopDuplicateAlarm();
+      stopPackageAlarm();
     }
 
-    function startDuplicateAlarm() {
-      if (duplicateAlarmInterval) {
+    function packageAlertId(alert) {
+      if (alert.alert_id) {
+        return String(alert.alert_id);
+      }
+
+      const alertType = alert.alert_type || "duplicate";
+      return String(
+        `${alertType}:${alert.id ?? `${alert.scan_date || ""}-${alert.scan_time || ""}-${alert.barcode || ""}`}`
+      );
+    }
+
+    function alertDisplaySeconds(alert, configuredSeconds) {
+      const displaySeconds = Number(
+        alert.alert_seconds || configuredSeconds || DEFAULT_TV_DUPLICATE_ALERT_SECONDS
+      );
+
+      return Number.isFinite(displaySeconds) && displaySeconds > 0
+        ? displaySeconds
+        : DEFAULT_TV_DUPLICATE_ALERT_SECONDS;
+    }
+
+    function trimSeenPackageAlertIds() {
+      while (seenPackageAlertIds.size > MAX_SEEN_PACKAGE_ALERT_IDS) {
+        const oldestAlertId = seenPackageAlertIds.values().next().value;
+        seenPackageAlertIds.delete(oldestAlertId);
+      }
+    }
+
+    function startPackageAlarm() {
+      if (packageAlarmInterval) {
         return;
       }
 
-      playDuplicateBeep();
-      duplicateAlarmInterval = window.setInterval(playDuplicateBeep, 900);
+      playPackageBeep();
+      packageAlarmInterval = window.setInterval(playPackageBeep, 900);
     }
 
-    function stopDuplicateAlarm() {
-      if (duplicateAlarmInterval) {
-        window.clearInterval(duplicateAlarmInterval);
-        duplicateAlarmInterval = null;
+    function stopPackageAlarm() {
+      if (packageAlarmInterval) {
+        window.clearInterval(packageAlarmInterval);
+        packageAlarmInterval = null;
       }
     }
 
-    function playDuplicateBeep() {
+    function playPackageBeep() {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 
       if (!AudioContextClass) {
@@ -322,17 +388,17 @@
       }
 
       try {
-        if (!duplicateAudioContext) {
-          duplicateAudioContext = new AudioContextClass();
+        if (!packageAudioContext) {
+          packageAudioContext = new AudioContextClass();
         }
 
-        if (duplicateAudioContext.state === "suspended") {
-          duplicateAudioContext.resume().catch(() => {});
+        if (packageAudioContext.state === "suspended") {
+          packageAudioContext.resume().catch(() => {});
         }
 
-        const now = duplicateAudioContext.currentTime;
-        const oscillator = duplicateAudioContext.createOscillator();
-        const gain = duplicateAudioContext.createGain();
+        const now = packageAudioContext.currentTime;
+        const oscillator = packageAudioContext.createOscillator();
+        const gain = packageAudioContext.createGain();
 
         oscillator.type = "square";
         oscillator.frequency.setValueAtTime(740, now);
@@ -342,7 +408,7 @@
         gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.62);
 
         oscillator.connect(gain);
-        gain.connect(duplicateAudioContext.destination);
+        gain.connect(packageAudioContext.destination);
         oscillator.start(now);
         oscillator.stop(now + 0.65);
         oscillator.onended = () => {
@@ -350,7 +416,7 @@
           gain.disconnect();
         };
       } catch (_error) {
-        stopDuplicateAlarm();
+        stopPackageAlarm();
       }
     }
 
