@@ -119,7 +119,7 @@
               <th>Duplicate</th>
               <th>Repaired</th>
               <th>Tracking Number</th>
-              <th>Barcode (Full 34)</th>
+              <th>Barcode</th>
               <th>Barcode Length</th>
               <th>Failure Reason</th>
             </tr>
@@ -259,6 +259,9 @@
       });
     }
 
+    startDateInput.addEventListener("change", updateActiveDatePreset);
+    endDateInput.addEventListener("change", updateActiveDatePreset);
+
     function setDefaultDates() {
       const today = new Date();
       const start = new Date(today);
@@ -266,6 +269,7 @@
 
       startDateInput.value = formatDateInput(start);
       endDateInput.value = formatDateInput(today);
+      setActiveDatePreset("last-year");
     }
 
     function applyDatePreset(preset) {
@@ -292,6 +296,7 @@
         case "all-time":
           startDateInput.value = "";
           endDateInput.value = "";
+          setActiveDatePreset(preset);
           rerunSearchAfterDatePreset();
           return;
         default:
@@ -300,7 +305,54 @@
 
       startDateInput.value = formatDateInput(start);
       endDateInput.value = formatDateInput(end);
+      setActiveDatePreset(preset);
       rerunSearchAfterDatePreset();
+    }
+
+    function setActiveDatePreset(activePreset) {
+      for (const button of datePresetButtons) {
+        const isActive = button.dataset.datePreset === activePreset;
+        button.classList.toggle("active", isActive);
+        button.setAttribute("aria-pressed", isActive ? "true" : "false");
+      }
+    }
+
+    function updateActiveDatePreset() {
+      setActiveDatePreset(currentMatchingDatePreset());
+    }
+
+    function currentMatchingDatePreset() {
+      const today = new Date();
+      const todayValue = formatDateInput(today);
+      const startValue = startDateInput.value;
+      const endValue = endDateInput.value;
+
+      if (!startValue && !endValue) {
+        return "all-time";
+      }
+
+      if (startValue === todayValue && endValue === todayValue) {
+        return "today";
+      }
+
+      const yesterday = new Date(today);
+      yesterday.setDate(today.getDate() - 1);
+      const yesterdayValue = formatDateInput(yesterday);
+
+      if (startValue === yesterdayValue && endValue === yesterdayValue) {
+        return "yesterday";
+      }
+
+      for (const [preset, dayCount] of [["last-7", 7], ["last-30", 30], ["last-year", 365]]) {
+        const start = new Date(today);
+        start.setDate(today.getDate() - dayCount);
+
+        if (startValue === formatDateInput(start) && endValue === todayValue) {
+          return preset;
+        }
+      }
+
+      return "";
     }
 
     function rerunSearchAfterDatePreset() {
