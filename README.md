@@ -23,8 +23,8 @@ Industrial Scanner Logger is a Python 3, Debian/Ubuntu compatible, systemd-manag
 - Writes troubleshooting events to `/var/log/industrial-scanner-logger.log` when installed as a service.
 - Writes raw per-scan event lines to daily logs under `/var/log/industrial-scanner-logger/`.
 - Runs an optional REST API service for querying PostgreSQL scan data.
-- Serves health, tracking search, pending order search, completed CSV log
-  download, and TV dashboard pages through nginx when installed.
+- Serves health, tracking search, completed CSV log download, and TV dashboard
+  pages through nginx when installed.
 - Treats a scan as `SUCCESS` only when the barcode is exactly 34 numeric digits.
 - Treats blank scans, the configured no-read message, wrong lengths, and non-numeric values as `FAILED`.
 - Identifies each scanner by the last octet of its IPv4 address.
@@ -174,7 +174,6 @@ root during install. For example:
 html/index.html -> /var/www/scanner-site/index.html
 html/health/index.html -> /var/www/scanner-site/health/index.html
 html/logs/index.html -> /var/www/scanner-site/logs/index.html
-html/pending-orders/index.html -> /var/www/scanner-site/pending-orders/index.html
 html/search/index.html -> /var/www/scanner-site/search/index.html
 html/tv-dashboard/index.html -> /var/www/scanner-site/tv-dashboard/index.html
 html/assets/site.css -> /var/www/scanner-site/assets/site.css
@@ -381,8 +380,6 @@ GET /api/v1/logs/daily-csv/{scan_date}
 GET /api/v1/scans
 GET /api/v1/scans/count
 GET /api/v1/scans/{scan_id}
-GET /api/v1/pending-orders
-GET /api/v1/pending-orders/count
 GET /api/v1/scanners
 GET /api/v1/views
 GET /api/v1/views/daily-scan-totals
@@ -400,14 +397,6 @@ The `barcode` filter matches either the full 34-digit barcode or the 12-digit
 tracking number where those fields exist. Numeric 12-digit filters also match
 the end of full barcode fields. `/api/v1/scans` and `/api/v1/scans/count` also
 support `is_success`, `is_duplicate`, and `is_repaired`.
-
-`/api/v1/pending-orders` and `/api/v1/pending-orders/count` read the separate
-`scanner_logger.pending_orders` table. Pending order rows include an order
-timestamp, status, 12-digit tracking number, SO number, SKU number, and notes. The
-endpoints support `start_date`, `end_date`, `status`, `tracking_number`,
-`so_number`, `sku_number`, `notes`, `search`, `limit`, and `offset` filters.
-Numeric 12-digit tracking filters also match the end of the pending order
-tracking number.
 
 `/api/v1/logs/daily-csv` lists completed daily CSV files for download and
 excludes the current day because that file may still be open for writing.

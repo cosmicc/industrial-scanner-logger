@@ -535,10 +535,6 @@ tr:last-child td {
   align-items: end;
 }
 
-.pending-orders-search-grid {
-  grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr) auto;
-}
-
 .search-field {
   display: grid;
   gap: 6px;
@@ -1047,10 +1043,6 @@ tr:last-child td {
     grid-template-columns: 1fr 1fr;
   }
 
-  .pending-orders-search-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-
   .search-field-wide {
     grid-column: 1 / -1;
   }
@@ -1079,10 +1071,6 @@ tr:last-child td {
   }
 
   .search-option-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .pending-orders-search-grid {
     grid-template-columns: 1fr;
   }
 

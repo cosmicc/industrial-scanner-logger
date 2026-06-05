@@ -14,7 +14,7 @@ All notable changes to this project will be documented in this file.
 - Mirror search pagination below the results table and clarify tracking search length options.
 - Make the TV dashboard system status banner consistently full-width and label it System Ok or System Problem.
 - Change tracking suffix search from the last 10 digits to the last 12 digits.
-- Add a separate pending orders table, API search/count endpoints, pending orders search page, and home page navigation card.
+- Remove the abandoned order-hold workflow, including its table, API endpoints, search page, navigation links, and TV alert path.
 - Store scan tracking numbers as the 12-digit operator value while keeping the full 34-digit value in the barcode field.
 - Invert repair storage so repaired rows keep the 12-digit tracking value and write the reconstructed full value to barcode, while raw scan rows keep the original short read.
 

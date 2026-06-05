@@ -292,16 +292,14 @@
 
     function renderPackageAlert(alert) {
       const overlay = document.getElementById("tv-package-alert");
-      const alertType = String(alert.alert_type || "duplicate");
-      const isDoNotShipAlert = alertType === "do_not_ship";
       const barcodeDigits = alert.barcode_last_12 || lastDigits(
         alert.tracking_number || alert.barcode || "",
         12
       );
       const scannerName = scannerDisplayName(alert) || "Unknown Scanner";
 
-      setText("tv-alert-kicker", isDoNotShipAlert ? "Do Not Ship" : "Duplicate Package");
-      setText("tv-alert-action", isDoNotShipAlert ? "Pull This Package" : "Remove This Package");
+      setText("tv-alert-kicker", "Duplicate Package");
+      setText("tv-alert-action", "Remove This Package");
       setText("tv-alert-tracking", barcodeDigits || "Unknown");
       setText("tv-alert-scanner", scannerName);
       setText(

@@ -1,7 +1,7 @@
 import importlib.util
 import tempfile
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 HAS_API_DEPS = all(
@@ -26,8 +26,6 @@ class ApiQueryTests(unittest.TestCase):
         self.assertIn("/v1/scans", route_paths)
         self.assertIn("/v1/scans/count", route_paths)
         self.assertIn("/v1/scanners", route_paths)
-        self.assertIn("/v1/pending-orders", route_paths)
-        self.assertIn("/v1/pending-orders/count", route_paths)
         self.assertNotIn("/api/v1/health", route_paths)
 
     def test_normalize_root_path_rejects_relative_paths(self):
@@ -148,58 +146,6 @@ class ApiQueryTests(unittest.TestCase):
         self.assertFalse(is_tracking_suffix_search("1" * 11))
         self.assertFalse(is_tracking_suffix_search("1" * 34))
         self.assertFalse(is_tracking_suffix_search("ABC456789012"))
-
-    def test_build_pending_orders_query_collects_filters_and_pagination(self):
-        from industrial_scanner_logger.api import build_pending_orders_query
-
-        _query, params = build_pending_orders_query(
-            start_date=date(2026, 5, 17),
-            end_date=date(2026, 5, 18),
-            status="pending",
-            tracking_number="123456789012",
-            so_number="SO-100",
-            sku_number="SKU-200",
-            notes="rush",
-            limit=25,
-            offset=50,
-        )
-
-        self.assertEqual(
-            params,
-            [
-                datetime(2026, 5, 17),
-                datetime(2026, 5, 19),
-                "%pending%",
-                "123456789012",
-                12,
-                "123456789012",
-                "%SO-100%",
-                "%SKU-200%",
-                "%rush%",
-                25,
-                50,
-            ],
-        )
-
-    def test_build_pending_orders_count_query_collects_general_search(self):
-        from industrial_scanner_logger.api import build_pending_orders_count_query
-
-        _query, params = build_pending_orders_count_query(
-            search="123456789012",
-        )
-
-        self.assertEqual(
-            params,
-            [
-                "%123456789012%",
-                "%123456789012%",
-                12,
-                "123456789012",
-                "%123456789012%",
-                "%123456789012%",
-                "%123456789012%",
-            ],
-        )
 
     def test_view_query_rejects_unsupported_filters(self):
         from fastapi import HTTPException
@@ -540,7 +486,7 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(alert["alert_age_seconds"], 12.25)
         self.assertEqual(alert["alert_remaining_seconds"], 47.75)
 
-    def test_active_package_alerts_returns_duplicates_and_do_not_ship_alerts(self):
+    def test_active_package_alerts_returns_duplicates(self):
         from types import SimpleNamespace
 
         from industrial_scanner_logger.api import fetch_active_package_alerts
@@ -558,46 +504,25 @@ class ApiQueryTests(unittest.TestCase):
 
             def execute(self, query, params):
                 self.calls.append((str(query), params))
-                if "EXISTS" in str(query):
-                    self.rows = [
-                        {
-                            "id": 43,
-                            "scan_date": date(2026, 5, 18),
-                            "scan_time": "08:16:30",
-                            "scanner_id": 20,
-                            "scanner_name": "",
-                            "scanner_role": "standard",
-                            "last_scanner_id": None,
-                            "is_duplicate": False,
-                            "is_repaired": False,
-                            "tracking_number": "123456789012",
-                            "barcode": "9612345678901234567890123456789012",
-                            "barcode_length": 34,
-                            "is_success": True,
-                            "failure_reason": None,
-                            "alert_age_seconds": 4.5,
-                        }
-                    ]
-                else:
-                    self.rows = [
-                        {
-                            "id": 42,
-                            "scan_date": date(2026, 5, 18),
-                            "scan_time": "08:15:30",
-                            "scanner_id": 20,
-                            "scanner_name": "",
-                            "scanner_role": "standard",
-                            "last_scanner_id": 21,
-                            "is_duplicate": True,
-                            "is_repaired": False,
-                            "tracking_number": "987654321098",
-                            "barcode": "9612345678901234567890987654321098",
-                            "barcode_length": 34,
-                            "is_success": True,
-                            "failure_reason": None,
-                            "alert_age_seconds": 12.25,
-                        }
-                    ]
+                self.rows = [
+                    {
+                        "id": 42,
+                        "scan_date": date(2026, 5, 18),
+                        "scan_time": "08:15:30",
+                        "scanner_id": 20,
+                        "scanner_name": "",
+                        "scanner_role": "standard",
+                        "last_scanner_id": 21,
+                        "is_duplicate": True,
+                        "is_repaired": False,
+                        "tracking_number": "987654321098",
+                        "barcode": "9612345678901234567890987654321098",
+                        "barcode_length": 34,
+                        "is_success": True,
+                        "failure_reason": None,
+                        "alert_age_seconds": 12.25,
+                    }
+                ]
 
             def fetchall(self):
                 return self.rows
@@ -618,13 +543,11 @@ class ApiQueryTests(unittest.TestCase):
 
         self.assertEqual(
             [params for _query, params in db.cursor_instance.calls],
-            [[timedelta(seconds=60)], [timedelta(seconds=60)]],
+            [[timedelta(seconds=60)]],
         )
-        self.assertEqual([alert["alert_type"] for alert in alerts], ["duplicate", "do_not_ship"])
+        self.assertEqual([alert["alert_type"] for alert in alerts], ["duplicate"])
         self.assertEqual(alerts[0]["alert_id"], "duplicate:42")
         self.assertEqual(alerts[0]["display_name"], "Lane 1 Scanner")
-        self.assertEqual(alerts[1]["alert_id"], "do_not_ship:43")
-        self.assertNotIn("pending_orders", alerts[1])
 
     def test_dashboard_health_skips_duplicate_alert_when_disabled(self):
         from types import SimpleNamespace

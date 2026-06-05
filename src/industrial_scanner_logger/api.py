@@ -52,24 +52,6 @@ SCAN_EVENT_COLUMNS = [
     "failure_reason",
 ]
 
-PENDING_ORDER_COLUMNS = [
-    "id",
-    "order_timestamp",
-    "status",
-    "tracking_number",
-    "so_number",
-    "sku_number",
-    "notes",
-]
-
-PENDING_ORDER_TEXT_COLUMNS = [
-    "status",
-    "tracking_number",
-    "so_number",
-    "sku_number",
-    "notes",
-]
-
 VIEW_DEFINITIONS = {
     "daily-scan-totals": {
         "relation": "daily_scan_totals",
@@ -770,13 +752,10 @@ def fetch_active_package_alerts(
     alert_seconds: int,
     include_duplicate_alerts: bool = True,
 ) -> list[dict]:
-    alerts = []
+    if not include_duplicate_alerts:
+        return []
 
-    if include_duplicate_alerts:
-        alerts.extend(fetch_active_duplicate_package_alerts(db, config, alert_seconds))
-
-    alerts.extend(fetch_active_do_not_ship_alerts(db, config, alert_seconds))
-
+    alerts = fetch_active_duplicate_package_alerts(db, config, alert_seconds)
     return sorted(alerts, key=package_alert_sort_key)
 
 
@@ -821,53 +800,6 @@ def fetch_active_duplicate_package_alerts(db, config, alert_seconds: int) -> lis
     ]
 
 
-def fetch_active_do_not_ship_alerts(db, config, alert_seconds: int) -> list[dict]:
-    rows = fetch_all(
-        db,
-        """
-        SELECT
-            scans.id,
-            scans.scan_date,
-            scans.scan_time,
-            scans.scanner_id,
-            scans.scanner_name,
-            scans.scanner_role,
-            scans.last_scanner_id,
-            scans.is_duplicate,
-            scans.is_repaired,
-            scans.tracking_number,
-            scans.barcode,
-            scans.barcode_length,
-            scans.is_success,
-            scans.failure_reason,
-            EXTRACT(EPOCH FROM (localtimestamp - (scans.scan_date + scans.scan_time)))
-                AS alert_age_seconds
-        FROM scanner_logger.scan_events AS scans
-        WHERE scans.is_success
-          AND (scans.scan_date + scans.scan_time) >= (localtimestamp - %s)
-          AND EXISTS (
-              SELECT 1
-              FROM scanner_logger.pending_orders AS pending
-              WHERE lower(btrim(pending.status)) = 'pull'
-                AND right(regexp_replace(coalesce(pending.tracking_number, ''), '\\D', '', 'g'), 12)
-                  = right(regexp_replace(coalesce(scans.tracking_number, ''), '\\D', '', 'g'), 12)
-          )
-        ORDER BY scans.scan_date ASC, scans.scan_time ASC, scans.id ASC
-        """,
-        [timedelta(seconds=alert_seconds)],
-    )
-
-    return [
-        package_alert_from_scan_row(
-            config,
-            row,
-            "do_not_ship",
-            alert_seconds,
-        )
-        for row in rows
-    ]
-
-
 def package_alert_from_scan_row(
     config,
     row: dict,
@@ -894,7 +826,6 @@ def package_alert_from_scan_row(
 def package_alert_sort_key(alert: dict) -> tuple:
     alert_type_priority = {
         "duplicate": 0,
-        "do_not_ship": 1,
     }.get(alert.get("alert_type"), 99)
 
     return (
@@ -1220,8 +1151,6 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans/count"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans/{{scan_id}}"),
-                external_path(request_root_path, f"{API_VERSION_PREFIX}/pending-orders"),
-                external_path(request_root_path, f"{API_VERSION_PREFIX}/pending-orders/count"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scanners"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/views"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/views/{{view_name}}"),
@@ -1296,59 +1225,6 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             is_success=is_success,
             is_duplicate=is_duplicate,
             is_repaired=is_repaired,
-        )
-        row = fetch_one(db, query, params)
-        return {"total_results": int(row.get("total_results") or 0)}
-
-    @app.get(f"{API_VERSION_PREFIX}/pending-orders")
-    def list_pending_orders(
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-        status: Optional[str] = None,
-        tracking_number: Optional[str] = None,
-        so_number: Optional[str] = None,
-        sku_number: Optional[str] = None,
-        notes: Optional[str] = None,
-        search: Optional[str] = None,
-        limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
-        offset: int = Query(default=0, ge=0),
-        db=Depends(get_db),
-    ):
-        query, params = build_pending_orders_query(
-            start_date=start_date,
-            end_date=end_date,
-            status=status,
-            tracking_number=tracking_number,
-            so_number=so_number,
-            sku_number=sku_number,
-            notes=notes,
-            search=search,
-            limit=limit,
-            offset=offset,
-        )
-        return fetch_all(db, query, params)
-
-    @app.get(f"{API_VERSION_PREFIX}/pending-orders/count")
-    def count_pending_orders(
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-        status: Optional[str] = None,
-        tracking_number: Optional[str] = None,
-        so_number: Optional[str] = None,
-        sku_number: Optional[str] = None,
-        notes: Optional[str] = None,
-        search: Optional[str] = None,
-        db=Depends(get_db),
-    ):
-        query, params = build_pending_orders_count_query(
-            start_date=start_date,
-            end_date=end_date,
-            status=status,
-            tracking_number=tracking_number,
-            so_number=so_number,
-            sku_number=sku_number,
-            notes=notes,
-            search=search,
         )
         row = fetch_one(db, query, params)
         return {"total_results": int(row.get("total_results") or 0)}
@@ -1564,96 +1440,6 @@ def build_scan_events_count_query(
     return query, params
 
 
-def pending_orders_filter_conditions(
-    start_date: Optional[date] = None,
-    end_date: Optional[date] = None,
-    status: Optional[str] = None,
-    tracking_number: Optional[str] = None,
-    so_number: Optional[str] = None,
-    sku_number: Optional[str] = None,
-    notes: Optional[str] = None,
-    search: Optional[str] = None,
-):
-    conditions = []
-    params = []
-
-    if start_date is not None:
-        conditions.append(sql.SQL("order_timestamp >= %s"))
-        params.append(datetime.combine(start_date, datetime.min.time()))
-
-    if end_date is not None:
-        conditions.append(sql.SQL("order_timestamp < %s"))
-        params.append(datetime.combine(end_date + timedelta(days=1), datetime.min.time()))
-
-    add_text_filter(conditions, params, "status", status)
-    add_tracking_filter(conditions, params, "tracking_number", tracking_number)
-    add_text_filter(conditions, params, "so_number", so_number)
-    add_text_filter(conditions, params, "sku_number", sku_number)
-    add_text_filter(conditions, params, "notes", notes)
-    add_pending_order_search_filter(conditions, params, search)
-    return conditions, params
-
-
-def build_pending_orders_query(
-    start_date: Optional[date] = None,
-    end_date: Optional[date] = None,
-    status: Optional[str] = None,
-    tracking_number: Optional[str] = None,
-    so_number: Optional[str] = None,
-    sku_number: Optional[str] = None,
-    notes: Optional[str] = None,
-    search: Optional[str] = None,
-    limit: int = DEFAULT_LIMIT,
-    offset: int = 0,
-):
-    conditions, params = pending_orders_filter_conditions(
-        start_date=start_date,
-        end_date=end_date,
-        status=status,
-        tracking_number=tracking_number,
-        so_number=so_number,
-        sku_number=sku_number,
-        notes=notes,
-        search=search,
-    )
-
-    query = sql.SQL(
-        "SELECT {} FROM scanner_logger.pending_orders{} {} LIMIT %s OFFSET %s"
-    ).format(
-        column_list(PENDING_ORDER_COLUMNS),
-        where_clause(conditions),
-        sql.SQL("ORDER BY order_timestamp DESC, id DESC"),
-    )
-    params.extend([limit, offset])
-    return query, params
-
-
-def build_pending_orders_count_query(
-    start_date: Optional[date] = None,
-    end_date: Optional[date] = None,
-    status: Optional[str] = None,
-    tracking_number: Optional[str] = None,
-    so_number: Optional[str] = None,
-    sku_number: Optional[str] = None,
-    notes: Optional[str] = None,
-    search: Optional[str] = None,
-):
-    conditions, params = pending_orders_filter_conditions(
-        start_date=start_date,
-        end_date=end_date,
-        status=status,
-        tracking_number=tracking_number,
-        so_number=so_number,
-        sku_number=sku_number,
-        notes=notes,
-        search=search,
-    )
-    query = sql.SQL("SELECT count(*) AS total_results FROM scanner_logger.pending_orders{}").format(
-        where_clause(conditions)
-    )
-    return query, params
-
-
 def add_boolean_filter(
     conditions: list,
     params: list,
@@ -1698,30 +1484,6 @@ def add_tracking_filter(
     if is_tracking_suffix_search(value):
         filter_parts.append(sql.SQL("right({}, %s) = %s").format(column))
         params.extend([len(value), value])
-
-    conditions.append(sql.SQL("(") + sql.SQL(" OR ").join(filter_parts) + sql.SQL(")"))
-
-
-def add_pending_order_search_filter(
-    conditions: list,
-    params: list,
-    value: Optional[str],
-):
-    value = clean_search_text(value)
-    if not value:
-        return
-
-    filter_parts = []
-    pattern = contains_pattern(value)
-
-    for column_name in PENDING_ORDER_TEXT_COLUMNS:
-        column = sql.Identifier(column_name)
-        filter_parts.append(sql.SQL("{} ILIKE %s").format(column))
-        params.append(pattern)
-
-        if column_name == "tracking_number" and is_tracking_suffix_search(value):
-            filter_parts.append(sql.SQL("right({}, %s) = %s").format(column))
-            params.extend([len(value), value])
 
     conditions.append(sql.SQL("(") + sql.SQL(" OR ").join(filter_parts) + sql.SQL(")"))
 

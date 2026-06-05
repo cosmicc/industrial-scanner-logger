@@ -100,22 +100,7 @@ CREATE TABLE IF NOT EXISTS scanner_logger.raw_scan_events (
     ) STORED
 );
 
-CREATE TABLE IF NOT EXISTS scanner_logger.pending_orders (
-    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-
-    order_timestamp TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL DEFAULT localtimestamp(0),
-
-    status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (btrim(status, E' \t\r\n') <> ''),
-
-    tracking_number TEXT,
-
-    so_number TEXT,
-
-    sku_number TEXT,
-
-    notes TEXT
-);
+DROP TABLE IF EXISTS scanner_logger.pending_orders;
 
 CREATE INDEX IF NOT EXISTS idx_scan_events_scan_date_time
     ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC);
@@ -163,21 +148,6 @@ CREATE INDEX IF NOT EXISTS idx_raw_scan_events_barcode
 
 CREATE INDEX IF NOT EXISTS idx_raw_scan_events_tracking_number
     ON scanner_logger.raw_scan_events (tracking_number);
-
-CREATE INDEX IF NOT EXISTS idx_pending_orders_order_timestamp
-    ON scanner_logger.pending_orders (order_timestamp DESC, id DESC);
-
-CREATE INDEX IF NOT EXISTS idx_pending_orders_status
-    ON scanner_logger.pending_orders (status);
-
-CREATE INDEX IF NOT EXISTS idx_pending_orders_tracking_number
-    ON scanner_logger.pending_orders (tracking_number);
-
-CREATE INDEX IF NOT EXISTS idx_pending_orders_so_number
-    ON scanner_logger.pending_orders (so_number);
-
-CREATE INDEX IF NOT EXISTS idx_pending_orders_sku_number
-    ON scanner_logger.pending_orders (sku_number);
 
 CREATE OR REPLACE VIEW scanner_logger.daily_scan_totals AS
 SELECT
@@ -329,7 +299,6 @@ BEGIN
         EXECUTE 'GRANT USAGE ON SCHEMA scanner_logger TO scannerlogger';
         EXECUTE 'GRANT INSERT, SELECT ON scanner_logger.scan_events TO scannerlogger';
         EXECUTE 'GRANT INSERT, SELECT ON scanner_logger.raw_scan_events TO scannerlogger';
-        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON scanner_logger.pending_orders TO scannerlogger';
         EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA scanner_logger TO scannerlogger';
     END IF;
 END $$;
