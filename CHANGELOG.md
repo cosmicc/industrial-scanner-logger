@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.3 - 2026-06-05
+
 - Remove the extra duplicate category and keep one regular duplicate flag.
 - Silently drop same-scanner repeats until 3 different successful scans have been accepted on that scanner.
 - Page search results from PostgreSQL with selectable 10, 25, 50, 100, or 200 row pages.
@@ -15,6 +17,7 @@ All notable changes to this project will be documented in this file.
 - Make the TV dashboard system status banner consistently full-width and label it System Ok or System Problem.
 - Change tracking suffix search from the last 10 digits to the last 12 digits.
 - Remove the abandoned order-hold workflow, including its table, API endpoints, search page, navigation links, and TV alert path.
+- Remove scanner role storage/display and add scanner-pair duplicate protection for overlapping scanner coverage.
 - Store scan tracking numbers as the 12-digit operator value while keeping the full 34-digit value in the barcode field.
 - Invert repair storage so repaired rows keep the 12-digit tracking value and write the reconstructed full value to barcode, while raw scan rows keep the original short read.
 

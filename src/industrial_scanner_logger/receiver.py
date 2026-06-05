@@ -5,7 +5,7 @@ HF811 Daily FedEx Tracking TCP Listener
 Creates a new dated CSV file each day.
 
 Daily scan CSV format:
-    date,time,scanner_id,scanner_name,scanner_role,status,is_duplicate,is_repaired,tracking
+    date,time,scanner_id,scanner_name,status,is_duplicate,is_repaired,tracking
 
 Failed scans CSV:
     /scanner-logs/failed_scans.csv
@@ -65,6 +65,7 @@ DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS = 3.0
 DEFAULT_POSTGRESQL_RETRY_INTERVAL_SECONDS = 30.0
 DEFAULT_LAST_SCANNER_ID = ""
 DEFAULT_MANDATORY_SCANNER_IDS = ""
+DEFAULT_SCANNER_PAIRS = ""
 DEFAULT_CURRENT_SCAN_RATE_STALE_SECONDS = 60
 DEFAULT_HEALTH_PAGE_REFRESH_SECONDS = 3
 DEFAULT_TV_DASHBOARD_REFRESH_SECONDS = 1
@@ -78,14 +79,11 @@ DUPLICATE_DISTINCT_SUCCESS_THRESHOLD = 3
 DUPLICATE_LOOKBACK_DAYS = 30
 UNKNOWN_SCANNER_ID = "UNKNOWN"
 ALL_SCANNERS_ID = "ALL"
-SCANNER_ROLE_STANDARD = "standard"
-SCANNER_ROLE_LAST = "last"
 DAILY_CSV_HEADER = [
     "date",
     "time",
     "scanner_id",
     "scanner_name",
-    "scanner_role",
     "status",
     "is_duplicate",
     "is_repaired",
@@ -133,6 +131,7 @@ CONFIG_DEFAULTS = {
     "scanners": {
         "last_scanner_id": DEFAULT_LAST_SCANNER_ID,
         "mandatory_scanner_ids": DEFAULT_MANDATORY_SCANNER_IDS,
+        "scanner_pairs": DEFAULT_SCANNER_PAIRS,
     },
     "scanner_names": {},
     "dashboard": {
@@ -371,6 +370,44 @@ def parse_configured_scanner_ids(scanner_ids: str, field_name: str) -> list[str]
     return parsed_scanner_ids
 
 
+def parse_scanner_pairs(
+    scanner_pairs: str,
+    field_name: str = "scanner_pairs",
+) -> dict[str, tuple[str, ...]]:
+    scanner_pairs = clean_barcode(scanner_pairs)
+
+    if not scanner_pairs:
+        return {}
+
+    pair_map = {}
+
+    for pair_text in re.split(r"\s*;\s*", scanner_pairs):
+        pair_text = clean_barcode(pair_text)
+        if not pair_text:
+            continue
+
+        scanner_ids = parse_configured_scanner_ids(pair_text, field_name)
+
+        if len(scanner_ids) < 2:
+            raise ValueError(
+                f"{field_name} groups must include at least two scanner IDs"
+            )
+
+        scanner_group = tuple(scanner_ids)
+
+        for scanner_id in scanner_group:
+            if scanner_id in pair_map:
+                raise ValueError(
+                    f"{field_name} cannot include scanner {scanner_id} in more "
+                    "than one group"
+                )
+
+        for scanner_id in scanner_group:
+            pair_map[scanner_id] = scanner_group
+
+    return pair_map
+
+
 def parse_scanner_name_map(config: configparser.ConfigParser) -> dict:
     scanner_names = {}
 
@@ -476,6 +513,10 @@ def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
             mandatory_scanner_ids=parse_configured_scanner_ids(
                 config.get("scanners", "mandatory_scanner_ids"),
                 "scanners.mandatory_scanner_ids",
+            ),
+            scanner_pairs=parse_scanner_pairs(
+                config.get("scanners", "scanner_pairs"),
+                "scanners.scanner_pairs",
             ),
             scanner_names=parse_scanner_name_map(config),
             current_scan_rate_stale_seconds=validate_positive_int(
@@ -608,20 +649,20 @@ class PostgreSQLScanLogger:
         self._sql = sql
         self.insert_sql = sql.SQL(
             "INSERT INTO {}.{} "
-            "(scan_date, scan_time, scanner_id, scanner_name, scanner_role, "
-            "last_scanner_id, is_duplicate, is_repaired, "
+            "(scan_date, scan_time, scanner_id, scanner_name, last_scanner_id, "
+            "is_duplicate, is_repaired, "
             "tracking_number, barcode) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
         ).format(
             sql.Identifier(self.schema_name),
             sql.Identifier(self.relation_name),
         )
         self.raw_insert_sql = sql.SQL(
             "INSERT INTO {}.{} "
-            "(scan_date, scan_time, scanner_id, scanner_name, scanner_role, "
-            "last_scanner_id, is_duplicate, is_repaired, "
+            "(scan_date, scan_time, scanner_id, scanner_name, last_scanner_id, "
+            "is_duplicate, is_repaired, "
             "tracking_number, barcode) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
         ).format(
             sql.Identifier(self.raw_schema_name),
             sql.Identifier(self.raw_relation_name),
@@ -682,7 +723,7 @@ class PostgreSQLScanLogger:
         tracking_number: str,
         scan_date: str,
         scan_time: str,
-        scanner_id: Optional[int] = None,
+        scanner_ids: Optional[list[int]] = None,
     ) -> int:
         table_sql = self._table_sql()
         lookback_start = self._lookback_start_date(scan_date)
@@ -697,10 +738,17 @@ class PostgreSQLScanLogger:
             scan_time,
         ]
 
-        if scanner_id is not None:
-            scanner_filter = self._sql.SQL("AND scanner_id = %s")
-            events_scanner_filter = self._sql.SQL("AND events.scanner_id = %s")
-            params.append(scanner_id)
+        if scanner_ids:
+            placeholders = self._sql.SQL(", ").join(
+                self._sql.Placeholder() for _scanner_id in scanner_ids
+            )
+            scanner_filter = self._sql.SQL("AND scanner_id IN ({})").format(
+                placeholders,
+            )
+            events_scanner_filter = self._sql.SQL(
+                "AND events.scanner_id IN ({})"
+            ).format(placeholders)
+            params.extend(scanner_ids)
 
         params.extend([
             tracking_number,
@@ -711,8 +759,8 @@ class PostgreSQLScanLogger:
             scan_time,
         ])
 
-        if scanner_id is not None:
-            params.append(scanner_id)
+        if scanner_ids:
+            params.extend(scanner_ids)
 
         query = self._sql.SQL(
             """
@@ -766,15 +814,18 @@ class PostgreSQLScanLogger:
 
         return int(row[0] or 0)
 
-    def _seen_on_scanner(
+    def _seen_on_scanners(
         self,
-        scanner_id: int,
+        scanner_ids: list[int],
         tracking_number: str,
         scan_date: str,
         scan_time: str,
     ) -> bool:
         table_sql = self._table_sql()
         lookback_start = self._lookback_start_date(scan_date)
+        placeholders = self._sql.SQL(", ").join(
+            self._sql.Placeholder() for _scanner_id in scanner_ids
+        )
         query = self._sql.SQL(
             """
             SELECT EXISTS (
@@ -782,7 +833,7 @@ class PostgreSQLScanLogger:
                 FROM {table}
                 WHERE is_success = true
                   AND tracking_number = %s
-                  AND scanner_id = %s
+                  AND scanner_id IN ({scanner_id_placeholders})
                   AND scan_date BETWEEN %s AND %s
                   AND (
                       scan_date < %s
@@ -790,14 +841,17 @@ class PostgreSQLScanLogger:
                   )
             )
             """
-        ).format(table=table_sql)
+        ).format(
+            table=table_sql,
+            scanner_id_placeholders=placeholders,
+        )
 
         with self.conn.cursor() as cursor:
             cursor.execute(
                 query,
                 [
                     tracking_number,
-                    scanner_id,
+                    *scanner_ids,
                     lookback_start,
                     scan_date,
                     scan_date,
@@ -809,20 +863,40 @@ class PostgreSQLScanLogger:
 
         return bool(row[0])
 
+    def _scanner_ids_for_duplicate_lookup(
+        self,
+        scanner_id: str,
+        paired_scanner_ids: Optional[tuple[str, ...]] = None,
+    ) -> list[int]:
+        raw_scanner_ids = paired_scanner_ids or (scanner_id,)
+        parsed_scanner_ids = []
+
+        for raw_scanner_id in raw_scanner_ids:
+            db_scanner_id = scanner_id_for_postgresql(raw_scanner_id)
+
+            if db_scanner_id not in parsed_scanner_ids:
+                parsed_scanner_ids.append(db_scanner_id)
+
+        return parsed_scanner_ids or [scanner_id_for_postgresql(scanner_id)]
+
     def duplicate_state_for_success(
         self,
         scanner_id: str,
         tracking_number: str,
         scan_date: str,
         scan_time: str,
+        paired_scanner_ids: Optional[tuple[str, ...]] = None,
     ) -> tuple[bool, bool]:
         self._connect()
 
-        db_scanner_id = scanner_id_for_postgresql(scanner_id)
+        db_scanner_ids = self._scanner_ids_for_duplicate_lookup(
+            scanner_id,
+            paired_scanner_ids,
+        )
 
         try:
-            seen_on_same_scanner = self._seen_on_scanner(
-                db_scanner_id,
+            seen_on_same_scanner = self._seen_on_scanners(
+                db_scanner_ids,
                 tracking_number,
                 scan_date,
                 scan_time,
@@ -831,7 +905,7 @@ class PostgreSQLScanLogger:
                 tracking_number,
                 scan_date,
                 scan_time,
-                db_scanner_id,
+                db_scanner_ids,
             )
             same_scanner_duplicate = (
                 same_scanner_count >= DUPLICATE_DISTINCT_SUCCESS_THRESHOLD
@@ -875,7 +949,6 @@ class PostgreSQLScanLogger:
         barcode: str,
         scanner_id: int,
         scanner_name: Optional[str],
-        scanner_role: str,
         last_scanner_id: Optional[int],
         is_duplicate: bool,
         is_repaired: bool,
@@ -890,7 +963,6 @@ class PostgreSQLScanLogger:
                     scan_time,
                     scanner_id,
                     scanner_name,
-                    scanner_role,
                     last_scanner_id,
                     is_duplicate,
                     is_repaired,
@@ -905,7 +977,6 @@ class PostgreSQLScanLogger:
         barcode: str,
         scanner_id: str,
         scanner_name: str,
-        scanner_role: str,
         last_scanner_id: str,
         is_duplicate: bool,
         is_repaired: bool,
@@ -933,7 +1004,6 @@ class PostgreSQLScanLogger:
                 raw_barcode,
                 db_scanner_id,
                 db_scanner_name,
-                scanner_role,
                 db_last_scanner_id,
                 raw_is_duplicate,
                 False,
@@ -948,7 +1018,6 @@ class PostgreSQLScanLogger:
                     barcode,
                     db_scanner_id,
                     db_scanner_name,
-                    scanner_role,
                     db_last_scanner_id,
                     is_duplicate,
                     is_repaired,
@@ -985,6 +1054,7 @@ class DailyCsvLogger:
         postgresql_logger=None,
         last_scanner_id: str = DEFAULT_LAST_SCANNER_ID,
         scanner_names=None,
+        scanner_pairs=None,
         tracking_repair_enabled: bool = False,
     ):
         self.output_dir = output_dir
@@ -1018,6 +1088,19 @@ class DailyCsvLogger:
             "last_scanner_id",
         )
         self.scanner_names = dict(scanner_names or {})
+        if isinstance(scanner_pairs, str):
+            self.scanner_pairs = parse_scanner_pairs(scanner_pairs)
+        else:
+            self.scanner_pairs = {
+                validate_configured_scanner_id(
+                    scanner_id,
+                    "scanner_pairs keys",
+                ): tuple(
+                    validate_configured_scanner_id(pair_id, "scanner_pairs values")
+                    for pair_id in paired_scanner_ids
+                )
+                for scanner_id, paired_scanner_ids in dict(scanner_pairs or {}).items()
+            }
         self.tracking_repair_enabled = bool(tracking_repair_enabled)
         self.lock = threading.Lock()
 
@@ -1100,34 +1183,35 @@ class DailyCsvLogger:
         return self.scanner_counts.setdefault(scanner_id, self._new_counts())
 
     def _get_seen_successes(self, scanner_id: str):
-        scanner_id = normalize_scanner_id(scanner_id)
-        return self.seen_success_barcodes_by_scanner.setdefault(scanner_id, set())
+        duplicate_group_key = self._duplicate_group_key(scanner_id)
+        return self.seen_success_barcodes_by_scanner.setdefault(
+            duplicate_group_key,
+            set(),
+        )
 
     def _get_success_barcodes(self, scanner_id: str):
-        scanner_id = normalize_scanner_id(scanner_id)
-        return self.success_barcodes_by_scanner.setdefault(scanner_id, set())
+        duplicate_group_key = self._duplicate_group_key(scanner_id)
+        return self.success_barcodes_by_scanner.setdefault(duplicate_group_key, set())
 
     def _get_success_history(self, scanner_id: str):
-        scanner_id = normalize_scanner_id(scanner_id)
-        return self.success_history_by_scanner.setdefault(scanner_id, [])
+        duplicate_group_key = self._duplicate_group_key(scanner_id)
+        return self.success_history_by_scanner.setdefault(duplicate_group_key, [])
 
     def _get_success_last_index(self, scanner_id: str):
-        scanner_id = normalize_scanner_id(scanner_id)
-        return self.success_last_index_by_scanner.setdefault(scanner_id, {})
+        duplicate_group_key = self._duplicate_group_key(scanner_id)
+        return self.success_last_index_by_scanner.setdefault(duplicate_group_key, {})
 
     def _scanner_name(self, scanner_id: str) -> str:
         return self.scanner_names.get(normalize_scanner_id(scanner_id), "")
 
-    def _scanner_role(self, scanner_id: str) -> str:
+    def _paired_scanner_ids(self, scanner_id: str) -> tuple[str, ...]:
         scanner_id = normalize_scanner_id(scanner_id)
+        return self.scanner_pairs.get(scanner_id, (scanner_id,))
 
-        if self.last_scanner_id and scanner_id == self.last_scanner_id:
-            return SCANNER_ROLE_LAST
-
-        return SCANNER_ROLE_STANDARD
+    def _duplicate_group_key(self, scanner_id: str) -> str:
+        return "+".join(self._paired_scanner_ids(scanner_id))
 
     def _seen_success_on_same_scanner(self, scanner_id: str, barcode: str) -> bool:
-        scanner_id = normalize_scanner_id(scanner_id)
         return barcode in self._get_seen_successes(scanner_id)
 
     def _history_has_intervening_distinct_successes(
@@ -1191,6 +1275,7 @@ class DailyCsvLogger:
                     tracking_number,
                     scan_date,
                     scan_time,
+                    self._paired_scanner_ids(scanner_id),
                 )
 
                 if database_state is not None:
@@ -1372,13 +1457,12 @@ class DailyCsvLogger:
         """
         Ensure the daily CSV has the latest header.
 
-        If an older daily file exists with either:
+        If an older daily file exists with:
             date,time,tracking
             date,time,scanner_id,status,tracking
+            the previous rich daily scan header
 
-        it is migrated to:
-            date,time,scanner_id,scanner_name,scanner_role,status,
-            is_duplicate,is_repaired,tracking
+        it is migrated to the current DAILY_CSV_HEADER.
         """
         expected_header = DAILY_CSV_HEADER
 
@@ -1416,10 +1500,6 @@ class DailyCsvLogger:
                     if not scanner_name:
                         scanner_name = self._scanner_name(scanner_id)
 
-                    scanner_role = clean_barcode(row.get("scanner_role", ""))
-                    if scanner_role not in {SCANNER_ROLE_STANDARD, SCANNER_ROLE_LAST}:
-                        scanner_role = self._scanner_role(scanner_id)
-
                     tracking = clean_barcode(
                         row.get("tracking", "") or row.get("barcode", "")
                     )
@@ -1452,7 +1532,6 @@ class DailyCsvLogger:
                         time_str,
                         scanner_id,
                         scanner_name,
-                        scanner_role,
                         status,
                         duplicate_text,
                         repaired_text,
@@ -1675,19 +1754,23 @@ class DailyCsvLogger:
                         else ""
                     )
                     tracking = tracking_number_from_barcode(tracking)
+                    duplicate_group_key = self._duplicate_group_key(scanner_id)
                     counts["successful_scans"] += 1
                     if tracking:
-                        seen_success_by_scanner.setdefault(scanner_id, set()).add(
-                            tracking
-                        )
-                        success_history_by_scanner.setdefault(scanner_id, []).append(
-                            tracking
-                        )
+                        seen_success_by_scanner.setdefault(
+                            duplicate_group_key,
+                            set(),
+                        ).add(tracking)
+                        success_history_by_scanner.setdefault(
+                            duplicate_group_key,
+                            [],
+                        ).append(tracking)
                         success_history.append(tracking)
                     if success_barcode:
-                        success_barcodes_by_scanner.setdefault(scanner_id, set()).add(
-                            success_barcode
-                        )
+                        success_barcodes_by_scanner.setdefault(
+                            duplicate_group_key,
+                            set(),
+                        ).add(success_barcode)
                 else:
                     counts["failed_scans"] += 1
 
@@ -1937,7 +2020,6 @@ class DailyCsvLogger:
             raw_status = status
             scanner_counts = self._get_counts(scanner_id)
             scanner_name = self._scanner_name(scanner_id)
-            scanner_role = self._scanner_role(scanner_id)
             is_duplicate = False
             is_repaired = False
             date_str = self.current_date
@@ -2015,7 +2097,6 @@ class DailyCsvLogger:
                     time_str,
                     scanner_id,
                     scanner_name,
-                    scanner_role,
                     status,
                     str(is_duplicate).lower(),
                     str(is_repaired).lower(),
@@ -2038,7 +2119,6 @@ class DailyCsvLogger:
                 f"Failed:{self.failed_count} "
                 f"Scanner:{scanner_id} "
                 f"ScannerName:{scanner_name or 'unmapped'} "
-                f"ScannerRole:{scanner_role} "
                 f"ScannerEvent:{scanner_counts['total_events']} "
                 f"ScannerSuccess:{scanner_counts['successful_scans']} "
                 f"ScannerFailed:{scanner_counts['failed_scans']} "
@@ -2054,7 +2134,6 @@ class DailyCsvLogger:
                 barcode,
                 scanner_id,
                 scanner_name,
-                scanner_role,
                 self.last_scanner_id,
                 is_duplicate,
                 is_repaired,
@@ -2077,11 +2156,8 @@ def address_label(addr) -> str:
         return str(addr)
 
 
-def scanner_log_metadata(logger: DailyCsvLogger, scanner_id: str) -> tuple[str, str]:
-    return (
-        logger._scanner_name(scanner_id) or "unmapped",
-        logger._scanner_role(scanner_id),
-    )
+def scanner_log_metadata(logger: DailyCsvLogger, scanner_id: str) -> str:
+    return logger._scanner_name(scanner_id) or "unmapped"
 
 
 def write_client_scan(
@@ -2121,13 +2197,12 @@ def handle_client(
     tcp_keepalive_probes: int = DEFAULT_TCP_KEEPALIVE_PROBES,
 ):
     scanner_id = scanner_id_from_addr(addr)
-    scanner_name, scanner_role = scanner_log_metadata(logger, scanner_id)
+    scanner_name = scanner_log_metadata(logger, scanner_id)
     SCRIPT_LOGGER.info(
-        "Scanner connected address=%s scanner_id=%s scanner_name=%s scanner_role=%s",
+        "Scanner connected address=%s scanner_id=%s scanner_name=%s",
         address_label(addr),
         scanner_id,
         scanner_name,
-        scanner_role,
     )
 
     buffer = ""
@@ -2187,11 +2262,10 @@ def handle_client(
 
                     SCRIPT_LOGGER.info(
                         "Scanner disconnected address=%s scanner_id=%s "
-                        "scanner_name=%s scanner_role=%s",
+                        "scanner_name=%s",
                         address_label(addr),
                         scanner_id,
                         scanner_name,
-                        scanner_role,
                     )
                     break
 
@@ -2391,6 +2465,7 @@ def main():
         postgresql_logger=postgresql_logger,
         last_scanner_id=args.last_scanner_id,
         scanner_names=args.scanner_names,
+        scanner_pairs=args.scanner_pairs,
         tracking_repair_enabled=args.tracking_repair_enabled,
     )
 
@@ -2413,6 +2488,10 @@ def main():
     SCRIPT_LOGGER.info(
         "Configured scanner names: %s",
         len(args.scanner_names),
+    )
+    SCRIPT_LOGGER.info(
+        "Configured scanner pair members: %s",
+        len(args.scanner_pairs),
     )
     SCRIPT_LOGGER.info("Raw scan data log directory: %s", args.scan_data_log_dir)
     SCRIPT_LOGGER.info(

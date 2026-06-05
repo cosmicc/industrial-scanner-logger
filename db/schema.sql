@@ -13,9 +13,6 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
 
     scanner_name TEXT,
 
-    scanner_role TEXT NOT NULL DEFAULT 'standard'
-        CHECK (scanner_role IN ('standard', 'last')),
-
     last_scanner_id SMALLINT CHECK (last_scanner_id BETWEEN 0 AND 255),
 
     is_duplicate BOOLEAN NOT NULL DEFAULT false,
@@ -62,9 +59,6 @@ CREATE TABLE IF NOT EXISTS scanner_logger.raw_scan_events (
 
     scanner_name TEXT,
 
-    scanner_role TEXT NOT NULL DEFAULT 'standard'
-        CHECK (scanner_role IN ('standard', 'last')),
-
     last_scanner_id SMALLINT CHECK (last_scanner_id BETWEEN 0 AND 255),
 
     is_duplicate BOOLEAN NOT NULL DEFAULT false,
@@ -101,6 +95,20 @@ CREATE TABLE IF NOT EXISTS scanner_logger.raw_scan_events (
 );
 
 DROP TABLE IF EXISTS scanner_logger.pending_orders;
+
+DROP VIEW IF EXISTS scanner_logger.successful_scans_missing_last_scanner;
+DROP VIEW IF EXISTS scanner_logger.successful_scan_progression;
+DROP VIEW IF EXISTS scanner_logger.duplicate_successful_scans;
+DROP VIEW IF EXISTS scanner_logger.successful_scans;
+DROP VIEW IF EXISTS scanner_logger.failed_scans;
+DROP VIEW IF EXISTS scanner_logger.daily_scan_totals_all_scanners;
+DROP VIEW IF EXISTS scanner_logger.daily_scan_totals;
+
+ALTER TABLE scanner_logger.scan_events
+    DROP COLUMN IF EXISTS scanner_role;
+
+ALTER TABLE scanner_logger.raw_scan_events
+    DROP COLUMN IF EXISTS scanner_role;
 
 CREATE INDEX IF NOT EXISTS idx_scan_events_scan_date_time
     ON scanner_logger.scan_events (scan_date DESC, scan_time DESC, id DESC);
@@ -154,7 +162,6 @@ SELECT
     scan_date,
     scanner_id,
     scanner_name,
-    scanner_role,
     count(*) AS total_scan_events,
     count(*) FILTER (WHERE is_success) AS successful_scans,
     count(*) FILTER (WHERE is_success = false) AS failed_scans,
@@ -163,8 +170,7 @@ FROM scanner_logger.scan_events
 GROUP BY
     scan_date,
     scanner_id,
-    scanner_name,
-    scanner_role;
+    scanner_name;
 
 CREATE OR REPLACE VIEW scanner_logger.daily_scan_totals_all_scanners AS
 SELECT
@@ -184,7 +190,6 @@ SELECT
     scan_time,
     scanner_id,
     scanner_name,
-    scanner_role,
     last_scanner_id,
     is_duplicate,
     is_repaired,
@@ -202,7 +207,6 @@ SELECT
     scan_time,
     scanner_id,
     scanner_name,
-    scanner_role,
     last_scanner_id,
     is_duplicate,
     is_repaired,
@@ -246,7 +250,6 @@ SELECT
     events.scan_time,
     events.scanner_id,
     events.scanner_name,
-    events.scanner_role,
     events.last_scanner_id,
     events.tracking_number,
     events.barcode,

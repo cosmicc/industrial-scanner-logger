@@ -22,6 +22,7 @@ from industrial_scanner_logger.receiver import (  # noqa: E402
     load_receiver_config,
     oversized_scan_marker,
     parse_configured_scanner_ids,
+    parse_scanner_pairs,
     parse_postgresql_table,
     reset_script_logging,
     scanner_id_for_postgresql,
@@ -42,7 +43,6 @@ class FakePostgreSQLLogger:
         barcode,
         scanner_id,
         scanner_name,
-        scanner_role,
         last_scanner_id,
         is_duplicate,
         is_repaired,
@@ -58,7 +58,6 @@ class FakePostgreSQLLogger:
             "scan_time": scan_time,
             "scanner_id": scanner_id,
             "scanner_name": scanner_name,
-            "scanner_role": scanner_role,
             "last_scanner_id": last_scanner_id,
             "is_duplicate": raw_is_duplicate,
             "is_repaired": False,
@@ -74,7 +73,6 @@ class FakePostgreSQLLogger:
             "scan_time": scan_time,
             "scanner_id": scanner_id,
             "scanner_name": scanner_name,
-            "scanner_role": scanner_role,
             "last_scanner_id": last_scanner_id,
             "is_duplicate": is_duplicate,
             "is_repaired": is_repaired,
@@ -99,12 +97,14 @@ class FakeDuplicatePostgreSQLLogger(FakePostgreSQLLogger):
         tracking_number,
         scan_date,
         scan_time,
+        paired_scanner_ids=None,
     ):
         self.duplicate_calls.append({
             "scanner_id": scanner_id,
             "tracking_number": tracking_number,
             "scan_date": scan_date,
             "scan_time": scan_time,
+            "paired_scanner_ids": paired_scanner_ids,
         })
         return self.duplicate_state
 
@@ -144,8 +144,8 @@ class FakeSocket:
 
 
 class ReceiverTests(unittest.TestCase):
-    def test_project_version_is_1_2_1(self):
-        self.assertEqual(__version__, "1.2.1")
+    def test_project_version_is_1_3(self):
+        self.assertEqual(__version__, "1.3")
 
     def test_clean_barcode_removes_scanner_line_noise(self):
         self.assertEqual(clean_barcode("\x0012345\r\n"), "12345")
@@ -176,6 +176,23 @@ class ReceiverTests(unittest.TestCase):
                 "20,scanner-a",
                 "scanners.mandatory_scanner_ids",
             )
+
+    def test_parse_scanner_pairs_builds_pair_lookup(self):
+        self.assertEqual(
+            parse_scanner_pairs("20, 21; 30 31", "scanners.scanner_pairs"),
+            {
+                "20": ("20", "21"),
+                "21": ("20", "21"),
+                "30": ("30", "31"),
+                "31": ("30", "31"),
+            },
+        )
+
+        with self.assertRaises(ValueError):
+            parse_scanner_pairs("20", "scanners.scanner_pairs")
+
+        with self.assertRaises(ValueError):
+            parse_scanner_pairs("20,21; 21,22", "scanners.scanner_pairs")
 
     def test_parse_postgresql_table_requires_safe_schema_table_name(self):
         self.assertEqual(
@@ -228,10 +245,13 @@ retry_interval = 12
 [scanners]
 last_scanner_id = 21
 mandatory_scanner_ids = 20, 21
+scanner_pairs = 20, 21; 30, 31
 
 [scanner_names]
 20 = Lane 1 Scanner
 21 = Last Scanner
+30 = End Left
+31 = End Right
 
 [dashboard]
 current_scan_rate_stale_seconds = 120
@@ -277,10 +297,21 @@ log_level = warning
             self.assertEqual(config.postgresql_retry_interval, 12)
             self.assertEqual(config.last_scanner_id, "21")
             self.assertEqual(
+                config.scanner_pairs,
+                {
+                    "20": ("20", "21"),
+                    "21": ("20", "21"),
+                    "30": ("30", "31"),
+                    "31": ("30", "31"),
+                },
+            )
+            self.assertEqual(
                 config.scanner_names,
                 {
                     "20": "Lane 1 Scanner",
                     "21": "Last Scanner",
+                    "30": "End Left",
+                    "31": "End Right",
                 },
             )
             self.assertTrue(config.api_enabled)
@@ -420,7 +451,6 @@ log_level = warning
 
             self.assertEqual(rows[0]["scanner_id"], "21")
             self.assertEqual(rows[0]["scanner_name"], "Last Scanner")
-            self.assertEqual(rows[0]["scanner_role"], "last")
             self.assertEqual(rows[0]["status"], "SUCCESS")
             self.assertEqual(rows[0]["is_duplicate"], "false")
             self.assertEqual(rows[0]["is_repaired"], "false")
@@ -675,6 +705,56 @@ log_level = warning
             ])
             self.assertEqual([row["is_duplicate"] for row in rows], ["false"] * 3)
 
+    def test_paired_scanner_immediate_repeat_is_dropped(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                scanner_pairs="20, 21",
+            )
+
+            tracking_a = "1" * 34
+
+            logger.write_scan_event(tracking_a, "20")
+            logger.write_scan_event(tracking_a, "21")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["scanner_id"], "20")
+            self.assertEqual(rows[0]["tracking"], tracking_number_from_barcode(tracking_a))
+            self.assertEqual(rows[0]["is_duplicate"], "false")
+
+    def test_paired_scanner_repeat_after_threshold_is_duplicate(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                scanner_pairs="20, 21",
+            )
+
+            tracking_a = "1" * 34
+            other_tracking_numbers = ["2" * 34, "3" * 34, "4" * 34]
+
+            logger.write_scan_event(tracking_a, "20")
+            logger.write_scan_event(other_tracking_numbers[0], "21")
+            logger.write_scan_event(other_tracking_numbers[1], "20")
+            logger.write_scan_event(other_tracking_numbers[2], "21")
+            logger.write_scan_event(tracking_a, "21")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(len(rows), 5)
+            self.assertEqual(rows[-1]["scanner_id"], "21")
+            self.assertEqual(rows[-1]["tracking"], tracking_number_from_barcode(tracking_a))
+            self.assertEqual(rows[-1]["is_duplicate"], "true")
+
     def test_duplicate_flags_can_come_from_postgresql_month_lookup(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
             postgresql_logger = FakeDuplicatePostgreSQLLogger((True, True))
@@ -703,6 +783,30 @@ log_level = warning
             self.assertEqual(
                 postgresql_logger.duplicate_calls[0]["tracking_number"],
                 tracking_number_from_barcode(valid_tracking),
+            )
+            self.assertEqual(
+                postgresql_logger.duplicate_calls[0]["paired_scanner_ids"],
+                ("21",),
+            )
+
+    def test_database_duplicate_lookup_receives_paired_scanner_ids(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            postgresql_logger = FakeDuplicatePostgreSQLLogger((True, False))
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                postgresql_logger=postgresql_logger,
+                scanner_pairs="20, 21",
+            )
+
+            logger.write_scan_event("1" * 34, "20")
+
+            self.assertEqual(postgresql_logger.rows, [])
+            self.assertEqual(
+                postgresql_logger.duplicate_calls[0]["paired_scanner_ids"],
+                ("20", "21"),
             )
 
     def test_database_duplicate_state_marks_regular_duplicate(self):
@@ -911,18 +1015,14 @@ log_level = warning
                 rows = list(csv.DictReader(f))
 
             self.assertEqual(rows[0]["scanner_name"], "Lane 1 Scanner")
-            self.assertEqual(rows[0]["scanner_role"], "standard")
             self.assertEqual(rows[0]["is_duplicate"], "false")
             self.assertEqual(rows[-1]["scanner_name"], "Last Scanner")
-            self.assertEqual(rows[-1]["scanner_role"], "last")
             self.assertEqual(rows[-1]["is_duplicate"], "false")
 
             self.assertEqual(postgresql_logger.rows[0]["scanner_name"], "Lane 1 Scanner")
-            self.assertEqual(postgresql_logger.rows[0]["scanner_role"], "standard")
             self.assertEqual(postgresql_logger.rows[0]["last_scanner_id"], "21")
             self.assertFalse(postgresql_logger.rows[0]["is_duplicate"])
             self.assertEqual(postgresql_logger.rows[-1]["scanner_name"], "Last Scanner")
-            self.assertEqual(postgresql_logger.rows[-1]["scanner_role"], "last")
             self.assertEqual(postgresql_logger.rows[-1]["last_scanner_id"], "21")
             self.assertFalse(postgresql_logger.rows[-1]["is_duplicate"])
 
@@ -988,7 +1088,7 @@ log_level = warning
 
             self.assertIn("Now logging to:", script_log)
             self.assertIn("Scanner connected address=10.10.10.20:0", script_log)
-            self.assertIn("scanner_name=Lane 1 Scanner scanner_role=last", script_log)
+            self.assertIn("scanner_name=Lane 1 Scanner", script_log)
             self.assertIn("Scanner disconnected address=10.10.10.20:0", script_log)
             self.assertNotIn("Scan event recorded", script_log)
             self.assertNotIn(valid_tracking, script_log)

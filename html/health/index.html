@@ -156,7 +156,6 @@
               <th>Date</th>
               <th>Time</th>
               <th>Scanner</th>
-              <th>Role</th>
               <th>Status</th>
               <th>Duplicate</th>
               <th>Repaired</th>
@@ -167,7 +166,7 @@
           </thead>
           <tbody id="recent-scans">
             <tr>
-              <td colspan="10">Checking...</td>
+              <td colspan="9">Checking...</td>
             </tr>
           </tbody>
         </table>
@@ -270,7 +269,7 @@
 
       if (!rows || rows.length === 0) {
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="10">No scan rows found.</td>`;
+        tr.innerHTML = `<td colspan="9">No scan rows found.</td>`;
         tbody.appendChild(tr);
         return;
       }
@@ -287,7 +286,6 @@
           <td>${row.scan_date ?? ""}</td>
           <td>${formatTime12(row.scan_date, row.scan_time)}</td>
           <td>${escapeHtml(scannerDisplayName(row))}</td>
-          <td>${escapeHtml(row.scanner_role ?? "")}</td>
           <td>${statusCell}</td>
           <td>${yesNoPill(row.is_duplicate)}</td>
           <td>${yesNoPill(row.is_repaired)}</td>

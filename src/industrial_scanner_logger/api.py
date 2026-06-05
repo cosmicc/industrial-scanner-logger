@@ -41,7 +41,6 @@ SCAN_EVENT_COLUMNS = [
     "scan_time",
     "scanner_id",
     "scanner_name",
-    "scanner_role",
     "last_scanner_id",
     "is_duplicate",
     "is_repaired",
@@ -59,7 +58,6 @@ VIEW_DEFINITIONS = {
             "scan_date",
             "scanner_id",
             "scanner_name",
-            "scanner_role",
             "total_scan_events",
             "successful_scans",
             "failed_scans",
@@ -89,7 +87,6 @@ VIEW_DEFINITIONS = {
             "scan_time",
             "scanner_id",
             "scanner_name",
-            "scanner_role",
             "last_scanner_id",
             "is_duplicate",
             "is_repaired",
@@ -112,7 +109,6 @@ VIEW_DEFINITIONS = {
             "scan_time",
             "scanner_id",
             "scanner_name",
-            "scanner_role",
             "last_scanner_id",
             "is_duplicate",
             "is_repaired",
@@ -150,7 +146,6 @@ VIEW_DEFINITIONS = {
             "scan_time",
             "scanner_id",
             "scanner_name",
-            "scanner_role",
             "last_scanner_id",
             "tracking_number",
             "barcode",
@@ -236,7 +231,6 @@ def build_dashboard_health(config):
                     scan_time,
                     scanner_id,
                     scanner_name,
-                    scanner_role,
                     last_scanner_id,
                     is_duplicate,
                     is_repaired,
@@ -265,7 +259,6 @@ def build_dashboard_health(config):
                         scan_time,
                         scanner_id,
                         scanner_name,
-                        scanner_role,
                         last_scanner_id,
                         is_duplicate,
                         is_repaired,
@@ -379,17 +372,12 @@ def dashboard_connected_scanners(config, connected_scanner_ids: list[int]) -> li
     for scanner_id in connected_scanner_ids:
         scanner_id_text = str(scanner_id)
         scanner_name = config.scanner_names.get(scanner_id_text, "")
-        scanner_role = (
-            "last"
-            if config.last_scanner_id and scanner_id_text == config.last_scanner_id
-            else "standard"
-        )
 
         scanners.append({
             "scanner_id": scanner_id,
             "scanner_name": scanner_name,
             "display_name": scanner_display_name(config, scanner_id, scanner_name),
-            "scanner_role": scanner_role,
+            "paired_scanner_ids": scanner_pair_ids(config, scanner_id_text),
         })
 
     return scanners
@@ -486,6 +474,20 @@ def scan_row_with_display_name(config, row: dict) -> dict:
     return scan_row
 
 
+def scanner_pair_ids(config, scanner_id) -> list[int]:
+    scanner_id_text = str(scanner_id or "").strip()
+    scanner_pairs = getattr(config, "scanner_pairs", {}) or {}
+    pair = scanner_pairs.get(scanner_id_text, ())
+
+    return [
+        scanner_id_value
+        for scanner_id_value in (
+            scanner_id_int(paired_scanner_id) for paired_scanner_id in pair
+        )
+        if scanner_id_value is not None
+    ]
+
+
 def fetch_scanner_options(db, config) -> list[dict]:
     scanners = configured_scanner_options(config)
     rows = fetch_all(
@@ -496,7 +498,6 @@ def fetch_scanner_options(db, config) -> list[dict]:
             max(scanner_name) FILTER (
                 WHERE scanner_name IS NOT NULL AND scanner_name <> ''
             ) AS scanner_name,
-            bool_or(scanner_role = 'last') AS has_last_role,
             max(scan_date) AS last_scan_date
         FROM scanner_logger.scan_events
         WHERE scanner_id IS NOT NULL
@@ -514,15 +515,12 @@ def fetch_scanner_options(db, config) -> list[dict]:
         existing = scanners.get(scanner_id, {})
         scanner_id_text = str(scanner_id)
         fallback_name = row.get("scanner_name") or existing.get("scanner_name", "")
-        role = "last" if row.get("has_last_role") else existing.get("scanner_role", "standard")
-        if getattr(config, "last_scanner_id", "") == scanner_id_text:
-            role = "last"
 
         scanners[scanner_id] = {
             "scanner_id": scanner_id,
             "scanner_name": scanner_name_value(config, scanner_id_text, fallback_name),
             "display_name": scanner_display_name(config, scanner_id_text, fallback_name),
-            "scanner_role": role,
+            "paired_scanner_ids": scanner_pair_ids(config, scanner_id_text),
             "last_scan_date": row.get("last_scan_date"),
         }
 
@@ -536,6 +534,8 @@ def configured_scanner_options(config) -> dict[int, dict]:
     configured_ids.update(getattr(config, "mandatory_scanner_ids", []) or [])
     if getattr(config, "last_scanner_id", ""):
         configured_ids.add(config.last_scanner_id)
+    for scanner_pair in (getattr(config, "scanner_pairs", {}) or {}).values():
+        configured_ids.update(scanner_pair)
 
     for scanner_id_value in configured_ids:
         scanner_id = scanner_id_int(scanner_id_value)
@@ -548,11 +548,7 @@ def configured_scanner_options(config) -> dict[int, dict]:
             "scanner_id": scanner_id,
             "scanner_name": scanner_name,
             "display_name": scanner_display_name(config, scanner_id_text, scanner_name),
-            "scanner_role": (
-                "last"
-                if getattr(config, "last_scanner_id", "") == scanner_id_text
-                else "standard"
-            ),
+            "paired_scanner_ids": scanner_pair_ids(config, scanner_id_text),
             "last_scan_date": None,
         }
 
@@ -707,7 +703,6 @@ def fetch_active_duplicate_alert(db, config, alert_seconds: int) -> Optional[dic
             scan_time,
             scanner_id,
             scanner_name,
-            scanner_role,
             last_scanner_id,
             is_duplicate,
             is_repaired,
@@ -769,7 +764,6 @@ def fetch_active_duplicate_package_alerts(db, config, alert_seconds: int) -> lis
             scan_time,
             scanner_id,
             scanner_name,
-            scanner_role,
             last_scanner_id,
             is_duplicate,
             is_repaired,

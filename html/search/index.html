@@ -113,7 +113,6 @@
               <th>Date</th>
               <th>Time</th>
               <th>Scanner</th>
-              <th>Role</th>
               <th>Status</th>
               <th>Duplicate</th>
               <th>Repaired</th>
@@ -125,7 +124,7 @@
           </thead>
           <tbody id="search-results">
             <tr>
-              <td colspan="11">Search results will appear here.</td>
+              <td colspan="10">Search results will appear here.</td>
             </tr>
           </tbody>
         </table>
@@ -563,7 +562,6 @@
           <td>${formatValue(row.scan_date)}</td>
           <td>${formatTime12(row.scan_date, row.scan_time)}</td>
           <td>${escapeHtml(scannerDisplayName(row))}</td>
-          <td>${escapeHtml(row.scanner_role || "")}</td>
           <td>${statusCell}</td>
           <td>${yesNoPill(row.is_duplicate)}</td>
           <td>${yesNoPill(row.is_repaired)}</td>

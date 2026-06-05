@@ -105,6 +105,7 @@ retry_interval = 30
 [scanners]
 last_scanner_id =
 mandatory_scanner_ids =
+scanner_pairs =
 
 [scanner_names]
 # 20 = Lane 1 Scanner
@@ -292,12 +293,15 @@ missing the configured last scanner.
 Use `[scanners] last_scanner_id` for the final outbound scanner before boxes
 are loaded. Use `[scanners] mandatory_scanner_ids` for scanner IDs that must
 stay connected for the health page and TV dashboard to report OK. Use
+`[scanners] scanner_pairs` for scanners covering overlapping conveyor areas;
+each semicolon-separated group shares duplicate protection. Use
 `[scanner_names]` to map IP last-octet scanner IDs to readable names:
 
 ```ini
 [scanners]
 last_scanner_id = 21
 mandatory_scanner_ids = 20, 21
+scanner_pairs = 20, 21
 
 [scanner_names]
 20 = Lane 1 Scanner
@@ -308,11 +312,11 @@ health_page_refresh_seconds = 3
 tv_dashboard_refresh_seconds = 1
 ```
 
-Repeated successful scans use one duplicate flag. A repeat from the same scanner
-is silently dropped until that scanner has accepted 3 different successful
-tracking numbers since the previous accepted scan of that tracking number in the
-previous 30 days. After that threshold is met, the repeat is logged with
-`is_duplicate = true`.
+Repeated successful scans use one duplicate flag. A repeat from the same scanner,
+or from another scanner in the same configured pair, is silently dropped until
+that scanner group has accepted 3 different successful tracking numbers since
+the previous accepted scan of that tracking number in the previous 30 days.
+After that threshold is met, the repeat is logged with `is_duplicate = true`.
 
 Set `[receiver] tracking_repair_enabled = true` to allow conservative repair of
 short numeric failed scans. A short scan is repaired only when successful scans
@@ -454,7 +458,7 @@ Site_Shipped_Tracking_2026-05-16.csv
 Daily scan CSV columns:
 
 ```text
-date,time,scanner_id,scanner_name,scanner_role,status,is_duplicate,is_repaired,tracking
+date,time,scanner_id,scanner_name,status,is_duplicate,is_repaired,tracking
 ```
 
 The daily CSV `tracking` value is the 12-digit tracking suffix for successful
@@ -477,12 +481,11 @@ The `scanner_id` is the last octet of the scanner IP address. For example,
 scanner `10.10.10.20` is recorded as scanner `20`. `scan_totals.csv` includes
 one row per scanner plus an `ALL` row for the full day.
 
-`scanner_role` is `last` only for the configured final outbound scanner.
 `is_duplicate` is `true` only for successful scans that repeat on the same
-scanner after the 3 different successful tracking number threshold is met.
-Pre-threshold repeats from the same scanner are silently dropped. `is_repaired`
-is `true` only when tracking-number repair reconstructed a short numeric failed
-scan into a valid full 34-digit barcode.
+scanner or configured scanner pair after the 3 different successful tracking
+number threshold is met. Pre-threshold repeats from the same scanner group are
+silently dropped. `is_repaired` is `true` only when tracking-number repair
+reconstructed a short numeric failed scan into a valid full 34-digit barcode.
 
 ## Development
 

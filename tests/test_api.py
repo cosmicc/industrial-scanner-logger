@@ -335,11 +335,11 @@ class ApiQueryTests(unittest.TestCase):
             invalid_csv = output_dir / "Test_2026-99-99.csv"
             previous_csv.write_text(
                 "\n".join([
-                    "date,time,scanner_id,scanner_name,scanner_role,status,"
-                    "is_duplicate,is_repaired,tracking",
-                    "2026-05-17,08:00:00,20,,standard,SUCCESS,false,false,123",
-                    "2026-05-17,08:01:00,20,,standard,SUCCESS,true,false,456",
-                    "2026-05-17,08:02:00,21,,standard,SUCCESS,true,false,789",
+                    "date,time,scanner_id,scanner_name,status,is_duplicate,"
+                    "is_repaired,tracking",
+                    "2026-05-17,08:00:00,20,,SUCCESS,false,false,123",
+                    "2026-05-17,08:01:00,20,,SUCCESS,true,false,456",
+                    "2026-05-17,08:02:00,21,,SUCCESS,true,false,789",
                     "",
                 ]),
                 encoding="utf-8",
@@ -452,7 +452,6 @@ class ApiQueryTests(unittest.TestCase):
                     "scan_time": "08:15:30",
                     "scanner_id": 20,
                     "scanner_name": "",
-                    "scanner_role": "standard",
                     "last_scanner_id": 21,
                     "is_duplicate": True,
                     "is_repaired": False,
@@ -511,7 +510,6 @@ class ApiQueryTests(unittest.TestCase):
                         "scan_time": "08:15:30",
                         "scanner_id": 20,
                         "scanner_name": "",
-                        "scanner_role": "standard",
                         "last_scanner_id": 21,
                         "is_duplicate": True,
                         "is_repaired": False,
@@ -700,7 +698,6 @@ class ApiQueryTests(unittest.TestCase):
                     {
                         "scanner_id": 22,
                         "scanner_name": "",
-                        "has_last_role": True,
                         "last_scan_date": date(2026, 5, 19),
                     },
                 ]
@@ -713,16 +710,18 @@ class ApiQueryTests(unittest.TestCase):
             scanner_names={"20": "Lane 1 Scanner", "21": "Configured Scanner"},
             mandatory_scanner_ids=["21"],
             last_scanner_id="22",
+            scanner_pairs={"22": ("22", "23"), "23": ("22", "23")},
         )
 
         options = fetch_scanner_options(FakeDb(), config)
 
-        self.assertEqual([row["scanner_id"] for row in options], [20, 21, 22])
+        self.assertEqual([row["scanner_id"] for row in options], [20, 21, 22, 23])
         self.assertEqual(options[0]["display_name"], "Lane 1 Scanner")
         self.assertEqual(options[1]["display_name"], "Configured Scanner")
         self.assertEqual(options[1]["last_scan_date"], None)
         self.assertEqual(options[2]["display_name"], "Scanner 22")
-        self.assertEqual(options[2]["scanner_role"], "last")
+        self.assertEqual(options[2]["paired_scanner_ids"], [22, 23])
+        self.assertEqual(options[3]["display_name"], "Scanner 23")
 
 
 if __name__ == "__main__":
