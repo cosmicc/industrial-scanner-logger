@@ -4,8 +4,7 @@
 [![CI](https://github.com/cosmicc/industrial-scanner-logger/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cosmicc/industrial-scanner-logger/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/github/actions/workflow/status/cosmicc/industrial-scanner-logger/ci.yml?branch=main&label=tests&logo=githubactions&logoColor=white)](https://github.com/cosmicc/industrial-scanner-logger/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-3776ab?logo=python&logoColor=white)](pyproject.toml)
-[![Release](https://img.shields.io/github/v/release/cosmicc/industrial-scanner-logger?label=release&sort=semver)](https://github.com/cosmicc/industrial-scanner-logger/releases/latest)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-1.3-blue.svg)](https://github.com/cosmicc/industrial-scanner-logger/releases/tag/v1.3)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-required-336791?logo=postgresql&logoColor=white)](README.md#requirements)
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](README.md#current-behavior)
 <!-- badges:end -->
@@ -518,7 +517,3 @@ The Windows client treats a USB scanner like an industrial scanner by reading
 scanner input locally and sending each scan over TCP to the Industrial Scanner
 Logger server, where it is logged and processed the same way as scans received
 from fixed-mount industrial scanners.
-
-## License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE).
