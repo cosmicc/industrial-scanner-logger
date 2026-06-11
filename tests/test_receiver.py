@@ -16,6 +16,7 @@ from industrial_scanner_logger import __version__  # noqa: E402
 from industrial_scanner_logger.receiver import (  # noqa: E402
     DAILY_CSV_HEADER,
     DailyCsvLogger,
+    PostgreSQLScanLogger,
     clean_barcode,
     configure_script_logging,
     handle_client,
@@ -141,6 +142,39 @@ class FakeSocket:
 class ReceiverTests(unittest.TestCase):
     def test_project_version_is_1_3(self):
         self.assertEqual(__version__, "1.3")
+
+    def test_postgresql_logger_forces_utc_session_timezone(self):
+        class FakePsycopg:
+            def __init__(self):
+                self.connect_args = None
+                self.connect_kwargs = None
+
+            def connect(self, *args, **kwargs):
+                self.connect_args = args
+                self.connect_kwargs = kwargs
+                return object()
+
+        fake_psycopg = FakePsycopg()
+        logger = PostgreSQLScanLogger(
+            dsn="postgresql:///scannerlogger",
+            connect_timeout=4,
+            retry_interval=0,
+        )
+        logger._psycopg = fake_psycopg
+        logger._sql = object()
+
+        logger._connect()
+
+        self.assertEqual(fake_psycopg.connect_args, ("postgresql:///scannerlogger",))
+        self.assertEqual(fake_psycopg.connect_kwargs["autocommit"], True)
+        self.assertEqual(fake_psycopg.connect_kwargs["connect_timeout"], 4)
+        self.assertEqual(fake_psycopg.connect_kwargs["options"], "-c timezone=UTC")
+
+    def test_schema_migrates_legacy_rows_from_explicit_local_timezone(self):
+        schema_sql = (PROJECT_ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
+
+        self.assertIn("AT TIME ZONE ''America/Detroit''", schema_sql)
+        self.assertNotIn("current_setting(''TimeZone'')", schema_sql)
 
     def test_clean_barcode_removes_scanner_line_noise(self):
         self.assertEqual(clean_barcode("\x0012345\r\n"), "12345")

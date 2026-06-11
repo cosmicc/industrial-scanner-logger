@@ -34,6 +34,27 @@ class ApiQueryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_root_path("api")
 
+    def test_connect_db_forces_utc_session_timezone(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from industrial_scanner_logger import api
+
+        fake_connection = object()
+
+        with patch("psycopg.connect", return_value=fake_connection) as connect:
+            connection = api.connect_db(
+                SimpleNamespace(postgresql_dsn="postgresql:///scannerlogger")
+            )
+
+        self.assertIs(connection, fake_connection)
+        connect.assert_called_once_with(
+            "postgresql:///scannerlogger",
+            autocommit=True,
+            row_factory=api.dict_row,
+            options="-c timezone=UTC",
+        )
+
     def test_build_scan_events_query_collects_filters_and_pagination(self):
         from industrial_scanner_logger.api import build_scan_events_query
 

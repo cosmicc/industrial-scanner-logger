@@ -695,6 +695,7 @@ class PostgreSQLScanLogger:
                 self.dsn,
                 autocommit=True,
                 connect_timeout=max(1, int(round(self.connect_timeout))),
+                options="-c timezone=UTC",
             )
         except Exception as exc:
             self._mark_unavailable("connect", exc)

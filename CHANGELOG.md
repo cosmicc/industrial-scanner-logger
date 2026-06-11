@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 - Store PostgreSQL scan event timing in one UTC `scan_timestamp` field and
   migrate existing split date/time rows.
+- Force PostgreSQL app sessions to UTC and convert legacy local scan times with
+  an explicit `America/Detroit` timezone.
 
 ## 1.3 - 2026-06-05
 

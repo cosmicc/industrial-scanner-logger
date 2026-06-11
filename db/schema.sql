@@ -106,9 +106,7 @@ ALTER TABLE scanner_logger.scan_events
 ALTER TABLE scanner_logger.raw_scan_events
     DROP COLUMN IF EXISTS scanner_role;
 
--- Legacy rows used receiver-local date and time values. Run this migration with
--- TimeZone set to that same local zone so the stored split values convert to
--- the correct UTC timestamptz values.
+-- Legacy rows used receiver-local America/Detroit date and time values.
 DO $$
 DECLARE
     target_table REGCLASS;
@@ -147,7 +145,7 @@ BEGIN
         ) THEN
             EXECUTE format(
                 'UPDATE %s
-                    SET scan_timestamp = (scan_date + scan_time) AT TIME ZONE current_setting(''TimeZone'')
+                    SET scan_timestamp = (scan_date + scan_time) AT TIME ZONE ''America/Detroit''
                   WHERE scan_timestamp IS NULL',
                 target_table
             );

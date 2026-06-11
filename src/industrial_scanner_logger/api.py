@@ -1345,6 +1345,7 @@ def connect_db(config):
         config.postgresql_dsn,
         autocommit=True,
         row_factory=dict_row,
+        options="-c timezone=UTC",
     )
 
 
