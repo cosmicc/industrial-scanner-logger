@@ -282,9 +282,11 @@ db/schema.sql
 ```
 
 Python inserts one UTC `scan_timestamp`, scanner metadata, duplicate and repair
-flags, the received barcode, and the tracking number. The timestamp comes from
-the receiver script at the same point where the CSV row is written; PostgreSQL
-does not assign the scan event timestamp. PostgreSQL generated columns and views
+flags, the received barcode, and the tracking number. The database stores
+`scan_timestamp` as `TIMESTAMP(0) WITHOUT TIME ZONE`; values are UTC by
+convention and do not carry an embedded timezone. The timestamp comes from the
+receiver script at the same point where the CSV row is written; PostgreSQL does
+not assign the scan event timestamp. PostgreSQL generated columns and views
 provide success/failure classification, failed scan queries, daily totals,
 package progression, duplicate queries, and successful packages missing the
 configured last scanner.

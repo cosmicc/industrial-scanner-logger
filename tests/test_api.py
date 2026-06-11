@@ -1,7 +1,7 @@
 import importlib.util
 import tempfile
 import unittest
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 HAS_API_DEPS = all(
@@ -71,8 +71,8 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(
             params,
             [
-                datetime(2026, 5, 17, tzinfo=timezone.utc),
-                datetime(2026, 5, 19, tzinfo=timezone.utc),
+                datetime(2026, 5, 17),
+                datetime(2026, 5, 19),
                 20,
                 "1" * 34,
                 "1" * 34,
@@ -143,8 +143,8 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(
             params,
             [
-                datetime(2026, 5, 17, tzinfo=timezone.utc),
-                datetime(2026, 5, 19, tzinfo=timezone.utc),
+                datetime(2026, 5, 17),
+                datetime(2026, 5, 19),
                 20,
                 "123456789012",
                 12,
@@ -235,8 +235,8 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(
             db.cursor_instance.params,
             [
-                datetime(2026, 5, 17, tzinfo=timezone.utc),
-                datetime(2026, 5, 19, tzinfo=timezone.utc),
+                datetime(2026, 5, 17),
+                datetime(2026, 5, 19),
             ],
         )
         self.assertEqual(
@@ -320,8 +320,8 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(
             db.cursor_instance.params,
             [
-                datetime(2026, 5, 18, tzinfo=timezone.utc),
-                datetime(2026, 5, 19, tzinfo=timezone.utc),
+                datetime(2026, 5, 18),
+                datetime(2026, 5, 19),
             ],
         )
         self.assertEqual(

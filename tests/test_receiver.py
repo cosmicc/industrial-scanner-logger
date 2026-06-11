@@ -5,7 +5,7 @@ import tempfile
 import threading
 import unittest
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
+from datetime import datetime
 from io import StringIO
 from pathlib import Path
 
@@ -173,7 +173,10 @@ class ReceiverTests(unittest.TestCase):
     def test_schema_migrates_legacy_rows_from_explicit_local_timezone(self):
         schema_sql = (PROJECT_ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
 
+        self.assertIn("TIMESTAMP(0) WITHOUT TIME ZONE", schema_sql)
+        self.assertNotIn("scan_timestamp TIMESTAMPTZ", schema_sql)
         self.assertIn("AT TIME ZONE ''America/Detroit''", schema_sql)
+        self.assertIn("AT TIME ZONE ''UTC''", schema_sql)
         self.assertNotIn("current_setting(''TimeZone'')", schema_sql)
 
     def test_clean_barcode_removes_scanner_line_noise(self):
@@ -902,14 +905,8 @@ log_level = warning
 
             self.assertEqual(len(postgresql_logger.rows), 2)
             self.assertEqual(len(postgresql_logger.raw_rows), 3)
-            self.assertEqual(
-                postgresql_logger.rows[0]["scan_timestamp"].tzinfo,
-                timezone.utc,
-            )
-            self.assertEqual(
-                postgresql_logger.raw_rows[0]["scan_timestamp"].tzinfo,
-                timezone.utc,
-            )
+            self.assertIsNone(postgresql_logger.rows[0]["scan_timestamp"].tzinfo)
+            self.assertIsNone(postgresql_logger.raw_rows[0]["scan_timestamp"].tzinfo)
             self.assertEqual(postgresql_logger.rows[0]["scanner_id"], "20")
             self.assertEqual(
                 postgresql_logger.rows[0]["tracking_number"],

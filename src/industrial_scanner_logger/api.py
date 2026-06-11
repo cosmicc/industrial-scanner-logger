@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import sys
 from collections import deque
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -38,8 +38,8 @@ TRACKING_SUFFIX_SEARCH_LENGTHS = {12}
 SCAN_EVENT_SELECT_COLUMNS = [
     sql.Identifier("id"),
     sql.Identifier("scan_timestamp"),
-    sql.SQL("(scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date"),
-    sql.SQL("(scan_timestamp AT TIME ZONE 'UTC')::time(0) AS scan_time"),
+    sql.SQL("scan_timestamp::date AS scan_date"),
+    sql.SQL("scan_timestamp::time(0) AS scan_time"),
     sql.Identifier("scanner_id"),
     sql.Identifier("scanner_name"),
     sql.Identifier("last_scanner_id"),
@@ -55,8 +55,8 @@ SCAN_EVENT_SELECT_COLUMNS = [
 SCAN_EVENT_SELECT_SQL = """
                     id,
                     scan_timestamp,
-                    (scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
-                    (scan_timestamp AT TIME ZONE 'UTC')::time(0) AS scan_time,
+                    scan_timestamp::date AS scan_date,
+                    scan_timestamp::time(0) AS scan_time,
                     scanner_id,
                     scanner_name,
                     last_scanner_id,
@@ -495,7 +495,7 @@ def fetch_scanner_options(db, config) -> list[dict]:
             max(scanner_name) FILTER (
                 WHERE scanner_name IS NOT NULL AND scanner_name <> ''
             ) AS scanner_name,
-            (max(scan_timestamp) AT TIME ZONE 'UTC')::date AS last_scan_date
+            max(scan_timestamp)::date AS last_scan_date
         FROM scanner_logger.scan_events
         WHERE scanner_id IS NOT NULL
         GROUP BY scanner_id
@@ -565,7 +565,7 @@ def scanner_id_int(value) -> Optional[int]:
 
 
 def utc_day_start(day: date) -> datetime:
-    return datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+    return datetime(day.year, day.month, day.day)
 
 
 def next_utc_day_start(day: date) -> datetime:
@@ -592,7 +592,7 @@ def fetch_dashboard_daily_totals(
         db,
         """
         SELECT
-            (scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
+            scan_timestamp::date AS scan_date,
             count(*) AS total_scan_events,
             count(*) FILTER (WHERE is_success) AS successful_scans,
             count(*) FILTER (WHERE is_success = false) AS failed_scans,
@@ -679,12 +679,12 @@ def fetch_current_scan_rate(db) -> dict:
         """
         SELECT
             count(*) FILTER (
-                WHERE scan_timestamp >= (CURRENT_TIMESTAMP - %s)
-                  AND scan_timestamp <= CURRENT_TIMESTAMP
+                WHERE scan_timestamp >= ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - %s)
+                  AND scan_timestamp <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
             ) AS scan_count,
             count(*) FILTER (
-                WHERE scan_timestamp >= (CURRENT_TIMESTAMP - %s)
-                  AND scan_timestamp <= CURRENT_TIMESTAMP
+                WHERE scan_timestamp >= ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - %s)
+                  AND scan_timestamp <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
             ) AS hour_scan_count
         FROM scanner_logger.scan_events
         """,
@@ -707,8 +707,8 @@ def fetch_active_duplicate_alert(db, config, alert_seconds: int) -> Optional[dic
         SELECT
             id,
             scan_timestamp,
-            (scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
-            (scan_timestamp AT TIME ZONE 'UTC')::time(0) AS scan_time,
+            scan_timestamp::date AS scan_date,
+            scan_timestamp::time(0) AS scan_time,
             scanner_id,
             scanner_name,
             last_scanner_id,
@@ -719,12 +719,12 @@ def fetch_active_duplicate_alert(db, config, alert_seconds: int) -> Optional[dic
             barcode_length,
             is_success,
             failure_reason,
-            EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - scan_timestamp))
+            EXTRACT(EPOCH FROM ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - scan_timestamp))
                 AS alert_age_seconds
         FROM scanner_logger.scan_events
         WHERE is_success
           AND is_duplicate
-          AND scan_timestamp >= (CURRENT_TIMESTAMP - %s)
+          AND scan_timestamp >= ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - %s)
         ORDER BY scan_timestamp DESC, id DESC
         LIMIT 1
         """,
@@ -769,8 +769,8 @@ def fetch_active_duplicate_package_alerts(db, config, alert_seconds: int) -> lis
         SELECT
             id,
             scan_timestamp,
-            (scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
-            (scan_timestamp AT TIME ZONE 'UTC')::time(0) AS scan_time,
+            scan_timestamp::date AS scan_date,
+            scan_timestamp::time(0) AS scan_time,
             scanner_id,
             scanner_name,
             last_scanner_id,
@@ -781,12 +781,12 @@ def fetch_active_duplicate_package_alerts(db, config, alert_seconds: int) -> lis
             barcode_length,
             is_success,
             failure_reason,
-            EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - scan_timestamp))
+            EXTRACT(EPOCH FROM ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - scan_timestamp))
                 AS alert_age_seconds
         FROM scanner_logger.scan_events
         WHERE is_success
           AND is_duplicate
-          AND scan_timestamp >= (CURRENT_TIMESTAMP - %s)
+          AND scan_timestamp >= ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC') - %s)
         ORDER BY scan_timestamp ASC, id ASC
         """,
         [timedelta(seconds=alert_seconds)],

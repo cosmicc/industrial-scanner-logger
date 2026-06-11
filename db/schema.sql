@@ -5,7 +5,7 @@ CREATE SCHEMA IF NOT EXISTS scanner_logger;
 CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 
-    scan_timestamp TIMESTAMPTZ NOT NULL,
+    scan_timestamp TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 
     scanner_id SMALLINT NOT NULL CHECK (scanner_id BETWEEN 0 AND 255),
 
@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
 CREATE TABLE IF NOT EXISTS scanner_logger.raw_scan_events (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 
-    scan_timestamp TIMESTAMPTZ NOT NULL,
+    scan_timestamp TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL,
 
     scanner_id SMALLINT NOT NULL CHECK (scanner_id BETWEEN 0 AND 255),
 
@@ -124,7 +124,7 @@ BEGIN
               AND NOT attisdropped
         ) THEN
             EXECUTE format(
-                'ALTER TABLE %s ADD COLUMN scan_timestamp TIMESTAMPTZ',
+                'ALTER TABLE %s ADD COLUMN scan_timestamp TIMESTAMP(0) WITHOUT TIME ZONE',
                 target_table
             );
         END IF;
@@ -145,8 +145,31 @@ BEGIN
         ) THEN
             EXECUTE format(
                 'UPDATE %s
-                    SET scan_timestamp = (scan_date + scan_time) AT TIME ZONE ''America/Detroit''
+                    SET scan_timestamp = ((scan_date + scan_time) AT TIME ZONE ''America/Detroit'') AT TIME ZONE ''UTC''
                   WHERE scan_timestamp IS NULL',
+                target_table
+            );
+        END IF;
+
+        IF EXISTS (
+            SELECT 1
+            FROM pg_attribute
+            WHERE attrelid = target_table
+              AND attname = 'scan_timestamp'
+              AND atttypid = 'timestamp with time zone'::REGTYPE
+              AND NOT attisdropped
+        ) THEN
+            EXECUTE format(
+                'ALTER TABLE %s
+                    ALTER COLUMN scan_timestamp TYPE TIMESTAMP(0) WITHOUT TIME ZONE
+                    USING scan_timestamp AT TIME ZONE ''UTC''',
+                target_table
+            );
+        ELSE
+            EXECUTE format(
+                'ALTER TABLE %s
+                    ALTER COLUMN scan_timestamp TYPE TIMESTAMP(0) WITHOUT TIME ZONE
+                    USING scan_timestamp::timestamp(0)',
                 target_table
             );
         END IF;
@@ -214,7 +237,7 @@ CREATE INDEX IF NOT EXISTS idx_raw_scan_events_tracking_number
 
 CREATE OR REPLACE VIEW scanner_logger.daily_scan_totals AS
 SELECT
-    (scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
+    scan_timestamp::date AS scan_date,
     scanner_id,
     scanner_name,
     count(*) AS total_scan_events,
@@ -223,27 +246,27 @@ SELECT
     count(DISTINCT tracking_number) FILTER (WHERE is_success) AS unique_successful_barcodes
 FROM scanner_logger.scan_events
 GROUP BY
-    (scan_timestamp AT TIME ZONE 'UTC')::date,
+    scan_timestamp::date,
     scanner_id,
     scanner_name;
 
 CREATE OR REPLACE VIEW scanner_logger.daily_scan_totals_all_scanners AS
 SELECT
-    (scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
+    scan_timestamp::date AS scan_date,
     count(*) AS total_scan_events,
     count(*) FILTER (WHERE is_success) AS successful_scans,
     count(*) FILTER (WHERE is_success = false) AS failed_scans,
     count(DISTINCT tracking_number) FILTER (WHERE is_success) AS unique_successful_barcodes
 FROM scanner_logger.scan_events
 GROUP BY
-    (scan_timestamp AT TIME ZONE 'UTC')::date;
+    scan_timestamp::date;
 
 CREATE OR REPLACE VIEW scanner_logger.failed_scans AS
 SELECT
     id,
     scan_timestamp,
-    (scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
-    (scan_timestamp AT TIME ZONE 'UTC')::time(0) AS scan_time,
+    scan_timestamp::date AS scan_date,
+    scan_timestamp::time(0) AS scan_time,
     scanner_id,
     scanner_name,
     last_scanner_id,
@@ -260,8 +283,8 @@ CREATE OR REPLACE VIEW scanner_logger.successful_scans AS
 SELECT
     id,
     scan_timestamp,
-    (scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
-    (scan_timestamp AT TIME ZONE 'UTC')::time(0) AS scan_time,
+    scan_timestamp::date AS scan_date,
+    scan_timestamp::time(0) AS scan_time,
     scanner_id,
     scanner_name,
     last_scanner_id,
@@ -293,8 +316,8 @@ CREATE OR REPLACE VIEW scanner_logger.successful_scan_progression AS
 WITH events_with_time AS (
     SELECT
         events.*,
-        (events.scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
-        (events.scan_timestamp AT TIME ZONE 'UTC')::time(0) AS scan_time
+        events.scan_timestamp::date AS scan_date,
+        events.scan_timestamp::time(0) AS scan_time
     FROM scanner_logger.scan_events AS events
     WHERE events.is_success = true
 ),
@@ -334,7 +357,7 @@ CREATE OR REPLACE VIEW scanner_logger.successful_scans_missing_last_scanner AS
 WITH source AS (
     SELECT
         events.*,
-        (events.scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date
+        events.scan_timestamp::date AS scan_date
     FROM scanner_logger.scan_events AS events
     WHERE events.is_success = true
 )
@@ -357,7 +380,7 @@ WHERE source.last_scanner_id IS NOT NULL
       SELECT 1
       FROM scanner_logger.scan_events AS last_scan
       WHERE last_scan.is_success = true
-        AND (last_scan.scan_timestamp AT TIME ZONE 'UTC')::date = source.scan_date
+        AND last_scan.scan_timestamp::date = source.scan_date
         AND last_scan.tracking_number = source.tracking_number
         AND last_scan.scanner_id = source.last_scanner_id
   )

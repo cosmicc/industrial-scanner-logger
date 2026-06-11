@@ -902,7 +902,7 @@ class PostgreSQLScanLogger:
             SELECT DISTINCT barcode
             FROM {table}
             WHERE is_success = true
-              AND (scan_timestamp AT TIME ZONE 'UTC')::date = %s
+              AND scan_timestamp::date = %s
               AND barcode ~ '^[0-9]+$'
               AND char_length(barcode) = %s
             """
@@ -1110,7 +1110,7 @@ class DailyCsvLogger:
         return datetime.now().strftime("%H:%M:%S")
 
     def _database_timestamp(self) -> datetime:
-        return datetime.now(timezone.utc).replace(microsecond=0)
+        return datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
 
     def _timestamp_string(self) -> str:
         return datetime.now().strftime("%Y%m%d-%H%M%S")
