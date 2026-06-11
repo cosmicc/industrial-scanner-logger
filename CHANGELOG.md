@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Store PostgreSQL scan event timing in one UTC `scan_timestamp` field and
+  migrate existing split date/time rows.
+
 ## 1.3 - 2026-06-05
 
 - Remove the extra duplicate category and keep one regular duplicate flag.

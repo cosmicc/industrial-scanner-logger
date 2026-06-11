@@ -5,7 +5,7 @@ import tempfile
 import threading
 import unittest
 from contextlib import redirect_stdout
-from datetime import datetime
+from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 
@@ -46,16 +46,14 @@ class FakePostgreSQLLogger:
         last_scanner_id,
         is_duplicate,
         is_repaired,
-        scan_date,
-        scan_time,
+        scan_timestamp,
         raw_tracking_number=None,
         raw_barcode=None,
         raw_is_duplicate=False,
         write_scan_event=True,
     ):
         self.raw_rows.append({
-            "scan_date": scan_date,
-            "scan_time": scan_time,
+            "scan_timestamp": scan_timestamp,
             "scanner_id": scanner_id,
             "scanner_name": scanner_name,
             "last_scanner_id": last_scanner_id,
@@ -69,8 +67,7 @@ class FakePostgreSQLLogger:
             return True
 
         self.rows.append({
-            "scan_date": scan_date,
-            "scan_time": scan_time,
+            "scan_timestamp": scan_timestamp,
             "scanner_id": scanner_id,
             "scanner_name": scanner_name,
             "last_scanner_id": last_scanner_id,
@@ -95,15 +92,13 @@ class FakeDuplicatePostgreSQLLogger(FakePostgreSQLLogger):
         self,
         scanner_id,
         tracking_number,
-        scan_date,
-        scan_time,
+        scan_timestamp,
         paired_scanner_ids=None,
     ):
         self.duplicate_calls.append({
             "scanner_id": scanner_id,
             "tracking_number": tracking_number,
-            "scan_date": scan_date,
-            "scan_time": scan_time,
+            "scan_timestamp": scan_timestamp,
             "paired_scanner_ids": paired_scanner_ids,
         })
         return self.duplicate_state
@@ -873,10 +868,13 @@ log_level = warning
 
             self.assertEqual(len(postgresql_logger.rows), 2)
             self.assertEqual(len(postgresql_logger.raw_rows), 3)
-            self.assertEqual(postgresql_logger.rows[0]["scan_date"], logger.current_date)
-            self.assertRegex(
-                postgresql_logger.rows[0]["scan_time"],
-                r"^\d{2}:\d{2}:\d{2}$",
+            self.assertEqual(
+                postgresql_logger.rows[0]["scan_timestamp"].tzinfo,
+                timezone.utc,
+            )
+            self.assertEqual(
+                postgresql_logger.raw_rows[0]["scan_timestamp"].tzinfo,
+                timezone.utc,
             )
             self.assertEqual(postgresql_logger.rows[0]["scanner_id"], "20")
             self.assertEqual(

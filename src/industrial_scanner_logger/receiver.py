@@ -41,7 +41,7 @@ import socket
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -649,20 +649,20 @@ class PostgreSQLScanLogger:
         self._sql = sql
         self.insert_sql = sql.SQL(
             "INSERT INTO {}.{} "
-            "(scan_date, scan_time, scanner_id, scanner_name, last_scanner_id, "
+            "(scan_timestamp, scanner_id, scanner_name, last_scanner_id, "
             "is_duplicate, is_repaired, "
             "tracking_number, barcode) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
         ).format(
             sql.Identifier(self.schema_name),
             sql.Identifier(self.relation_name),
         )
         self.raw_insert_sql = sql.SQL(
             "INSERT INTO {}.{} "
-            "(scan_date, scan_time, scanner_id, scanner_name, last_scanner_id, "
+            "(scan_timestamp, scanner_id, scanner_name, last_scanner_id, "
             "is_duplicate, is_repaired, "
             "tracking_number, barcode) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
         ).format(
             sql.Identifier(self.raw_schema_name),
             sql.Identifier(self.raw_relation_name),
@@ -714,28 +714,24 @@ class PostgreSQLScanLogger:
             self._sql.Identifier(self.relation_name),
         )
 
-    def _lookback_start_date(self, scan_date: str) -> str:
-        parsed_scan_date = datetime.strptime(scan_date, "%Y-%m-%d").date()
-        return (parsed_scan_date - timedelta(days=DUPLICATE_LOOKBACK_DAYS)).isoformat()
+    def _lookback_start_timestamp(self, scan_timestamp: datetime) -> datetime:
+        return scan_timestamp - timedelta(days=DUPLICATE_LOOKBACK_DAYS)
 
     def _intervening_distinct_success_count(
         self,
         tracking_number: str,
-        scan_date: str,
-        scan_time: str,
+        scan_timestamp: datetime,
         scanner_ids: Optional[list[int]] = None,
     ) -> int:
         table_sql = self._table_sql()
-        lookback_start = self._lookback_start_date(scan_date)
+        lookback_start = self._lookback_start_timestamp(scan_timestamp)
         scanner_filter = self._sql.SQL("")
         events_scanner_filter = self._sql.SQL("")
         params = [
             tracking_number,
             lookback_start,
-            scan_date,
-            scan_date,
-            scan_date,
-            scan_time,
+            scan_timestamp,
+            scan_timestamp,
         ]
 
         if scanner_ids:
@@ -753,10 +749,8 @@ class PostgreSQLScanLogger:
         params.extend([
             tracking_number,
             lookback_start,
-            scan_date,
-            scan_date,
-            scan_date,
-            scan_time,
+            scan_timestamp,
+            scan_timestamp,
         ])
 
         if scanner_ids:
@@ -765,17 +759,14 @@ class PostgreSQLScanLogger:
         query = self._sql.SQL(
             """
             WITH last_match AS (
-                SELECT scan_date, scan_time, id
+                SELECT scan_timestamp, id
                 FROM {table}
                 WHERE is_success = true
                   AND tracking_number = %s
-                  AND scan_date BETWEEN %s AND %s
-                  AND (
-                      scan_date < %s
-                      OR (scan_date = %s AND scan_time <= %s)
-                  )
+                  AND scan_timestamp BETWEEN %s AND %s
+                  AND scan_timestamp <= %s
                   {scanner_filter}
-                ORDER BY scan_date DESC, scan_time DESC, id DESC
+                ORDER BY scan_timestamp DESC, id DESC
                 LIMIT 1
             )
             SELECT count(DISTINCT events.tracking_number)
@@ -783,21 +774,13 @@ class PostgreSQLScanLogger:
             JOIN {table} AS events
               ON events.is_success = true
              AND events.tracking_number <> %s
-             AND events.scan_date BETWEEN %s AND %s
-             AND (
-                 events.scan_date < %s
-                 OR (events.scan_date = %s AND events.scan_time <= %s)
-             )
+             AND events.scan_timestamp BETWEEN %s AND %s
+             AND events.scan_timestamp <= %s
              {events_scanner_filter}
              AND (
-                 events.scan_date > last_match.scan_date
+                 events.scan_timestamp > last_match.scan_timestamp
                  OR (
-                     events.scan_date = last_match.scan_date
-                     AND events.scan_time > last_match.scan_time
-                 )
-                 OR (
-                     events.scan_date = last_match.scan_date
-                     AND events.scan_time = last_match.scan_time
+                     events.scan_timestamp = last_match.scan_timestamp
                      AND events.id > last_match.id
                  )
              )
@@ -818,11 +801,10 @@ class PostgreSQLScanLogger:
         self,
         scanner_ids: list[int],
         tracking_number: str,
-        scan_date: str,
-        scan_time: str,
+        scan_timestamp: datetime,
     ) -> bool:
         table_sql = self._table_sql()
-        lookback_start = self._lookback_start_date(scan_date)
+        lookback_start = self._lookback_start_timestamp(scan_timestamp)
         placeholders = self._sql.SQL(", ").join(
             self._sql.Placeholder() for _scanner_id in scanner_ids
         )
@@ -834,11 +816,8 @@ class PostgreSQLScanLogger:
                 WHERE is_success = true
                   AND tracking_number = %s
                   AND scanner_id IN ({scanner_id_placeholders})
-                  AND scan_date BETWEEN %s AND %s
-                  AND (
-                      scan_date < %s
-                      OR (scan_date = %s AND scan_time <= %s)
-                  )
+                  AND scan_timestamp BETWEEN %s AND %s
+                  AND scan_timestamp <= %s
             )
             """
         ).format(
@@ -853,10 +832,8 @@ class PostgreSQLScanLogger:
                     tracking_number,
                     *scanner_ids,
                     lookback_start,
-                    scan_date,
-                    scan_date,
-                    scan_date,
-                    scan_time,
+                    scan_timestamp,
+                    scan_timestamp,
                 ],
             )
             row = cursor.fetchone()
@@ -883,8 +860,7 @@ class PostgreSQLScanLogger:
         self,
         scanner_id: str,
         tracking_number: str,
-        scan_date: str,
-        scan_time: str,
+        scan_timestamp: datetime,
         paired_scanner_ids: Optional[tuple[str, ...]] = None,
     ) -> tuple[bool, bool]:
         self._connect()
@@ -898,13 +874,11 @@ class PostgreSQLScanLogger:
             seen_on_same_scanner = self._seen_on_scanners(
                 db_scanner_ids,
                 tracking_number,
-                scan_date,
-                scan_time,
+                scan_timestamp,
             )
             same_scanner_count = self._intervening_distinct_success_count(
                 tracking_number,
-                scan_date,
-                scan_time,
+                scan_timestamp,
                 db_scanner_ids,
             )
             same_scanner_duplicate = (
@@ -927,7 +901,7 @@ class PostgreSQLScanLogger:
             SELECT DISTINCT barcode
             FROM {table}
             WHERE is_success = true
-              AND scan_date = %s
+              AND (scan_timestamp AT TIME ZONE 'UTC')::date = %s
               AND barcode ~ '^[0-9]+$'
               AND char_length(barcode) = %s
             """
@@ -952,15 +926,13 @@ class PostgreSQLScanLogger:
         last_scanner_id: Optional[int],
         is_duplicate: bool,
         is_repaired: bool,
-        scan_date: str,
-        scan_time: str,
+        scan_timestamp: datetime,
     ):
         with self.conn.cursor() as cursor:
             cursor.execute(
                 insert_sql,
                 (
-                    scan_date,
-                    scan_time,
+                    scan_timestamp,
                     scanner_id,
                     scanner_name,
                     last_scanner_id,
@@ -980,8 +952,7 @@ class PostgreSQLScanLogger:
         last_scanner_id: str,
         is_duplicate: bool,
         is_repaired: bool,
-        scan_date: str,
-        scan_time: str,
+        scan_timestamp: datetime,
         raw_tracking_number: Optional[str] = None,
         raw_barcode: Optional[str] = None,
         raw_is_duplicate: bool = False,
@@ -1007,8 +978,7 @@ class PostgreSQLScanLogger:
                 db_last_scanner_id,
                 raw_is_duplicate,
                 False,
-                scan_date,
-                scan_time,
+                scan_timestamp,
             )
 
             if write_scan_event:
@@ -1021,8 +991,7 @@ class PostgreSQLScanLogger:
                     db_last_scanner_id,
                     is_duplicate,
                     is_repaired,
-                    scan_date,
-                    scan_time,
+                    scan_timestamp,
                 )
         except Exception as exc:
             self._mark_unavailable("insert", exc)
@@ -1138,6 +1107,9 @@ class DailyCsvLogger:
 
     def _time_string(self) -> str:
         return datetime.now().strftime("%H:%M:%S")
+
+    def _database_timestamp(self) -> datetime:
+        return datetime.now(timezone.utc).replace(microsecond=0)
 
     def _timestamp_string(self) -> str:
         return datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1259,10 +1231,9 @@ class DailyCsvLogger:
         self,
         scanner_id: str,
         tracking_number: str,
-        scan_date: Optional[str] = None,
-        scan_time: Optional[str] = None,
+        scan_timestamp: Optional[datetime] = None,
     ) -> tuple[bool, bool]:
-        if self.postgresql_logger is not None and scan_date and scan_time:
+        if self.postgresql_logger is not None and scan_timestamp is not None:
             duplicate_lookup = getattr(
                 self.postgresql_logger,
                 "duplicate_state_for_success",
@@ -1273,8 +1244,7 @@ class DailyCsvLogger:
                 database_state = duplicate_lookup(
                     scanner_id,
                     tracking_number,
-                    scan_date,
-                    scan_time,
+                    scan_timestamp,
                     self._paired_scanner_ids(scanner_id),
                 )
 
@@ -2024,6 +1994,7 @@ class DailyCsvLogger:
             is_repaired = False
             date_str = self.current_date
             time_str = self._time_string()
+            scan_timestamp = self._database_timestamp()
             success_duplicate_state = None
 
             if raw_status == "SUCCESS":
@@ -2031,8 +2002,7 @@ class DailyCsvLogger:
                 success_duplicate_state = self._duplicate_state_for_success(
                     scanner_id,
                     tracking_number,
-                    date_str,
-                    time_str,
+                    scan_timestamp,
                 )
 
             if status != "SUCCESS":
@@ -2058,8 +2028,7 @@ class DailyCsvLogger:
                     success_duplicate_state = self._duplicate_state_for_success(
                         scanner_id,
                         tracking_number,
-                        date_str,
-                        time_str,
+                        scan_timestamp,
                     )
 
                 seen_before, is_duplicate = success_duplicate_state
@@ -2137,8 +2106,7 @@ class DailyCsvLogger:
                 self.last_scanner_id,
                 is_duplicate,
                 is_repaired,
-                date_str,
-                time_str,
+                scan_timestamp,
                 tracking_number_from_barcode(captured_barcode),
                 captured_barcode,
                 bool(success_duplicate_state[1]) if success_duplicate_state else False,

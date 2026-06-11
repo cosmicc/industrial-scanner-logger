@@ -281,13 +281,13 @@ The table schema is in:
 db/schema.sql
 ```
 
-Python inserts scan timing, scanner metadata, duplicate and repair flags, the
-received barcode, and the tracking number. The date and time come from the
-receiver script at the same point where the CSV row is written; PostgreSQL does
-not assign the scan event timestamp. PostgreSQL generated columns and views
+Python inserts one UTC `scan_timestamp`, scanner metadata, duplicate and repair
+flags, the received barcode, and the tracking number. The timestamp comes from
+the receiver script at the same point where the CSV row is written; PostgreSQL
+does not assign the scan event timestamp. PostgreSQL generated columns and views
 provide success/failure classification, failed scan queries, daily totals,
-package progression, duplicate queries, and successful packages
-missing the configured last scanner.
+package progression, duplicate queries, and successful packages missing the
+configured last scanner.
 
 Use `[scanners] last_scanner_id` for the final outbound scanner before boxes
 are loaded. Use `[scanners] mandatory_scanner_ids` for scanner IDs that must

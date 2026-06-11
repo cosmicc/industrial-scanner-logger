@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import sys
 from collections import deque
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -35,21 +35,39 @@ CURRENT_SCAN_HOUR_WINDOW_SECONDS = 3600
 DAILY_CSV_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TRACKING_SUFFIX_SEARCH_LENGTHS = {12}
 
-SCAN_EVENT_COLUMNS = [
-    "id",
-    "scan_date",
-    "scan_time",
-    "scanner_id",
-    "scanner_name",
-    "last_scanner_id",
-    "is_duplicate",
-    "is_repaired",
-    "tracking_number",
-    "barcode",
-    "barcode_length",
-    "is_success",
-    "failure_reason",
+SCAN_EVENT_SELECT_COLUMNS = [
+    sql.Identifier("id"),
+    sql.Identifier("scan_timestamp"),
+    sql.SQL("(scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date"),
+    sql.SQL("(scan_timestamp AT TIME ZONE 'UTC')::time(0) AS scan_time"),
+    sql.Identifier("scanner_id"),
+    sql.Identifier("scanner_name"),
+    sql.Identifier("last_scanner_id"),
+    sql.Identifier("is_duplicate"),
+    sql.Identifier("is_repaired"),
+    sql.Identifier("tracking_number"),
+    sql.Identifier("barcode"),
+    sql.Identifier("barcode_length"),
+    sql.Identifier("is_success"),
+    sql.Identifier("failure_reason"),
 ]
+
+SCAN_EVENT_SELECT_SQL = """
+                    id,
+                    scan_timestamp,
+                    (scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
+                    (scan_timestamp AT TIME ZONE 'UTC')::time(0) AS scan_time,
+                    scanner_id,
+                    scanner_name,
+                    last_scanner_id,
+                    is_duplicate,
+                    is_repaired,
+                    tracking_number,
+                    barcode,
+                    barcode_length,
+                    is_success,
+                    failure_reason
+"""
 
 VIEW_DEFINITIONS = {
     "daily-scan-totals": {
@@ -83,6 +101,7 @@ VIEW_DEFINITIONS = {
         "relation": "failed_scans",
         "columns": [
             "id",
+            "scan_timestamp",
             "scan_date",
             "scan_time",
             "scanner_id",
@@ -99,12 +118,13 @@ VIEW_DEFINITIONS = {
         "scanner_column": "scanner_id",
         "barcode_column": "barcode",
         "tracking_number_column": "tracking_number",
-        "order": ["scan_date DESC", "scan_time DESC", "id DESC"],
+        "order": ["scan_timestamp DESC", "id DESC"],
     },
     "successful-scans": {
         "relation": "successful_scans",
         "columns": [
             "id",
+            "scan_timestamp",
             "scan_date",
             "scan_time",
             "scanner_id",
@@ -120,7 +140,7 @@ VIEW_DEFINITIONS = {
         "scanner_column": "scanner_id",
         "barcode_column": "barcode",
         "tracking_number_column": "tracking_number",
-        "order": ["scan_date DESC", "scan_time DESC", "id DESC"],
+        "order": ["scan_timestamp DESC", "id DESC"],
     },
     "duplicate-successful-scans": {
         "relation": "duplicate_successful_scans",
@@ -142,6 +162,7 @@ VIEW_DEFINITIONS = {
         "relation": "successful_scan_progression",
         "columns": [
             "id",
+            "scan_timestamp",
             "scan_date",
             "scan_time",
             "scanner_id",
@@ -158,7 +179,7 @@ VIEW_DEFINITIONS = {
         "scanner_column": "scanner_id",
         "barcode_column": "barcode",
         "tracking_number_column": "tracking_number",
-        "order": ["scan_date DESC", "scan_time DESC", "id DESC"],
+        "order": ["scan_timestamp DESC", "id DESC"],
     },
     "successful-scans-missing-last-scanner": {
         "relation": "successful_scans_missing_last_scanner",
@@ -224,23 +245,11 @@ def build_dashboard_health(config):
         try:
             last_received = fetch_one(
                 db,
-                """
+                f"""
                 SELECT
-                    id,
-                    scan_date,
-                    scan_time,
-                    scanner_id,
-                    scanner_name,
-                    last_scanner_id,
-                    is_duplicate,
-                    is_repaired,
-                    tracking_number,
-                    barcode,
-                    barcode_length,
-                    is_success,
-                    failure_reason
+{SCAN_EVENT_SELECT_SQL}
                 FROM scanner_logger.scan_events
-                ORDER BY scan_date DESC, scan_time DESC, id DESC
+                ORDER BY scan_timestamp DESC, id DESC
                 LIMIT 1
                 """,
                 [],
@@ -252,23 +261,11 @@ def build_dashboard_health(config):
                 scan_row_with_display_name(config, row)
                 for row in fetch_all(
                     db,
-                    """
+                    f"""
                     SELECT
-                        id,
-                        scan_date,
-                        scan_time,
-                        scanner_id,
-                        scanner_name,
-                        last_scanner_id,
-                        is_duplicate,
-                        is_repaired,
-                        tracking_number,
-                        barcode,
-                        barcode_length,
-                        is_success,
-                        failure_reason
+{SCAN_EVENT_SELECT_SQL}
                     FROM scanner_logger.raw_scan_events
-                    ORDER BY scan_date DESC, scan_time DESC, id DESC
+                    ORDER BY scan_timestamp DESC, id DESC
                     LIMIT 10
                     """,
                     [],
@@ -498,7 +495,7 @@ def fetch_scanner_options(db, config) -> list[dict]:
             max(scanner_name) FILTER (
                 WHERE scanner_name IS NOT NULL AND scanner_name <> ''
             ) AS scanner_name,
-            max(scan_date) AS last_scan_date
+            (max(scan_timestamp) AT TIME ZONE 'UTC')::date AS last_scan_date
         FROM scanner_logger.scan_events
         WHERE scanner_id IS NOT NULL
         GROUP BY scanner_id
@@ -567,6 +564,14 @@ def scanner_id_int(value) -> Optional[int]:
     return None
 
 
+def utc_day_start(day: date) -> datetime:
+    return datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
+
+
+def next_utc_day_start(day: date) -> datetime:
+    return utc_day_start(day + timedelta(days=1))
+
+
 def dashboard_total_row(scan_date: date, row: Optional[dict] = None) -> dict:
     row = row or {}
     return {
@@ -587,16 +592,17 @@ def fetch_dashboard_daily_totals(
         db,
         """
         SELECT
-            scan_date,
+            (scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
             count(*) AS total_scan_events,
             count(*) FILTER (WHERE is_success) AS successful_scans,
             count(*) FILTER (WHERE is_success = false) AS failed_scans,
             count(*) FILTER (WHERE is_duplicate) AS duplicate_scans
         FROM scanner_logger.scan_events
-        WHERE scan_date IN (%s, %s)
-        GROUP BY scan_date
+        WHERE scan_timestamp >= %s
+          AND scan_timestamp < %s
+        GROUP BY 1
         """,
-        [current_day, previous_day],
+        [utc_day_start(previous_day), next_utc_day_start(current_day)],
     )
     rows_by_date = {row["scan_date"]: row for row in rows}
 
@@ -619,11 +625,12 @@ def fetch_dashboard_today_scanner_totals(db, config, current_day: date) -> list[
             count(*) FILTER (WHERE is_success = false) AS failed_scans,
             count(*) FILTER (WHERE is_duplicate) AS duplicate_scans
         FROM scanner_logger.scan_events
-        WHERE scan_date = %s
+        WHERE scan_timestamp >= %s
+          AND scan_timestamp < %s
         GROUP BY scanner_id
         ORDER BY scanner_id ASC
         """,
-        [current_day],
+        [utc_day_start(current_day), next_utc_day_start(current_day)],
     )
 
     return [dashboard_scanner_total_row(config, row) for row in rows]
@@ -672,12 +679,12 @@ def fetch_current_scan_rate(db) -> dict:
         """
         SELECT
             count(*) FILTER (
-                WHERE (scan_date + scan_time) >= (localtimestamp - %s)
-                  AND (scan_date + scan_time) <= localtimestamp
+                WHERE scan_timestamp >= (CURRENT_TIMESTAMP - %s)
+                  AND scan_timestamp <= CURRENT_TIMESTAMP
             ) AS scan_count,
             count(*) FILTER (
-                WHERE (scan_date + scan_time) >= (localtimestamp - %s)
-                  AND (scan_date + scan_time) <= localtimestamp
+                WHERE scan_timestamp >= (CURRENT_TIMESTAMP - %s)
+                  AND scan_timestamp <= CURRENT_TIMESTAMP
             ) AS hour_scan_count
         FROM scanner_logger.scan_events
         """,
@@ -699,8 +706,9 @@ def fetch_active_duplicate_alert(db, config, alert_seconds: int) -> Optional[dic
         """
         SELECT
             id,
-            scan_date,
-            scan_time,
+            scan_timestamp,
+            (scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
+            (scan_timestamp AT TIME ZONE 'UTC')::time(0) AS scan_time,
             scanner_id,
             scanner_name,
             last_scanner_id,
@@ -711,13 +719,13 @@ def fetch_active_duplicate_alert(db, config, alert_seconds: int) -> Optional[dic
             barcode_length,
             is_success,
             failure_reason,
-            EXTRACT(EPOCH FROM (localtimestamp - (scan_date + scan_time)))
+            EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - scan_timestamp))
                 AS alert_age_seconds
         FROM scanner_logger.scan_events
         WHERE is_success
           AND is_duplicate
-          AND (scan_date + scan_time) >= (localtimestamp - %s)
-        ORDER BY scan_date DESC, scan_time DESC, id DESC
+          AND scan_timestamp >= (CURRENT_TIMESTAMP - %s)
+        ORDER BY scan_timestamp DESC, id DESC
         LIMIT 1
         """,
         [timedelta(seconds=alert_seconds)],
@@ -760,8 +768,9 @@ def fetch_active_duplicate_package_alerts(db, config, alert_seconds: int) -> lis
         """
         SELECT
             id,
-            scan_date,
-            scan_time,
+            scan_timestamp,
+            (scan_timestamp AT TIME ZONE 'UTC')::date AS scan_date,
+            (scan_timestamp AT TIME ZONE 'UTC')::time(0) AS scan_time,
             scanner_id,
             scanner_name,
             last_scanner_id,
@@ -772,13 +781,13 @@ def fetch_active_duplicate_package_alerts(db, config, alert_seconds: int) -> lis
             barcode_length,
             is_success,
             failure_reason,
-            EXTRACT(EPOCH FROM (localtimestamp - (scan_date + scan_time)))
+            EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - scan_timestamp))
                 AS alert_age_seconds
         FROM scanner_logger.scan_events
         WHERE is_success
           AND is_duplicate
-          AND (scan_date + scan_time) >= (localtimestamp - %s)
-        ORDER BY scan_date ASC, scan_time ASC, id ASC
+          AND scan_timestamp >= (CURRENT_TIMESTAMP - %s)
+        ORDER BY scan_timestamp ASC, id ASC
         """,
         [timedelta(seconds=alert_seconds)],
     )
@@ -1226,7 +1235,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
     @app.get(f"{API_VERSION_PREFIX}/scans/{{scan_id}}")
     def get_scan(scan_id: int, db=Depends(get_db), config=Depends(get_config)):
         query = sql.SQL("SELECT {} FROM scanner_logger.scan_events WHERE id = %s").format(
-            column_list(SCAN_EVENT_COLUMNS)
+            scan_event_column_list()
         )
 
         rows = fetch_all(db, query, [scan_id])
@@ -1349,6 +1358,10 @@ def column_list(columns):
     return sql.SQL(", ").join(sql.Identifier(column) for column in columns)
 
 
+def scan_event_column_list():
+    return sql.SQL(", ").join(SCAN_EVENT_SELECT_COLUMNS)
+
+
 def scan_events_filter_conditions(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
@@ -1368,6 +1381,8 @@ def scan_events_filter_conditions(
         end_date=end_date,
         scanner_id=scanner_id,
         barcode=barcode,
+        date_column="scan_timestamp",
+        date_column_kind="timestamp_utc",
         tracking_number_column="tracking_number",
     )
 
@@ -1402,9 +1417,9 @@ def build_scan_events_query(
     )
 
     query = sql.SQL("SELECT {} FROM scanner_logger.scan_events{} {} LIMIT %s OFFSET %s").format(
-        column_list(SCAN_EVENT_COLUMNS),
+        scan_event_column_list(),
         where_clause(conditions),
-        sql.SQL("ORDER BY scan_date DESC, scan_time DESC, id DESC"),
+        sql.SQL("ORDER BY scan_timestamp DESC, id DESC"),
     )
     params.extend([limit, offset])
     return query, params
@@ -1537,6 +1552,7 @@ def add_common_filters(
     scanner_id: Optional[int] = None,
     barcode: Optional[str] = None,
     date_column: Optional[str] = "scan_date",
+    date_column_kind: str = "date",
     scanner_column: Optional[str] = "scanner_id",
     barcode_column: Optional[str] = "barcode",
     tracking_number_column: Optional[str] = None,
@@ -1544,14 +1560,24 @@ def add_common_filters(
     if start_date is not None:
         if date_column is None:
             raise HTTPException(status_code=400, detail="start_date is not supported")
-        conditions.append(sql.SQL("{} >= %s").format(sql.Identifier(date_column)))
-        params.append(start_date)
+
+        if date_column_kind == "timestamp_utc":
+            conditions.append(sql.SQL("{} >= %s").format(sql.Identifier(date_column)))
+            params.append(utc_day_start(start_date))
+        else:
+            conditions.append(sql.SQL("{} >= %s").format(sql.Identifier(date_column)))
+            params.append(start_date)
 
     if end_date is not None:
         if date_column is None:
             raise HTTPException(status_code=400, detail="end_date is not supported")
-        conditions.append(sql.SQL("{} <= %s").format(sql.Identifier(date_column)))
-        params.append(end_date)
+
+        if date_column_kind == "timestamp_utc":
+            conditions.append(sql.SQL("{} < %s").format(sql.Identifier(date_column)))
+            params.append(next_utc_day_start(end_date))
+        else:
+            conditions.append(sql.SQL("{} <= %s").format(sql.Identifier(date_column)))
+            params.append(end_date)
 
     if scanner_id is not None:
         if scanner_column is None:
