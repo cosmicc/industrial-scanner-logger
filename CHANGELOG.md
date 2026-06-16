@@ -8,6 +8,19 @@ All notable changes to this project will be documented in this file.
   field and migrate existing split date/time rows.
 - Force PostgreSQL app sessions to UTC and convert legacy local scan times with
   an explicit `America/Detroit` timezone.
+- Add an optional outgoing API sender with a PostgreSQL-backed processed-scan
+  queue, retry metadata, secure config placeholders, and health page queue
+  status.
+- Harden production uptime by making installed services always restart,
+  keeping scanner intake running when outgoing API sender config is not ready,
+  and adding health page disk-space monitoring with a prominent low-space
+  warning.
+- Refresh rendered systemd unit files from `update-services` so deployed
+  services pick up restart-policy changes.
+- Make uninstall remove only service/startup integration by default while
+  preserving `/etc/industrial-scanner-logger.conf`, the installed app directory,
+  logs, CSV files, helper scripts, service identity, UFW state, and PostgreSQL
+  data; make reinstall use the preserved config before database setup.
 
 ## 1.3 - 2026-06-05
 

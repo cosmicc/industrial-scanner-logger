@@ -9,6 +9,15 @@ fi
 INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
 NGINX_WEB_ROOT="${NGINX_WEB_ROOT:-/var/www/scanner-site}"
 CONFIG_FILE="${CONFIG_FILE:-/etc/industrial-scanner-logger.conf}"
+SERVICE_NAME="${SERVICE_NAME:-industrial-scanner-logger}"
+API_SERVICE_NAME="${API_SERVICE_NAME:-${SERVICE_NAME}-api}"
+SERVICE_USER="${SERVICE_USER:-scannerlogger}"
+SERVICE_GROUP="${SERVICE_GROUP:-${SERVICE_USER}}"
+PYTHON_BIN="${PYTHON_BIN:-${INSTALL_DIR}/.venv/bin/python}"
+UNIT_FILE="${UNIT_FILE:-/etc/systemd/system/${SERVICE_NAME}.service}"
+API_UNIT_FILE="${API_UNIT_FILE:-/etc/systemd/system/${API_SERVICE_NAME}.service}"
+SERVICE_TEMPLATE="${SERVICE_TEMPLATE:-${INSTALL_DIR}/systemd/industrial-scanner-logger.service}"
+API_SERVICE_TEMPLATE="${API_SERVICE_TEMPLATE:-${INSTALL_DIR}/systemd/industrial-scanner-logger-api.service}"
 DEFAULT_POSTGRESQL_DSN="postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger"
 
 postgresql_dsn() {
@@ -25,6 +34,24 @@ print(config.get("postgresql", "dsn"))
 PY
 }
 
+escape_sed_replacement() {
+    printf "%s" "$1" | sed "s/[&|]/\\\\&/g"
+}
+
+render_service_unit() {
+    local source_template="$1"
+    local destination_unit="$2"
+
+    sed \
+        -e "s|@INSTALL_DIR@|$(escape_sed_replacement "${INSTALL_DIR}")|g" \
+        -e "s|@SERVICE_USER@|$(escape_sed_replacement "${SERVICE_USER}")|g" \
+        -e "s|@SERVICE_GROUP@|$(escape_sed_replacement "${SERVICE_GROUP}")|g" \
+        -e "s|@PYTHON_BIN@|$(escape_sed_replacement "${PYTHON_BIN}")|g" \
+        "${source_template}" >"${destination_unit}"
+
+    chmod 0644 "${destination_unit}"
+}
+
 echo "Updating database schema..."
 POSTGRESQL_DSN="$(postgresql_dsn)"
 if [[ "${POSTGRESQL_DSN}" == "${DEFAULT_POSTGRESQL_DSN}" ]]; then
@@ -34,8 +61,12 @@ else
 fi
 echo "Refreshing HTML data..."
 cp "${INSTALL_DIR}/html/." "${NGINX_WEB_ROOT}/" -R > /dev/null 2>&1
+echo "Refreshing systemd units..."
+render_service_unit "${SERVICE_TEMPLATE}" "${UNIT_FILE}"
+render_service_unit "${API_SERVICE_TEMPLATE}" "${API_UNIT_FILE}"
+systemctl daemon-reload > /dev/null 2>&1
 echo "Restarting Scanner Service..."
-systemctl restart industrial-scanner-logger > /dev/null 2>&1
+systemctl restart "${SERVICE_NAME}" > /dev/null 2>&1
 echo "Restarting API Service..."
-systemctl restart industrial-scanner-logger-api > /dev/null 2>&1
+systemctl restart "${API_SERVICE_NAME}" > /dev/null 2>&1
 echo "Complete."

@@ -97,6 +97,26 @@ h1 {
   padding: 18px;
 }
 
+.health-alert {
+  margin: 0 0 20px 0;
+  padding: 18px;
+  border: 2px solid rgba(239, 68, 68, 0.92);
+  border-radius: 10px;
+  background: rgba(69, 10, 10, 0.88);
+  box-shadow: 0 0 28px rgba(239, 68, 68, 0.32);
+  color: #fee2e2;
+}
+
+.health-alert.hidden {
+  display: none;
+}
+
+.health-alert-title {
+  font-size: 24px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
 .card h2 {
   margin: 0 0 14px 0;
   font-size: 18px;
@@ -126,6 +146,11 @@ h1 {
 .dot.red {
   background: var(--red);
   color: var(--red);
+}
+
+.dot.yellow {
+  background: var(--yellow);
+  color: var(--yellow);
 }
 
 .detail {

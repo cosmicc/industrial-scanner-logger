@@ -31,6 +31,18 @@ POSTGRESQL_DSN="${POSTGRESQL_DSN:-${DEFAULT_POSTGRESQL_DSN}}"
 POSTGRESQL_TABLE="${POSTGRESQL_TABLE:-scanner_logger.scan_events}"
 POSTGRESQL_CONNECT_TIMEOUT="${POSTGRESQL_CONNECT_TIMEOUT:-3}"
 POSTGRESQL_RETRY_INTERVAL="${POSTGRESQL_RETRY_INTERVAL:-30}"
+OUTGOING_API_ENABLED="${OUTGOING_API_ENABLED:-0}"
+OUTGOING_API_URL="${OUTGOING_API_URL:-}"
+OUTGOING_API_AUTH_TYPE="${OUTGOING_API_AUTH_TYPE:-none}"
+OUTGOING_API_BEARER_TOKEN_FILE="${OUTGOING_API_BEARER_TOKEN_FILE:-}"
+OUTGOING_API_OAUTH2_TOKEN_URL="${OUTGOING_API_OAUTH2_TOKEN_URL:-}"
+OUTGOING_API_OAUTH2_CLIENT_ID="${OUTGOING_API_OAUTH2_CLIENT_ID:-}"
+OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE="${OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE:-}"
+OUTGOING_API_OAUTH2_SCOPE="${OUTGOING_API_OAUTH2_SCOPE:-}"
+OUTGOING_API_TIMEOUT="${OUTGOING_API_TIMEOUT:-10}"
+OUTGOING_API_RETRY_INTERVAL="${OUTGOING_API_RETRY_INTERVAL:-30}"
+OUTGOING_API_POLL_INTERVAL="${OUTGOING_API_POLL_INTERVAL:-1}"
+OUTGOING_API_BATCH_SIZE="${OUTGOING_API_BATCH_SIZE:-50}"
 LAST_SCANNER_ID="${LAST_SCANNER_ID:-}"
 MANDATORY_SCANNER_IDS="${MANDATORY_SCANNER_IDS:-}"
 CURRENT_SCAN_RATE_STALE_SECONDS="${CURRENT_SCAN_RATE_STALE_SECONDS:-60}"
@@ -38,6 +50,8 @@ HEALTH_PAGE_REFRESH_SECONDS="${HEALTH_PAGE_REFRESH_SECONDS:-3}"
 TV_DASHBOARD_REFRESH_SECONDS="${TV_DASHBOARD_REFRESH_SECONDS:-1}"
 TV_DUPLICATE_ALERT_ENABLED="${TV_DUPLICATE_ALERT_ENABLED:-1}"
 TV_DUPLICATE_ALERT_SECONDS="${TV_DUPLICATE_ALERT_SECONDS:-60}"
+DISK_SPACE_WARNING_PERCENT="${DISK_SPACE_WARNING_PERCENT:-10}"
+DISK_SPACE_WARNING_BYTES="${DISK_SPACE_WARNING_BYTES:-5368709120}"
 API_ENABLED="${API_ENABLED:-1}"
 API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-8000}"
@@ -91,6 +105,15 @@ Options:
   --postgresql-table NAME  PostgreSQL table in schema.table format [${POSTGRESQL_TABLE}]
   --postgresql-connect-timeout SEC PostgreSQL connection timeout [${POSTGRESQL_CONNECT_TIMEOUT}]
   --postgresql-retry-interval SEC  retry delay after PostgreSQL failures [${POSTGRESQL_RETRY_INTERVAL}]
+  --enable-outgoing-api    enable external API delivery for processed scan rows
+  --disable-outgoing-api   disable external API delivery [default]
+  --outgoing-api-url URL   external HTTPS API URL that receives scan JSON [${OUTGOING_API_URL:-not set}]
+  --outgoing-api-auth-type TYPE auth mode: none, bearer, or oauth2 [${OUTGOING_API_AUTH_TYPE}]
+  --outgoing-api-bearer-token-file PATH bearer token file when auth type is bearer [${OUTGOING_API_BEARER_TOKEN_FILE:-not set}]
+  --outgoing-api-timeout SEC outgoing API request timeout [${OUTGOING_API_TIMEOUT}]
+  --outgoing-api-retry-interval SEC retry delay after outgoing API failures [${OUTGOING_API_RETRY_INTERVAL}]
+  --outgoing-api-poll-interval SEC queue drain poll interval [${OUTGOING_API_POLL_INTERVAL}]
+  --outgoing-api-batch-size NUM maximum queued scans sent per drain cycle [${OUTGOING_API_BATCH_SIZE}]
   --last-scanner-id ID     scanner IP last octet for the final outbound scanner [${LAST_SCANNER_ID:-not set}]
   --mandatory-scanner-ids IDS comma or space-separated scanner IDs that must stay connected [${MANDATORY_SCANNER_IDS:-none}]
   --current-scan-rate-stale-seconds SEC seconds before health scan-rate indicator turns red [${CURRENT_SCAN_RATE_STALE_SECONDS}]
@@ -99,6 +122,8 @@ Options:
   --enable-tv-duplicate-alert enable TV duplicate flashing screen and alarm [default]
   --disable-tv-duplicate-alert disable TV duplicate flashing screen and alarm
   --tv-duplicate-alert-seconds SEC TV duplicate alert display duration [${TV_DUPLICATE_ALERT_SECONDS}]
+  --disk-space-warning-percent PCT free disk percent that triggers health warning [${DISK_SPACE_WARNING_PERCENT}]
+  --disk-space-warning-bytes BYTES free disk bytes that triggers health warning [${DISK_SPACE_WARNING_BYTES}]
   --enable-api             enable and start the REST API service [default]
   --disable-api            install but disable the REST API service
   --api-host HOST          REST API bind address [${API_HOST}]
@@ -235,6 +260,102 @@ validate_api_root_path() {
     fi
 
     API_ROOT_PATH="${API_ROOT_PATH%/}"
+}
+
+load_existing_app_config() {
+    if [[ "${OVERWRITE_CONFIG}" -eq 1 || ! -f "${CONFIG_FILE}" ]]; then
+        return
+    fi
+
+    echo "Using existing app config: ${CONFIG_FILE}"
+
+    # Existing app config is authoritative on reinstall so the service plugs
+    # back into the same database, paths, API settings, and nginx settings.
+    eval "$(
+        python3 - "${CONFIG_FILE}" <<'PY'
+import configparser
+import shlex
+import sys
+
+
+config_path = sys.argv[1]
+config = configparser.ConfigParser(interpolation=None)
+config.read(config_path)
+
+
+def emit(name: str, value: str):
+    print(f"{name}={shlex.quote(str(value))}")
+
+
+def emit_option(section: str, option: str, variable: str):
+    if config.has_option(section, option):
+        emit(variable, config.get(section, option, raw=True))
+
+
+def emit_bool(section: str, option: str, variable: str):
+    if config.has_option(section, option):
+        emit(variable, "1" if config.getboolean(section, option) else "0")
+
+
+emit_option("receiver", "host", "HOST")
+emit_option("receiver", "port", "PORT")
+emit_option("receiver", "output_dir", "OUTPUT_DIR")
+emit_option("receiver", "prefix", "PREFIX")
+emit_option("receiver", "no_read_message", "NO_READ_MESSAGE")
+emit_option("receiver", "success_length", "SUCCESS_LENGTH")
+emit_option("receiver", "max_barcode_chars", "MAX_BARCODE_CHARS")
+emit_option("receiver", "max_clients", "MAX_CLIENTS")
+emit_option("receiver", "frame_idle_timeout", "FRAME_IDLE_TIMEOUT")
+emit_option("receiver", "client_idle_timeout", "CLIENT_IDLE_TIMEOUT")
+emit_option("receiver", "shutdown_timeout", "SHUTDOWN_TIMEOUT")
+emit_bool("receiver", "tracking_repair_enabled", "TRACKING_REPAIR_ENABLED")
+emit_option("logging", "log_file", "LOG_FILE")
+emit_option("logging", "scan_data_log_dir", "SCAN_DATA_LOG_DIR")
+emit_option("logging", "scan_data_log_prefix", "SCAN_DATA_LOG_PREFIX")
+emit_option("tcp_keepalive", "idle", "TCP_KEEPALIVE_IDLE")
+emit_option("tcp_keepalive", "interval", "TCP_KEEPALIVE_INTERVAL")
+emit_option("tcp_keepalive", "probes", "TCP_KEEPALIVE_PROBES")
+emit_option("postgresql", "dsn", "POSTGRESQL_DSN")
+emit_option("postgresql", "table", "POSTGRESQL_TABLE")
+emit_option("postgresql", "connect_timeout", "POSTGRESQL_CONNECT_TIMEOUT")
+emit_option("postgresql", "retry_interval", "POSTGRESQL_RETRY_INTERVAL")
+emit_bool("outgoing_api", "enabled", "OUTGOING_API_ENABLED")
+emit_option("outgoing_api", "url", "OUTGOING_API_URL")
+emit_option("outgoing_api", "auth_type", "OUTGOING_API_AUTH_TYPE")
+emit_option("outgoing_api", "bearer_token_file", "OUTGOING_API_BEARER_TOKEN_FILE")
+emit_option("outgoing_api", "oauth2_token_url", "OUTGOING_API_OAUTH2_TOKEN_URL")
+emit_option("outgoing_api", "oauth2_client_id", "OUTGOING_API_OAUTH2_CLIENT_ID")
+emit_option(
+    "outgoing_api",
+    "oauth2_client_secret_file",
+    "OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE",
+)
+emit_option("outgoing_api", "oauth2_scope", "OUTGOING_API_OAUTH2_SCOPE")
+emit_option("outgoing_api", "timeout", "OUTGOING_API_TIMEOUT")
+emit_option("outgoing_api", "retry_interval", "OUTGOING_API_RETRY_INTERVAL")
+emit_option("outgoing_api", "poll_interval", "OUTGOING_API_POLL_INTERVAL")
+emit_option("outgoing_api", "batch_size", "OUTGOING_API_BATCH_SIZE")
+emit_option("scanners", "last_scanner_id", "LAST_SCANNER_ID")
+emit_option("scanners", "mandatory_scanner_ids", "MANDATORY_SCANNER_IDS")
+emit_option("dashboard", "current_scan_rate_stale_seconds", "CURRENT_SCAN_RATE_STALE_SECONDS")
+emit_option("dashboard", "health_page_refresh_seconds", "HEALTH_PAGE_REFRESH_SECONDS")
+emit_option("dashboard", "tv_dashboard_refresh_seconds", "TV_DASHBOARD_REFRESH_SECONDS")
+emit_bool("dashboard", "tv_duplicate_alert_enabled", "TV_DUPLICATE_ALERT_ENABLED")
+emit_option("dashboard", "tv_duplicate_alert_seconds", "TV_DUPLICATE_ALERT_SECONDS")
+emit_option("dashboard", "disk_space_warning_percent", "DISK_SPACE_WARNING_PERCENT")
+emit_option("dashboard", "disk_space_warning_bytes", "DISK_SPACE_WARNING_BYTES")
+emit_bool("api", "enabled", "API_ENABLED")
+emit_option("api", "host", "API_HOST")
+emit_option("api", "port", "API_PORT")
+emit_option("api", "root_path", "API_ROOT_PATH")
+emit_option("api", "log_level", "API_LOG_LEVEL")
+emit_option("nginx", "site_name", "NGINX_SITE_NAME")
+emit_option("nginx", "listen", "NGINX_LISTEN")
+emit_option("nginx", "server_name", "NGINX_SERVER_NAME")
+emit_option("nginx", "web_root", "NGINX_WEB_ROOT")
+emit_bool("nginx", "disable_default_site", "NGINX_DISABLE_DEFAULT_SITE")
+PY
+    )"
 }
 
 install_nginx_package() {
@@ -436,6 +557,42 @@ while [[ $# -gt 0 ]]; do
             POSTGRESQL_RETRY_INTERVAL="$2"
             shift 2
             ;;
+        --enable-outgoing-api)
+            OUTGOING_API_ENABLED=1
+            shift
+            ;;
+        --disable-outgoing-api)
+            OUTGOING_API_ENABLED=0
+            shift
+            ;;
+        --outgoing-api-url)
+            OUTGOING_API_URL="$2"
+            shift 2
+            ;;
+        --outgoing-api-auth-type)
+            OUTGOING_API_AUTH_TYPE="$2"
+            shift 2
+            ;;
+        --outgoing-api-bearer-token-file)
+            OUTGOING_API_BEARER_TOKEN_FILE="$2"
+            shift 2
+            ;;
+        --outgoing-api-timeout)
+            OUTGOING_API_TIMEOUT="$2"
+            shift 2
+            ;;
+        --outgoing-api-retry-interval)
+            OUTGOING_API_RETRY_INTERVAL="$2"
+            shift 2
+            ;;
+        --outgoing-api-poll-interval)
+            OUTGOING_API_POLL_INTERVAL="$2"
+            shift 2
+            ;;
+        --outgoing-api-batch-size)
+            OUTGOING_API_BATCH_SIZE="$2"
+            shift 2
+            ;;
         --last-scanner-id)
             LAST_SCANNER_ID="$2"
             shift 2
@@ -466,6 +623,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --tv-duplicate-alert-seconds)
             TV_DUPLICATE_ALERT_SECONDS="$2"
+            shift 2
+            ;;
+        --disk-space-warning-percent)
+            DISK_SPACE_WARNING_PERCENT="$2"
+            shift 2
+            ;;
+        --disk-space-warning-bytes)
+            DISK_SPACE_WARNING_BYTES="$2"
             shift 2
             ;;
         --enable-api)
@@ -627,6 +792,12 @@ if [[ ! -f "${REFRESH_NGINX_SOURCE}" ]]; then
     exit 1
 fi
 
+load_existing_app_config
+
+if [[ "${API_ENABLED}" -eq 0 ]]; then
+    NGINX_ENABLED=0
+fi
+
 if [[ "${NGINX_ENABLED}" -eq 1 ]]; then
     validate_api_root_path
     install_nginx_package
@@ -716,6 +887,11 @@ fi
 TRACKING_REPAIR_ENABLED_TEXT="false"
 if [[ "${TRACKING_REPAIR_ENABLED}" -eq 1 ]]; then
     TRACKING_REPAIR_ENABLED_TEXT="true"
+fi
+
+OUTGOING_API_ENABLED_TEXT="false"
+if [[ "${OUTGOING_API_ENABLED}" -eq 1 ]]; then
+    OUTGOING_API_ENABLED_TEXT="true"
 fi
 
 if [[ ! -f "${CONFIG_FILE}" || "${OVERWRITE_CONFIG}" -eq 1 ]]; then
@@ -823,6 +999,55 @@ connect_timeout = ${POSTGRESQL_CONNECT_TIMEOUT}
 # Default: 30. Range: 0 or greater. Use 0 for immediate retry attempts.
 retry_interval = ${POSTGRESQL_RETRY_INTERVAL}
 
+[outgoing_api]
+# Enables delivery of processed scan rows to an external API.
+# Default: false. Set true only after url and any required auth options are configured.
+enabled = ${OUTGOING_API_ENABLED_TEXT}
+
+# HTTPS endpoint that receives one processed scan row per JSON POST.
+# Default: blank. Required when enabled = true. Plain HTTP is only allowed for localhost testing.
+url = ${OUTGOING_API_URL}
+
+# Authentication mode for the outgoing API.
+# Default: none. Allowed: none, bearer, oauth2. OAuth2 is reserved for a future credential workflow.
+auth_type = ${OUTGOING_API_AUTH_TYPE}
+
+# File containing the bearer token when auth_type = bearer.
+# Default: blank. Store secrets outside this config when possible, readable only by the service user.
+bearer_token_file = ${OUTGOING_API_BEARER_TOKEN_FILE}
+
+# OAuth2 token endpoint placeholder for future support.
+# Default: blank. Not used until OAuth2 sending is implemented.
+oauth2_token_url = ${OUTGOING_API_OAUTH2_TOKEN_URL}
+
+# OAuth2 client ID placeholder for future support.
+# Default: blank. Not used until OAuth2 sending is implemented.
+oauth2_client_id = ${OUTGOING_API_OAUTH2_CLIENT_ID}
+
+# File containing the OAuth2 client secret placeholder for future support.
+# Default: blank. Not used until OAuth2 sending is implemented.
+oauth2_client_secret_file = ${OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE}
+
+# OAuth2 scope placeholder for future support.
+# Default: blank. Not used until OAuth2 sending is implemented.
+oauth2_scope = ${OUTGOING_API_OAUTH2_SCOPE}
+
+# Seconds to wait for one outgoing API request.
+# Default: 10. Range: greater than 0.
+timeout = ${OUTGOING_API_TIMEOUT}
+
+# Seconds before retrying queued scans after an outgoing API failure.
+# Default: 30. Range: 0 or greater.
+retry_interval = ${OUTGOING_API_RETRY_INTERVAL}
+
+# Seconds between queue drain checks while the receiver is running.
+# Default: 1. Range: greater than 0.
+poll_interval = ${OUTGOING_API_POLL_INTERVAL}
+
+# Maximum queued scans sent in one drain cycle.
+# Default: 50. Range: greater than 0.
+batch_size = ${OUTGOING_API_BATCH_SIZE}
+
 [scanners]
 # Scanner ID for the final outbound scanner before boxes are loaded.
 # Default: blank, which disables last-scanner matching. Range when set: 0-255.
@@ -866,6 +1091,14 @@ tv_duplicate_alert_enabled = ${TV_DUPLICATE_ALERT_ENABLED_TEXT}
 # Seconds the TV dashboard full-screen duplicate warning stays visible after a duplicate.
 # Default: 60. Range: greater than 0. Example: 30 clears the duplicate alert after 30 seconds.
 tv_duplicate_alert_seconds = ${TV_DUPLICATE_ALERT_SECONDS}
+
+# Free disk percentage that triggers the health page low-space warning.
+# Default: 10. Range: 0 or greater. Set 0 to disable the percentage threshold.
+disk_space_warning_percent = ${DISK_SPACE_WARNING_PERCENT}
+
+# Free disk bytes that trigger the health page low-space warning.
+# Default: 5368709120, which is 5 GiB. Range: 0 or greater. Set 0 to disable the byte threshold.
+disk_space_warning_bytes = ${DISK_SPACE_WARNING_BYTES}
 
 [api]
 # Enables the REST API systemd service installed alongside the receiver.

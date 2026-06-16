@@ -622,12 +622,148 @@ class ApiQueryTests(unittest.TestCase):
             patch.object(api, "fetch_dashboard_today_scanner_totals", return_value=[]),
             patch.object(api, "fetch_current_scan_rate", return_value={}),
             patch.object(api, "fetch_active_duplicate_alert") as duplicate_alert,
+            patch.object(
+                api,
+                "build_storage_health",
+                return_value={
+                    "ok": True,
+                    "state": "ok",
+                    "lowest": None,
+                    "volumes": [],
+                },
+            ),
         ):
             payload = api.build_dashboard_health(config)
 
         duplicate_alert.assert_not_called()
         self.assertFalse(payload["tv_duplicate_alert_enabled"])
         self.assertIsNone(payload["duplicate_alert"])
+        self.assertEqual(payload["outgoing_api"]["state"], "disabled")
+        self.assertEqual(payload["storage"]["state"], "ok")
+
+    def test_build_storage_health_reports_low_disk_space(self):
+        from collections import namedtuple
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from industrial_scanner_logger import api
+
+        DiskUsage = namedtuple("DiskUsage", ["total", "used", "free"])
+
+        config = SimpleNamespace(
+            output_dir="/scanner-logs",
+            scan_data_log_dir="/var/log/industrial-scanner-logger",
+            log_file="/var/log/industrial-scanner-logger.log",
+            disk_space_warning_percent=10,
+            disk_space_warning_bytes=5 * 1024 * 1024 * 1024,
+        )
+
+        with (
+            patch.object(api, "nearest_existing_path", side_effect=lambda path: path),
+            patch.object(
+                api.shutil,
+                "disk_usage",
+                return_value=DiskUsage(
+                    total=100 * 1024 * 1024 * 1024,
+                    used=96 * 1024 * 1024 * 1024,
+                    free=4 * 1024 * 1024 * 1024,
+                ),
+            ),
+        ):
+            health = api.build_storage_health(config)
+
+        self.assertFalse(health["ok"])
+        self.assertEqual(health["state"], "low")
+        self.assertEqual(health["lowest"]["free_percent"], 4.0)
+        self.assertIn("free percent", health["lowest"]["warning_reasons"][0])
+
+    def test_fetch_outgoing_api_health_reports_failed_queue(self):
+        from types import SimpleNamespace
+
+        from industrial_scanner_logger.api import fetch_outgoing_api_health
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return None
+
+            def execute(self, _query, _params):
+                return None
+
+            def fetchone(self):
+                return {
+                    "queue_count": 3,
+                    "failed_queue_count": 1,
+                    "oldest_queued_at": datetime(2026, 6, 16, 9, 0, 0),
+                    "last_attempt_at": datetime(2026, 6, 16, 9, 5, 0),
+                    "last_error": "outgoing API returned HTTP 503",
+                    "last_http_status": 503,
+                }
+
+        class FakeDb:
+            def cursor(self):
+                return FakeCursor()
+
+        health = fetch_outgoing_api_health(
+            FakeDb(),
+            SimpleNamespace(
+                outgoing_api_enabled=True,
+                outgoing_api_auth_type="none",
+                outgoing_api_url="https://api.example.test/scans",
+            ),
+        )
+
+        self.assertFalse(health["active"])
+        self.assertEqual(health["state"], "unavailable")
+        self.assertEqual(health["queue_count"], 3)
+        self.assertEqual(health["failed_queue_count"], 1)
+        self.assertEqual(health["last_http_status"], 503)
+        self.assertEqual(health["oldest_queued_at"], "2026-06-16T09:00:00")
+
+    def test_fetch_outgoing_api_health_reports_missing_url_as_misconfigured(self):
+        from types import SimpleNamespace
+
+        from industrial_scanner_logger.api import fetch_outgoing_api_health
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return None
+
+            def execute(self, _query, _params):
+                return None
+
+            def fetchone(self):
+                return {
+                    "queue_count": 2,
+                    "failed_queue_count": 0,
+                    "oldest_queued_at": None,
+                    "last_attempt_at": None,
+                    "last_error": None,
+                    "last_http_status": None,
+                }
+
+        class FakeDb:
+            def cursor(self):
+                return FakeCursor()
+
+        health = fetch_outgoing_api_health(
+            FakeDb(),
+            SimpleNamespace(
+                outgoing_api_enabled=True,
+                outgoing_api_auth_type="none",
+                outgoing_api_url="",
+            ),
+        )
+
+        self.assertFalse(health["active"])
+        self.assertEqual(health["state"], "misconfigured")
+        self.assertEqual(health["queue_count"], 2)
+        self.assertIn("outgoing_api.url is required", health["error"])
 
     def test_dashboard_mandatory_scanners_reports_missing_required_ids(self):
         from types import SimpleNamespace

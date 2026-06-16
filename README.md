@@ -147,6 +147,12 @@ needed, enables an nginx site for `/api`, and starts the services. It also
 installs UFW, denies incoming traffic by default, and allows only `22/tcp`,
 `55256/tcp`, `80/tcp`, and `443/tcp` incoming.
 
+If `/etc/industrial-scanner-logger.conf` already exists, the installer keeps it
+and uses its settings before database setup. This lets an uninstall followed by
+a fresh install reconnect to the same PostgreSQL DSN, schema, paths, API
+settings, and nginx settings. Use `--overwrite-config` only when you want to
+replace the preserved config with newly generated defaults.
+
 The nginx site template is:
 
 ```text
@@ -195,7 +201,8 @@ Receiver options are in:
 
 Edit that file to change the bind address, TCP port, output directory, CSV
 prefix, no-read text, success length, receiver safety limits, troubleshooting
-log path, PostgreSQL options, REST API bind settings, or nginx site settings:
+log path, PostgreSQL options, outgoing API delivery, REST API bind settings, or
+nginx site settings:
 
 ```bash
 sudo nano /etc/industrial-scanner-logger.conf
@@ -215,6 +222,13 @@ the config rewrite.
 `[api]` and `[nginx]` values from `/etc/industrial-scanner-logger.conf`, writes
 the result to `/etc/nginx/sites-available`, validates it with `nginx -t`, and
 restarts nginx.
+
+The installed receiver and API systemd units use `Restart=always` with a short
+restart delay and no start-rate limit. This lets the services recover from
+temporary startup failures, including local PostgreSQL not being ready during
+boot.
+Run `sudo update-services` after deploying a new version to refresh the
+database schema, web files, rendered systemd units, and running services.
 
 Useful service commands:
 
@@ -333,6 +347,32 @@ read. The
 normal `scanner_logger.scan_events` table skips failed nonnumeric scans such as
 no-read markers; those rows remain available in `raw_scan_events`.
 
+When `[outgoing_api] enabled = true`, each processed row inserted into
+`scanner_logger.scan_events` is also queued in
+`scanner_logger.outgoing_scan_queue` for JSON delivery to the configured
+external API URL. The queue follows the processed table exactly: same-scanner
+repeats that are not inserted into `scan_events` are not sent, while processed
+failed rows are sent. Successfully delivered rows are removed from the outgoing
+queue only; the main scan history remains in `scan_events`.
+
+The outgoing API sender posts one processed scan per request and includes the
+scan timestamp, scanner metadata, duplicate and repair flags, tracking number,
+barcode, success state, and failure reason. If the external API is unavailable
+or rejects a row, the queue row is retained with attempt metadata and retried
+later. The health page shows the outgoing API state and queued scan count
+without marking the whole app degraded.
+
+If outgoing API sending is enabled but the URL or auth configuration is not
+ready, the receiver still starts and continues accepting scanner data. Processed
+rows remain queued locally where possible, and the health page reports the
+outgoing API as misconfigured until the sender can be started safely.
+
+For security, external outgoing API URLs must use `https://`; `http://` is
+accepted only for `localhost` test endpoints. Bearer auth is configured with a
+token file path instead of putting the token directly on the health page or in
+logs. OAuth2 config keys are present as placeholders for a future credential
+workflow.
+
 The installer enables PostgreSQL logging by default with local Unix socket peer
 authentication:
 
@@ -414,6 +454,12 @@ rate, today's total, successful, duplicate, and failed counts, last received
 scan age, connected scanner count, and mandatory scanner warnings from the
 health dashboard data.
 
+The health page also monitors free disk space for the CSV output directory, raw
+scan data log directory, troubleshooting log directory, and root filesystem. It
+always shows the lowest remaining free space and displays a large warning banner
+when any monitored path is below `[dashboard] disk_space_warning_percent` or
+`disk_space_warning_bytes`.
+
 Interactive API docs are available through nginx:
 
 ```text
@@ -440,9 +486,14 @@ location /api/ {
 }
 ```
 
-Uninstall the runtime services, service files, config file, nginx site, and UFW
-package while preserving the installed app directory, CSV logs, script logs,
-raw scan data logs, the nginx package, and the service user/group:
+Uninstall only the service/startup integration by stopping and disabling the
+receiver/API services, removing their systemd unit files, removing the app nginx
+site, and removing the old `/etc/default` service defaults file if present. By
+default, the uninstaller preserves the installed app directory, CSV logs, script
+logs, raw scan data logs, helper scripts, web files, service user/group, UFW
+state, PostgreSQL, PostgreSQL roles/databases/schemas/scan data, nginx itself,
+and `/etc/industrial-scanner-logger.conf` so a later install can reconnect to
+the same database and settings:
 
 ```bash
 sudo scripts/uninstall.sh

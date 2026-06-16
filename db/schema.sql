@@ -90,6 +90,37 @@ CREATE TABLE IF NOT EXISTS scanner_logger.raw_scan_events (
     ) STORED
 );
 
+CREATE TABLE IF NOT EXISTS scanner_logger.outgoing_scan_queue (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+
+    -- Processed scan_events row that will be sent to the external API.
+    scan_event_id BIGINT NOT NULL UNIQUE
+        REFERENCES scanner_logger.scan_events (id) ON DELETE CASCADE,
+
+    -- UTC queue insertion time stored without timezone metadata.
+    created_at TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL
+        DEFAULT ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::timestamp(0)),
+
+    -- UTC time when this row is eligible for another delivery attempt.
+    next_attempt_at TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL
+        DEFAULT ((CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::timestamp(0)),
+
+    -- Number of failed delivery attempts recorded for this queued scan.
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+
+    -- UTC time of the most recent failed delivery attempt.
+    last_attempt_at TIMESTAMP(0) WITHOUT TIME ZONE,
+
+    -- Sanitized delivery error used by the health page and troubleshooting logs.
+    last_error TEXT,
+
+    -- HTTP response code from the most recent failed API response, when known.
+    last_http_status INTEGER CHECK (
+        last_http_status IS NULL
+        OR last_http_status BETWEEN 100 AND 599
+    )
+);
+
 DROP TABLE IF EXISTS scanner_logger.pending_orders;
 
 DROP VIEW IF EXISTS scanner_logger.successful_scans_missing_last_scanner;
@@ -234,6 +265,12 @@ CREATE INDEX IF NOT EXISTS idx_raw_scan_events_barcode
 
 CREATE INDEX IF NOT EXISTS idx_raw_scan_events_tracking_number
     ON scanner_logger.raw_scan_events (tracking_number);
+
+CREATE INDEX IF NOT EXISTS idx_outgoing_scan_queue_next_attempt
+    ON scanner_logger.outgoing_scan_queue (next_attempt_at, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_outgoing_scan_queue_last_attempt
+    ON scanner_logger.outgoing_scan_queue (last_attempt_at DESC, id DESC);
 
 CREATE OR REPLACE VIEW scanner_logger.daily_scan_totals AS
 SELECT
@@ -395,6 +432,7 @@ BEGIN
         EXECUTE 'GRANT USAGE ON SCHEMA scanner_logger TO scannerlogger';
         EXECUTE 'GRANT INSERT, SELECT ON scanner_logger.scan_events TO scannerlogger';
         EXECUTE 'GRANT INSERT, SELECT ON scanner_logger.raw_scan_events TO scannerlogger';
+        EXECUTE 'GRANT INSERT, SELECT, UPDATE, DELETE ON scanner_logger.outgoing_scan_queue TO scannerlogger';
         EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA scanner_logger TO scannerlogger';
     END IF;
 END $$;

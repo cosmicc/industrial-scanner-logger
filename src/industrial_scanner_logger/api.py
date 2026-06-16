@@ -17,8 +17,11 @@ from psycopg.rows import dict_row
 from industrial_scanner_logger._version import __version__
 from industrial_scanner_logger.receiver import (
     DEFAULT_CONFIG_FILE,
+    DEFAULT_OUTGOING_API_QUEUE_TABLE,
     DEFAULT_TV_DUPLICATE_ALERT_SECONDS,
     load_receiver_config,
+    parse_postgresql_table,
+    validate_outgoing_api_url,
     validate_positive_int,
 )
 
@@ -227,6 +230,7 @@ def build_dashboard_health(config):
     connected_scanners = dashboard_connected_scanners(config, connected_scanner_ids)
     mandatory_scanners = dashboard_mandatory_scanners(config, connected_scanner_ids)
     script_log = read_last_log_lines(SCANNER_SCRIPT_LOG_PATH, line_count=10)
+    storage = build_storage_health(config)
 
     database = {
         "active": False,
@@ -239,6 +243,7 @@ def build_dashboard_health(config):
     current_scan_rate = empty_current_scan_rate()
     duplicate_alert = None
     package_alerts = []
+    outgoing_api = empty_outgoing_api_health(config)
 
     try:
         db = connect_db(config)
@@ -295,6 +300,7 @@ def build_dashboard_health(config):
                 tv_duplicate_alert_seconds,
                 include_duplicate_alerts=tv_duplicate_alert_enabled,
             )
+            outgoing_api = fetch_outgoing_api_health(db, config)
 
             database = {
                 "active": True,
@@ -316,6 +322,7 @@ def build_dashboard_health(config):
         and services["api"]["active"]
         and database["active"]
         and mandatory_scanners["ok"]
+        and storage["ok"]
     )
 
     return {
@@ -345,14 +352,280 @@ def build_dashboard_health(config):
         "connected_scanner_count": len(connected_scanner_ids),
         "connected_scanners": connected_scanners,
         "mandatory_scanners": mandatory_scanners,
+        "storage": storage,
         "last_received": last_received,
         "recent_scans": recent_scans,
         "daily_totals": daily_totals,
         "current_scan_rate": current_scan_rate,
         "duplicate_alert": duplicate_alert,
         "package_alerts": package_alerts,
+        "outgoing_api": outgoing_api,
         "script_log": script_log,
     }
+
+
+def empty_outgoing_api_health(config) -> dict:
+    enabled = bool(getattr(config, "outgoing_api_enabled", False))
+    config_error = outgoing_api_config_error(config) if enabled else None
+
+    return {
+        "enabled": enabled,
+        "active": not enabled and config_error is None,
+        "state": outgoing_api_initial_state(enabled, config_error),
+        "queue_count": 0,
+        "failed_queue_count": 0,
+        "oldest_queued_at": None,
+        "last_attempt_at": None,
+        "last_error": None,
+        "last_http_status": None,
+        "auth_type": getattr(config, "outgoing_api_auth_type", "none"),
+        "url_configured": bool(getattr(config, "outgoing_api_url", "")),
+        "error": config_error,
+    }
+
+
+def fetch_outgoing_api_health(db, config) -> dict:
+    health = empty_outgoing_api_health(config)
+
+    if not health["enabled"]:
+        return health
+
+    schema_name, relation_name = parse_postgresql_table(DEFAULT_OUTGOING_API_QUEUE_TABLE)
+    queue_table = sql.SQL("{}.{}").format(
+        sql.Identifier(schema_name),
+        sql.Identifier(relation_name),
+    )
+    query = sql.SQL(
+        """
+        SELECT
+            count(*) AS queue_count,
+            count(*) FILTER (WHERE last_error IS NOT NULL) AS failed_queue_count,
+            min(created_at) AS oldest_queued_at,
+            max(last_attempt_at) AS last_attempt_at,
+            (
+                array_agg(last_error ORDER BY last_attempt_at DESC NULLS LAST, id DESC)
+                FILTER (WHERE last_error IS NOT NULL)
+            )[1] AS last_error,
+            (
+                array_agg(last_http_status ORDER BY last_attempt_at DESC NULLS LAST, id DESC)
+                FILTER (WHERE last_error IS NOT NULL)
+            )[1] AS last_http_status
+        FROM {queue_table}
+        """
+    ).format(queue_table=queue_table)
+
+    try:
+        row = fetch_one(db, query, [])
+    except Exception as exc:
+        health.update({
+            "active": False,
+            "state": "unavailable",
+            "error": str(exc),
+        })
+        return health
+
+    queue_count = int(row.get("queue_count") or 0)
+    failed_queue_count = int(row.get("failed_queue_count") or 0)
+    last_error = row.get("last_error")
+    config_error = health.get("error")
+
+    health.update({
+        "queue_count": queue_count,
+        "failed_queue_count": failed_queue_count,
+        "oldest_queued_at": api_timestamp(row.get("oldest_queued_at")),
+        "last_attempt_at": api_timestamp(row.get("last_attempt_at")),
+        "last_error": last_error,
+        "last_http_status": row.get("last_http_status"),
+    })
+
+    if config_error:
+        health["active"] = False
+        health["state"] = "misconfigured"
+    elif last_error:
+        health["active"] = False
+        health["state"] = "unavailable"
+    elif queue_count > 0:
+        health["active"] = False
+        health["state"] = "pending"
+    else:
+        health["active"] = True
+        health["state"] = "ok"
+
+    return health
+
+
+def outgoing_api_initial_state(enabled: bool, config_error: Optional[str]) -> str:
+    if not enabled:
+        return "disabled"
+
+    if config_error:
+        return "misconfigured"
+
+    return "unknown"
+
+
+def outgoing_api_config_error(config) -> Optional[str]:
+    try:
+        validate_outgoing_api_url(
+            getattr(config, "outgoing_api_url", ""),
+            enabled=True,
+        )
+    except ValueError as exc:
+        return str(exc)
+
+    auth_type = getattr(config, "outgoing_api_auth_type", "none")
+
+    if auth_type == "bearer" and not getattr(config, "outgoing_api_bearer_token_file", ""):
+        return "outgoing_api.bearer_token_file is required when bearer auth is enabled"
+
+    return None
+
+
+def api_timestamp(value):
+    if value is None:
+        return None
+
+    if hasattr(value, "isoformat"):
+        return value.isoformat(timespec="seconds")
+
+    return str(value)
+
+
+def build_storage_health(config) -> dict:
+    warning_percent = float(getattr(config, "disk_space_warning_percent", 10.0))
+    warning_bytes = int(float(getattr(config, "disk_space_warning_bytes", 0)))
+    monitored_paths = storage_monitor_paths(config)
+    volumes = []
+
+    for label, path in monitored_paths:
+        volumes.append(storage_volume_status(label, path, warning_percent, warning_bytes))
+
+    low_volumes = [volume for volume in volumes if not volume["ok"]]
+    lowest_volume = None
+
+    if volumes:
+        lowest_volume = min(
+            volumes,
+            key=lambda volume: (
+                volume["free_percent"],
+                volume["free_bytes"],
+            ),
+        )
+
+    return {
+        "ok": not low_volumes,
+        "state": "ok" if not low_volumes else "low",
+        "warning_percent": warning_percent,
+        "warning_bytes": warning_bytes,
+        "lowest": lowest_volume,
+        "volumes": volumes,
+    }
+
+
+def storage_monitor_paths(config) -> list[tuple[str, Path]]:
+    """
+    Return the local paths whose backing filesystems can stop scan intake.
+    """
+    paths = [
+        ("CSV output", Path(getattr(config, "output_dir", "/scanner-logs"))),
+        (
+            "Raw scan data log",
+            Path(getattr(config, "scan_data_log_dir", "/var/log/industrial-scanner-logger")),
+        ),
+        (
+            "Troubleshooting log",
+            Path(getattr(config, "log_file", "/var/log/industrial-scanner-logger.log")).parent,
+        ),
+        ("Root filesystem", Path("/")),
+    ]
+    unique_paths = []
+    seen = set()
+
+    for label, path in paths:
+        path_text = str(path)
+
+        if path_text in seen:
+            continue
+
+        unique_paths.append((label, path))
+        seen.add(path_text)
+
+    return unique_paths
+
+
+def storage_volume_status(
+    label: str,
+    path: Path,
+    warning_percent: float,
+    warning_bytes: int,
+) -> dict:
+    checked_path = nearest_existing_path(path)
+
+    try:
+        usage = shutil.disk_usage(checked_path)
+        free_percent = (usage.free / usage.total * 100) if usage.total else 0.0
+        low_percent = free_percent <= warning_percent
+        low_bytes = warning_bytes > 0 and usage.free <= warning_bytes
+        ok = not (low_percent or low_bytes)
+
+        return {
+            "label": label,
+            "path": str(path),
+            "checked_path": str(checked_path),
+            "ok": ok,
+            "state": "ok" if ok else "low",
+            "total_bytes": usage.total,
+            "used_bytes": usage.used,
+            "free_bytes": usage.free,
+            "free_percent": round(free_percent, 2),
+            "warning_reasons": storage_warning_reasons(
+                free_percent,
+                usage.free,
+                warning_percent,
+                warning_bytes,
+            ),
+            "error": None,
+        }
+    except OSError as exc:
+        return {
+            "label": label,
+            "path": str(path),
+            "checked_path": str(checked_path),
+            "ok": False,
+            "state": "unavailable",
+            "total_bytes": 0,
+            "used_bytes": 0,
+            "free_bytes": 0,
+            "free_percent": 0.0,
+            "warning_reasons": ["disk usage could not be checked"],
+            "error": str(exc),
+        }
+
+
+def nearest_existing_path(path: Path) -> Path:
+    candidate = path
+
+    while not candidate.exists() and candidate != candidate.parent:
+        candidate = candidate.parent
+
+    return candidate
+
+
+def storage_warning_reasons(
+    free_percent: float,
+    free_bytes: int,
+    warning_percent: float,
+    warning_bytes: int,
+) -> list[str]:
+    reasons = []
+
+    if free_percent <= warning_percent:
+        reasons.append(f"free percent is at or below {warning_percent:g}%")
+
+    if warning_bytes > 0 and free_bytes <= warning_bytes:
+        reasons.append(f"free bytes are at or below {warning_bytes}")
+
+    return reasons
 
 
 def empty_daily_totals(current_day: date, previous_day: date) -> dict:

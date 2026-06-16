@@ -35,6 +35,7 @@ Example daily CSV files:
 import argparse
 import configparser
 import csv
+import json
 import logging
 import re
 import socket
@@ -44,6 +45,9 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from urllib import error as url_error
+from urllib import request as url_request
+from urllib.parse import urlparse
 
 from industrial_scanner_logger._version import __version__
 
@@ -61,8 +65,21 @@ DEFAULT_TCP_KEEPALIVE_INTERVAL_SECONDS = 15
 DEFAULT_TCP_KEEPALIVE_PROBES = 4
 DEFAULT_POSTGRESQL_DSN = "postgresql:///scannerlogger?host=/var/run/postgresql&user=scannerlogger"
 DEFAULT_POSTGRESQL_TABLE = "scanner_logger.scan_events"
+DEFAULT_OUTGOING_API_QUEUE_TABLE = "scanner_logger.outgoing_scan_queue"
 DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS = 3.0
 DEFAULT_POSTGRESQL_RETRY_INTERVAL_SECONDS = 30.0
+DEFAULT_OUTGOING_API_ENABLED = False
+DEFAULT_OUTGOING_API_URL = ""
+DEFAULT_OUTGOING_API_AUTH_TYPE = "none"
+DEFAULT_OUTGOING_API_BEARER_TOKEN_FILE = ""
+DEFAULT_OUTGOING_API_OAUTH2_TOKEN_URL = ""
+DEFAULT_OUTGOING_API_OAUTH2_CLIENT_ID = ""
+DEFAULT_OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE = ""
+DEFAULT_OUTGOING_API_OAUTH2_SCOPE = ""
+DEFAULT_OUTGOING_API_TIMEOUT_SECONDS = 10.0
+DEFAULT_OUTGOING_API_RETRY_INTERVAL_SECONDS = 30.0
+DEFAULT_OUTGOING_API_POLL_INTERVAL_SECONDS = 1.0
+DEFAULT_OUTGOING_API_BATCH_SIZE = 50
 DEFAULT_LAST_SCANNER_ID = ""
 DEFAULT_MANDATORY_SCANNER_IDS = ""
 DEFAULT_SCANNER_PAIRS = ""
@@ -71,6 +88,8 @@ DEFAULT_HEALTH_PAGE_REFRESH_SECONDS = 3
 DEFAULT_TV_DASHBOARD_REFRESH_SECONDS = 1
 DEFAULT_TV_DUPLICATE_ALERT_ENABLED = True
 DEFAULT_TV_DUPLICATE_ALERT_SECONDS = 60
+DEFAULT_DISK_SPACE_WARNING_PERCENT = 10.0
+DEFAULT_DISK_SPACE_WARNING_BYTES = 5 * 1024 * 1024 * 1024
 LOG_BARCODE_PREVIEW_CHARS = 120
 MIN_MAX_BARCODE_CHARS = 64
 TRACKING_REPAIR_MIN_OVERLAP_CHARS = 4
@@ -79,6 +98,9 @@ DUPLICATE_DISTINCT_SUCCESS_THRESHOLD = 3
 DUPLICATE_LOOKBACK_DAYS = 30
 UNKNOWN_SCANNER_ID = "UNKNOWN"
 ALL_SCANNERS_ID = "ALL"
+OUTGOING_API_AUTH_TYPES = {"none", "bearer", "oauth2"}
+OUTGOING_API_LOCAL_HTTP_HOSTS = {"127.0.0.1", "::1", "localhost"}
+OUTGOING_API_MAX_ERROR_CHARS = 1000
 DAILY_CSV_HEADER = [
     "date",
     "time",
@@ -128,6 +150,20 @@ CONFIG_DEFAULTS = {
         "connect_timeout": str(DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS),
         "retry_interval": str(DEFAULT_POSTGRESQL_RETRY_INTERVAL_SECONDS),
     },
+    "outgoing_api": {
+        "enabled": str(DEFAULT_OUTGOING_API_ENABLED).lower(),
+        "url": DEFAULT_OUTGOING_API_URL,
+        "auth_type": DEFAULT_OUTGOING_API_AUTH_TYPE,
+        "bearer_token_file": DEFAULT_OUTGOING_API_BEARER_TOKEN_FILE,
+        "oauth2_token_url": DEFAULT_OUTGOING_API_OAUTH2_TOKEN_URL,
+        "oauth2_client_id": DEFAULT_OUTGOING_API_OAUTH2_CLIENT_ID,
+        "oauth2_client_secret_file": DEFAULT_OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE,
+        "oauth2_scope": DEFAULT_OUTGOING_API_OAUTH2_SCOPE,
+        "timeout": str(DEFAULT_OUTGOING_API_TIMEOUT_SECONDS),
+        "retry_interval": str(DEFAULT_OUTGOING_API_RETRY_INTERVAL_SECONDS),
+        "poll_interval": str(DEFAULT_OUTGOING_API_POLL_INTERVAL_SECONDS),
+        "batch_size": str(DEFAULT_OUTGOING_API_BATCH_SIZE),
+    },
     "scanners": {
         "last_scanner_id": DEFAULT_LAST_SCANNER_ID,
         "mandatory_scanner_ids": DEFAULT_MANDATORY_SCANNER_IDS,
@@ -144,6 +180,8 @@ CONFIG_DEFAULTS = {
             DEFAULT_TV_DUPLICATE_ALERT_ENABLED
         ).lower(),
         "tv_duplicate_alert_seconds": str(DEFAULT_TV_DUPLICATE_ALERT_SECONDS),
+        "disk_space_warning_percent": str(DEFAULT_DISK_SPACE_WARNING_PERCENT),
+        "disk_space_warning_bytes": str(DEFAULT_DISK_SPACE_WARNING_BYTES),
     },
     "api": {
         "enabled": "true",
@@ -445,6 +483,71 @@ def parse_postgresql_table(table_name: str):
     return schema_name, relation_name
 
 
+def validate_outgoing_api_auth_type(auth_type: str) -> str:
+    """
+    Normalize the outgoing API authentication mode.
+
+    The placeholder OAuth2 value is accepted so config files can be prepared
+    before OAuth2 credentials are known, but OAuth2 sending is not active yet.
+    """
+    normalized_auth_type = clean_barcode(auth_type).lower()
+
+    if normalized_auth_type not in OUTGOING_API_AUTH_TYPES:
+        allowed_auth_types = ", ".join(sorted(OUTGOING_API_AUTH_TYPES))
+        raise ValueError(
+            f"outgoing_api.auth_type must be one of: {allowed_auth_types}"
+        )
+
+    return normalized_auth_type
+
+
+def validate_outgoing_api_url(url: str, enabled: bool) -> str:
+    """
+    Validate the configured external API endpoint.
+
+    External HTTP is rejected because scan data leaves this app. Plain HTTP is
+    only accepted for loopback development endpoints.
+    """
+    normalized_url = clean_barcode(url)
+
+    if not normalized_url:
+        if enabled:
+            raise ValueError("outgoing_api.url is required when outgoing_api.enabled is true")
+
+        return ""
+
+    parsed_url = urlparse(normalized_url)
+
+    if parsed_url.scheme not in {"http", "https"}:
+        raise ValueError("outgoing_api.url must start with http:// or https://")
+
+    if not parsed_url.netloc:
+        raise ValueError("outgoing_api.url must include a host")
+
+    if parsed_url.username or parsed_url.password:
+        raise ValueError("outgoing_api.url must not include embedded credentials")
+
+    if (
+        parsed_url.scheme == "http"
+        and parsed_url.hostname not in OUTGOING_API_LOCAL_HTTP_HOSTS
+    ):
+        raise ValueError(
+            "outgoing_api.url must use https:// unless the host is localhost"
+        )
+
+    return normalized_url
+
+
+def normalize_outgoing_api_url(url: str) -> str:
+    """
+    Clean the outgoing API URL without deciding whether sending can start.
+
+    Scanner intake must be able to start even when the external API config is
+    incomplete. The sender validates this value before making HTTP requests.
+    """
+    return clean_barcode(url)
+
+
 def _new_config_parser():
     config = configparser.ConfigParser(interpolation=None)
     config.read_dict(CONFIG_DEFAULTS)
@@ -474,6 +577,12 @@ def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
         raise ValueError(f"config file does not exist: {config_path}")
 
     try:
+        outgoing_api_enabled = config.getboolean("outgoing_api", "enabled")
+        outgoing_api_url = normalize_outgoing_api_url(config.get("outgoing_api", "url"))
+        outgoing_api_auth_type = validate_outgoing_api_auth_type(
+            config.get("outgoing_api", "auth_type"),
+        )
+
         return argparse.Namespace(
             config_file=str(config_path),
             config_loaded=config_loaded,
@@ -506,6 +615,39 @@ def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
                 "connect_timeout",
             ),
             postgresql_retry_interval=config.getfloat("postgresql", "retry_interval"),
+            outgoing_api_enabled=outgoing_api_enabled,
+            outgoing_api_url=outgoing_api_url,
+            outgoing_api_auth_type=outgoing_api_auth_type,
+            outgoing_api_bearer_token_file=config.get(
+                "outgoing_api",
+                "bearer_token_file",
+            ),
+            outgoing_api_oauth2_token_url=config.get(
+                "outgoing_api",
+                "oauth2_token_url",
+            ),
+            outgoing_api_oauth2_client_id=config.get(
+                "outgoing_api",
+                "oauth2_client_id",
+            ),
+            outgoing_api_oauth2_client_secret_file=config.get(
+                "outgoing_api",
+                "oauth2_client_secret_file",
+            ),
+            outgoing_api_oauth2_scope=config.get("outgoing_api", "oauth2_scope"),
+            outgoing_api_timeout=config.getfloat("outgoing_api", "timeout"),
+            outgoing_api_retry_interval=config.getfloat(
+                "outgoing_api",
+                "retry_interval",
+            ),
+            outgoing_api_poll_interval=config.getfloat(
+                "outgoing_api",
+                "poll_interval",
+            ),
+            outgoing_api_batch_size=validate_positive_int(
+                config.getint("outgoing_api", "batch_size"),
+                "outgoing_api.batch_size",
+            ),
             last_scanner_id=validate_configured_scanner_id(
                 config.get("scanners", "last_scanner_id"),
                 "scanners.last_scanner_id",
@@ -538,6 +680,14 @@ def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
             tv_duplicate_alert_seconds=validate_positive_int(
                 config.getint("dashboard", "tv_duplicate_alert_seconds"),
                 "dashboard.tv_duplicate_alert_seconds",
+            ),
+            disk_space_warning_percent=validate_nonnegative_float(
+                config.getfloat("dashboard", "disk_space_warning_percent"),
+                "dashboard.disk_space_warning_percent",
+            ),
+            disk_space_warning_bytes=validate_nonnegative_float(
+                config.getfloat("dashboard", "disk_space_warning_bytes"),
+                "dashboard.disk_space_warning_bytes",
             ),
             api_enabled=config.getboolean("api", "enabled"),
             api_host=config.get("api", "host"),
@@ -592,6 +742,8 @@ class PostgreSQLScanLogger:
         self,
         dsn: str = DEFAULT_POSTGRESQL_DSN,
         table_name: str = DEFAULT_POSTGRESQL_TABLE,
+        outgoing_queue_table_name: str = DEFAULT_OUTGOING_API_QUEUE_TABLE,
+        outgoing_api_enabled: bool = DEFAULT_OUTGOING_API_ENABLED,
         connect_timeout: float = DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS,
         retry_interval: float = DEFAULT_POSTGRESQL_RETRY_INTERVAL_SECONDS,
     ):
@@ -599,6 +751,11 @@ class PostgreSQLScanLogger:
         self.schema_name, self.relation_name = parse_postgresql_table(table_name)
         self.raw_schema_name = self.schema_name
         self.raw_relation_name = f"raw_{self.relation_name}"
+        (
+            self.outgoing_queue_schema_name,
+            self.outgoing_queue_relation_name,
+        ) = parse_postgresql_table(outgoing_queue_table_name)
+        self.outgoing_api_enabled = bool(outgoing_api_enabled)
         self.connect_timeout = validate_positive_float(
             connect_timeout,
             "postgresql_connect_timeout",
@@ -610,6 +767,7 @@ class PostgreSQLScanLogger:
         self.conn = None
         self.insert_sql = None
         self.raw_insert_sql = None
+        self.queue_insert_sql = None
         self.next_retry_time = 0.0
         self.driver_unavailable = False
         self._psycopg = None
@@ -622,6 +780,13 @@ class PostgreSQLScanLogger:
     @property
     def raw_table_name(self) -> str:
         return f"{self.raw_schema_name}.{self.raw_relation_name}"
+
+    @property
+    def outgoing_queue_table_name(self) -> str:
+        return (
+            f"{self.outgoing_queue_schema_name}."
+            f"{self.outgoing_queue_relation_name}"
+        )
 
     def _load_driver(self):
         if self.driver_unavailable:
@@ -652,7 +817,8 @@ class PostgreSQLScanLogger:
             "(scan_timestamp, scanner_id, scanner_name, last_scanner_id, "
             "is_duplicate, is_repaired, "
             "tracking_number, barcode) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+            "RETURNING id"
         ).format(
             sql.Identifier(self.schema_name),
             sql.Identifier(self.relation_name),
@@ -666,6 +832,14 @@ class PostgreSQLScanLogger:
         ).format(
             sql.Identifier(self.raw_schema_name),
             sql.Identifier(self.raw_relation_name),
+        )
+        self.queue_insert_sql = sql.SQL(
+            "INSERT INTO {}.{} (scan_event_id) "
+            "VALUES (%s) "
+            "ON CONFLICT (scan_event_id) DO NOTHING"
+        ).format(
+            sql.Identifier(self.outgoing_queue_schema_name),
+            sql.Identifier(self.outgoing_queue_relation_name),
         )
         return True
 
@@ -928,6 +1102,7 @@ class PostgreSQLScanLogger:
         is_duplicate: bool,
         is_repaired: bool,
         scan_timestamp: datetime,
+        returning_id: bool = False,
     ):
         with self.conn.cursor() as cursor:
             cursor.execute(
@@ -943,6 +1118,22 @@ class PostgreSQLScanLogger:
                     barcode,
                 ),
             )
+
+            if returning_id:
+                row = cursor.fetchone()
+                return int(row[0])
+
+        return None
+
+    def _enqueue_outgoing_scan(self, scan_event_id: int):
+        """
+        Queue one processed scan row for external API delivery.
+
+        Only processed rows from scan_events are queued. Raw-only rows are not
+        queued because the external API must receive the post-repair result.
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(self.queue_insert_sql, (scan_event_id,))
 
     def write_scan_event(
         self,
@@ -970,30 +1161,35 @@ class PostgreSQLScanLogger:
         raw_barcode = raw_barcode or barcode
 
         try:
-            self._insert_scan_event(
-                self.raw_insert_sql,
-                raw_tracking_number,
-                raw_barcode,
-                db_scanner_id,
-                db_scanner_name,
-                db_last_scanner_id,
-                raw_is_duplicate,
-                False,
-                scan_timestamp,
-            )
-
-            if write_scan_event:
+            with self.conn.transaction():
                 self._insert_scan_event(
-                    self.insert_sql,
-                    tracking_number,
-                    barcode,
+                    self.raw_insert_sql,
+                    raw_tracking_number,
+                    raw_barcode,
                     db_scanner_id,
                     db_scanner_name,
                     db_last_scanner_id,
-                    is_duplicate,
-                    is_repaired,
+                    raw_is_duplicate,
+                    False,
                     scan_timestamp,
                 )
+
+                if write_scan_event:
+                    scan_event_id = self._insert_scan_event(
+                        self.insert_sql,
+                        tracking_number,
+                        barcode,
+                        db_scanner_id,
+                        db_scanner_name,
+                        db_last_scanner_id,
+                        is_duplicate,
+                        is_repaired,
+                        scan_timestamp,
+                        returning_id=True,
+                    )
+
+                    if self.outgoing_api_enabled and scan_event_id is not None:
+                        self._enqueue_outgoing_scan(scan_event_id)
         except Exception as exc:
             self._mark_unavailable("insert", exc)
 
@@ -1009,6 +1205,507 @@ class PostgreSQLScanLogger:
             SCRIPT_LOGGER.warning("PostgreSQL close failed: %s", exc)
         finally:
             self.conn = None
+
+
+class OutgoingAPIError(RuntimeError):
+    def __init__(self, message: str, http_status: Optional[int] = None):
+        super().__init__(message)
+        self.http_status = http_status
+
+
+class OutgoingAPIUnavailable(OutgoingAPIError):
+    """
+    Raised when the external API appears temporarily unavailable.
+    """
+
+
+class OutgoingAPIPermanentError(OutgoingAPIError):
+    """
+    Raised when the external API rejects the current payload.
+    """
+
+
+class OutgoingAPIClient:
+    def __init__(
+        self,
+        url: str,
+        auth_type: str = DEFAULT_OUTGOING_API_AUTH_TYPE,
+        bearer_token_file: str = DEFAULT_OUTGOING_API_BEARER_TOKEN_FILE,
+        oauth2_token_url: str = DEFAULT_OUTGOING_API_OAUTH2_TOKEN_URL,
+        oauth2_client_id: str = DEFAULT_OUTGOING_API_OAUTH2_CLIENT_ID,
+        oauth2_client_secret_file: str = DEFAULT_OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE,
+        oauth2_scope: str = DEFAULT_OUTGOING_API_OAUTH2_SCOPE,
+        timeout: float = DEFAULT_OUTGOING_API_TIMEOUT_SECONDS,
+    ):
+        self.url = validate_outgoing_api_url(url, enabled=True)
+        self.auth_type = validate_outgoing_api_auth_type(auth_type)
+        self.bearer_token_file = clean_barcode(bearer_token_file)
+        self.oauth2_token_url = clean_barcode(oauth2_token_url)
+        self.oauth2_client_id = clean_barcode(oauth2_client_id)
+        self.oauth2_client_secret_file = clean_barcode(oauth2_client_secret_file)
+        self.oauth2_scope = clean_barcode(oauth2_scope)
+        self.timeout = validate_positive_float(timeout, "outgoing_api.timeout")
+
+    def _read_bearer_token(self) -> str:
+        """
+        Read the bearer token from disk for each request so token rotation works.
+        """
+        if not self.bearer_token_file:
+            raise OutgoingAPIUnavailable(
+                "bearer auth selected but bearer_token_file is not configured"
+            )
+
+        token_path = Path(self.bearer_token_file)
+
+        try:
+            token = token_path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise OutgoingAPIUnavailable(
+                "bearer token file could not be read"
+            ) from exc
+
+        if not token:
+            raise OutgoingAPIUnavailable("bearer token file is empty")
+
+        return token
+
+    def _headers(self) -> dict[str, str]:
+        """
+        Build request headers without logging or exposing authentication secrets.
+        """
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": f"industrial-scanner-logger/{__version__}",
+        }
+
+        if self.auth_type == "bearer":
+            headers["Authorization"] = f"Bearer {self._read_bearer_token()}"
+
+        elif self.auth_type == "oauth2":
+            raise OutgoingAPIUnavailable(
+                "oauth2 auth is configured but OAuth2 sending is not implemented yet"
+            )
+
+        return headers
+
+    def post_scan(self, scan_row: dict) -> int:
+        """
+        Send one processed scan row to the configured external API.
+        """
+        payload = outgoing_api_payload(scan_row)
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        request = url_request.Request(
+            self.url,
+            data=body,
+            headers=self._headers(),
+            method="POST",
+        )
+
+        try:
+            with url_request.urlopen(request, timeout=self.timeout) as response:
+                status_code = int(response.getcode() or 0)
+
+        except url_error.HTTPError as exc:
+            status_code = int(exc.code or 0)
+            error_text = outgoing_api_http_error_text(exc)
+
+            if status_code == 429 or status_code >= 500:
+                raise OutgoingAPIUnavailable(error_text, status_code) from exc
+
+            raise OutgoingAPIPermanentError(error_text, status_code) from exc
+
+        except (OSError, TimeoutError, url_error.URLError) as exc:
+            raise OutgoingAPIUnavailable(
+                f"outgoing API request failed: {safe_error_text(exc)}"
+            ) from exc
+
+        if status_code < 200 or status_code >= 300:
+            if status_code == 429 or status_code >= 500:
+                raise OutgoingAPIUnavailable(
+                    f"outgoing API returned HTTP {status_code}",
+                    status_code,
+                )
+
+            raise OutgoingAPIPermanentError(
+                f"outgoing API returned HTTP {status_code}",
+                status_code,
+            )
+
+        return status_code
+
+
+def outgoing_api_payload(scan_row: dict) -> dict:
+    """
+    Convert a scan_events row into the JSON body sent to the external API.
+    """
+    return {
+        "scan_event_id": scan_row["scan_event_id"],
+        "scan_timestamp": outgoing_api_timestamp(scan_row["scan_timestamp"]),
+        "scan_date": str(scan_row["scan_date"]),
+        "scan_time": str(scan_row["scan_time"]),
+        "scanner_id": scan_row["scanner_id"],
+        "scanner_name": scan_row["scanner_name"],
+        "last_scanner_id": scan_row["last_scanner_id"],
+        "is_duplicate": bool(scan_row["is_duplicate"]),
+        "is_repaired": bool(scan_row["is_repaired"]),
+        "tracking_number": scan_row["tracking_number"],
+        "barcode": scan_row["barcode"],
+        "barcode_length": scan_row["barcode_length"],
+        "is_success": bool(scan_row["is_success"]),
+        "failure_reason": scan_row["failure_reason"],
+    }
+
+
+def outgoing_api_timestamp(value) -> str:
+    if hasattr(value, "isoformat"):
+        return value.isoformat(timespec="seconds")
+
+    return str(value)
+
+
+def outgoing_api_http_error_text(exc: url_error.HTTPError) -> str:
+    """
+    Return a short HTTP error summary without including request headers.
+    """
+    response_body = ""
+
+    try:
+        response_body = exc.read(OUTGOING_API_MAX_ERROR_CHARS).decode(
+            "utf-8",
+            errors="replace",
+        )
+    except Exception:
+        response_body = ""
+
+    response_body = clean_barcode(response_body)
+
+    if response_body:
+        return (
+            f"outgoing API returned HTTP {exc.code}: "
+            f"{response_body[:OUTGOING_API_MAX_ERROR_CHARS]}"
+        )
+
+    return f"outgoing API returned HTTP {exc.code}"
+
+
+def safe_error_text(exc: Exception) -> str:
+    return str(exc)[:OUTGOING_API_MAX_ERROR_CHARS]
+
+
+class PostgreSQLOutgoingScanQueue:
+    def __init__(
+        self,
+        dsn: str = DEFAULT_POSTGRESQL_DSN,
+        scan_table_name: str = DEFAULT_POSTGRESQL_TABLE,
+        queue_table_name: str = DEFAULT_OUTGOING_API_QUEUE_TABLE,
+        connect_timeout: float = DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS,
+        retry_interval: float = DEFAULT_OUTGOING_API_RETRY_INTERVAL_SECONDS,
+    ):
+        self.dsn = dsn
+        self.scan_schema_name, self.scan_relation_name = parse_postgresql_table(
+            scan_table_name
+        )
+        self.queue_schema_name, self.queue_relation_name = parse_postgresql_table(
+            queue_table_name
+        )
+        self.connect_timeout = validate_positive_float(
+            connect_timeout,
+            "postgresql_connect_timeout",
+        )
+        self.retry_interval = validate_nonnegative_float(
+            retry_interval,
+            "outgoing_api.retry_interval",
+        )
+        self.conn = None
+        self.next_retry_time = 0.0
+        self.driver_unavailable = False
+        self._psycopg = None
+        self._sql = None
+        self._dict_row = None
+
+    @property
+    def queue_table_name(self) -> str:
+        return f"{self.queue_schema_name}.{self.queue_relation_name}"
+
+    def _load_driver(self):
+        if self.driver_unavailable:
+            raise RuntimeError(
+                "Outgoing API queue requires the psycopg package. "
+                "Install the project dependencies or reinstall the service."
+            )
+
+        if self._psycopg is not None and self._sql is not None:
+            return True
+
+        try:
+            import psycopg
+            from psycopg import sql
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            self.driver_unavailable = True
+            message = (
+                "Outgoing API queue requires the psycopg package. "
+                "Install the project dependencies or reinstall the service."
+            )
+
+            raise RuntimeError(message) from exc
+
+        self._psycopg = psycopg
+        self._sql = sql
+        self._dict_row = dict_row
+        return True
+
+    def _mark_unavailable(self, action: str, exc: Exception):
+        self.close()
+        self.next_retry_time = time.monotonic() + self.retry_interval
+
+        message = (
+            f"Outgoing API queue {action} failed table={self.queue_table_name} "
+            f"retry_interval={self.retry_interval}s error={exc}"
+        )
+
+        raise RuntimeError(message) from exc
+
+    def _connect(self):
+        if self.conn is not None:
+            return
+
+        if time.monotonic() < self.next_retry_time:
+            raise RuntimeError("Outgoing API queue database is unavailable")
+
+        self._load_driver()
+
+        try:
+            self.conn = self._psycopg.connect(
+                self.dsn,
+                autocommit=True,
+                connect_timeout=max(1, int(round(self.connect_timeout))),
+                options="-c timezone=UTC",
+            )
+        except Exception as exc:
+            self._mark_unavailable("connect", exc)
+
+    def verify_connection(self):
+        self._connect()
+
+    def _scan_table_sql(self):
+        return self._sql.SQL("{}.{}").format(
+            self._sql.Identifier(self.scan_schema_name),
+            self._sql.Identifier(self.scan_relation_name),
+        )
+
+    def _queue_table_sql(self):
+        return self._sql.SQL("{}.{}").format(
+            self._sql.Identifier(self.queue_schema_name),
+            self._sql.Identifier(self.queue_relation_name),
+        )
+
+    def fetch_due_scans(self, batch_size: int) -> list[dict]:
+        self._connect()
+        query = self._sql.SQL(
+            """
+            SELECT
+                queue.id AS queue_id,
+                queue.attempt_count,
+                events.id AS scan_event_id,
+                events.scan_timestamp,
+                events.scan_timestamp::date AS scan_date,
+                events.scan_timestamp::time(0) AS scan_time,
+                events.scanner_id,
+                events.scanner_name,
+                events.last_scanner_id,
+                events.is_duplicate,
+                events.is_repaired,
+                events.tracking_number,
+                events.barcode,
+                events.barcode_length,
+                events.is_success,
+                events.failure_reason
+            FROM {queue_table} AS queue
+            JOIN {scan_table} AS events
+              ON events.id = queue.scan_event_id
+            WHERE queue.next_attempt_at <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+            ORDER BY queue.created_at ASC, queue.id ASC
+            LIMIT %s
+            """
+        ).format(
+            queue_table=self._queue_table_sql(),
+            scan_table=self._scan_table_sql(),
+        )
+
+        try:
+            with self.conn.cursor(row_factory=self._dict_row) as cursor:
+                cursor.execute(query, [batch_size])
+                return cursor.fetchall()
+        except Exception as exc:
+            self._mark_unavailable("fetch", exc)
+
+    def delete_queue_row(self, queue_id: int):
+        self._connect()
+        query = self._sql.SQL("DELETE FROM {} WHERE id = %s").format(
+            self._queue_table_sql()
+        )
+
+        try:
+            with self.conn.cursor() as cursor:
+                cursor.execute(query, [queue_id])
+        except Exception as exc:
+            self._mark_unavailable("delete", exc)
+
+    def record_failure(
+        self,
+        queue_id: int,
+        error_message: str,
+        http_status: Optional[int],
+        retry_interval: float,
+    ):
+        self._connect()
+        query = self._sql.SQL(
+            """
+            UPDATE {}
+               SET attempt_count = attempt_count + 1,
+                   last_attempt_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+                   last_error = %s,
+                   last_http_status = %s,
+                   next_attempt_at = (
+                       (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+                       + (%s * INTERVAL '1 second')
+                   )
+             WHERE id = %s
+            """
+        ).format(self._queue_table_sql())
+
+        try:
+            with self.conn.cursor() as cursor:
+                cursor.execute(
+                    query,
+                    [
+                        error_message[:OUTGOING_API_MAX_ERROR_CHARS],
+                        http_status,
+                        retry_interval,
+                        queue_id,
+                    ],
+                )
+        except Exception as exc:
+            self._mark_unavailable("failure update", exc)
+
+    def close(self):
+        if self.conn is None:
+            return
+
+        try:
+            self.conn.close()
+        except Exception as exc:
+            SCRIPT_LOGGER.warning("Outgoing API queue close failed: %s", exc)
+        finally:
+            self.conn = None
+
+
+class OutgoingAPISender:
+    def __init__(
+        self,
+        queue: PostgreSQLOutgoingScanQueue,
+        client: OutgoingAPIClient,
+        batch_size: int = DEFAULT_OUTGOING_API_BATCH_SIZE,
+        retry_interval: float = DEFAULT_OUTGOING_API_RETRY_INTERVAL_SECONDS,
+        poll_interval: float = DEFAULT_OUTGOING_API_POLL_INTERVAL_SECONDS,
+    ):
+        self.queue = queue
+        self.client = client
+        self.batch_size = validate_positive_int(batch_size, "outgoing_api.batch_size")
+        self.retry_interval = validate_nonnegative_float(
+            retry_interval,
+            "outgoing_api.retry_interval",
+        )
+        self.poll_interval = validate_positive_float(
+            poll_interval,
+            "outgoing_api.poll_interval",
+        )
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(
+            target=self._run,
+            name="outgoing-api-sender",
+            daemon=True,
+        )
+
+    def start(self):
+        self.thread.start()
+
+    def stop(self, timeout: float):
+        self.stop_event.set()
+        self.thread.join(timeout=timeout)
+        self.queue.close()
+
+    def _run(self):
+        SCRIPT_LOGGER.info("Outgoing API sender started.")
+
+        while not self.stop_event.is_set():
+            try:
+                self.drain_once()
+            except Exception as exc:
+                SCRIPT_LOGGER.warning("Outgoing API sender error: %s", exc)
+                self.stop_event.wait(self.retry_interval)
+                continue
+
+            self.stop_event.wait(self.poll_interval)
+
+        SCRIPT_LOGGER.info("Outgoing API sender stopped.")
+
+    def drain_once(self) -> int:
+        sent_count = 0
+        queued_scans = self.queue.fetch_due_scans(self.batch_size)
+
+        for scan_row in queued_scans:
+            queue_id = int(scan_row["queue_id"])
+            scan_event_id = int(scan_row["scan_event_id"])
+
+            try:
+                self.client.post_scan(scan_row)
+            except OutgoingAPIPermanentError as exc:
+                self._record_delivery_failure(queue_id, scan_event_id, exc)
+                continue
+            except OutgoingAPIUnavailable as exc:
+                self._record_delivery_failure(queue_id, scan_event_id, exc)
+                break
+            except Exception as exc:
+                wrapped_error = OutgoingAPIUnavailable(
+                    f"unexpected outgoing API sender error: {safe_error_text(exc)}"
+                )
+                self._record_delivery_failure(queue_id, scan_event_id, wrapped_error)
+                break
+
+            self.queue.delete_queue_row(queue_id)
+            sent_count += 1
+            SCRIPT_LOGGER.info(
+                "Outgoing API scan delivered queue_id=%s scan_event_id=%s",
+                queue_id,
+                scan_event_id,
+            )
+
+        return sent_count
+
+    def _record_delivery_failure(
+        self,
+        queue_id: int,
+        scan_event_id: int,
+        exc: OutgoingAPIError,
+    ):
+        error_message = safe_error_text(exc)
+        self.queue.record_failure(
+            queue_id,
+            error_message,
+            exc.http_status,
+            self.retry_interval,
+        )
+        SCRIPT_LOGGER.warning(
+            "Outgoing API scan delivery failed queue_id=%s scan_event_id=%s "
+            "http_status=%s error=%s",
+            queue_id,
+            scan_event_id,
+            exc.http_status or "none",
+            error_message,
+        )
 
 
 class DailyCsvLogger:
@@ -2378,6 +3075,17 @@ def main():
             args.postgresql_retry_interval,
             "postgresql_retry_interval",
         )
+        validate_outgoing_api_auth_type(args.outgoing_api_auth_type)
+        validate_positive_float(args.outgoing_api_timeout, "outgoing_api.timeout")
+        validate_nonnegative_float(
+            args.outgoing_api_retry_interval,
+            "outgoing_api.retry_interval",
+        )
+        validate_positive_float(
+            args.outgoing_api_poll_interval,
+            "outgoing_api.poll_interval",
+        )
+        validate_positive_int(args.outgoing_api_batch_size, "outgoing_api.batch_size")
 
         if args.port > 65535:
             raise ValueError("port must be between 1 and 65535")
@@ -2408,6 +3116,7 @@ def main():
     postgresql_logger = PostgreSQLScanLogger(
         dsn=args.postgresql_dsn,
         table_name=args.postgresql_table,
+        outgoing_api_enabled=args.outgoing_api_enabled,
         connect_timeout=args.postgresql_connect_timeout,
         retry_interval=args.postgresql_retry_interval,
     )
@@ -2422,6 +3131,50 @@ def main():
     except RuntimeError as exc:
         SCRIPT_LOGGER.error("%s", exc)
         return 1
+
+    outgoing_sender = None
+
+    if args.outgoing_api_enabled:
+        try:
+            validate_outgoing_api_url(args.outgoing_api_url, enabled=True)
+            if args.outgoing_api_auth_type == "bearer" and not (
+                args.outgoing_api_bearer_token_file
+            ):
+                raise ValueError(
+                    "outgoing_api.bearer_token_file is required when bearer "
+                    "auth is enabled"
+                )
+
+            outgoing_queue = PostgreSQLOutgoingScanQueue(
+                dsn=args.postgresql_dsn,
+                scan_table_name=args.postgresql_table,
+                connect_timeout=args.postgresql_connect_timeout,
+                retry_interval=args.outgoing_api_retry_interval,
+            )
+            outgoing_client = OutgoingAPIClient(
+                url=args.outgoing_api_url,
+                auth_type=args.outgoing_api_auth_type,
+                bearer_token_file=args.outgoing_api_bearer_token_file,
+                oauth2_token_url=args.outgoing_api_oauth2_token_url,
+                oauth2_client_id=args.outgoing_api_oauth2_client_id,
+                oauth2_client_secret_file=args.outgoing_api_oauth2_client_secret_file,
+                oauth2_scope=args.outgoing_api_oauth2_scope,
+                timeout=args.outgoing_api_timeout,
+            )
+            outgoing_queue.verify_connection()
+            outgoing_sender = OutgoingAPISender(
+                queue=outgoing_queue,
+                client=outgoing_client,
+                batch_size=args.outgoing_api_batch_size,
+                retry_interval=args.outgoing_api_retry_interval,
+                poll_interval=args.outgoing_api_poll_interval,
+            )
+        except (RuntimeError, ValueError, OutgoingAPIError) as exc:
+            SCRIPT_LOGGER.warning(
+                "Outgoing API sender disabled; scanner intake will continue "
+                "and processed scans will remain queued if possible. error=%s",
+                exc,
+            )
 
     logger = DailyCsvLogger(
         output_dir=Path(args.output_dir),
@@ -2462,6 +3215,19 @@ def main():
         "Configured scanner pair members: %s",
         len(args.scanner_pairs),
     )
+    SCRIPT_LOGGER.info(
+        "Outgoing API: %s",
+        "enabled" if args.outgoing_api_enabled else "disabled",
+    )
+    if args.outgoing_api_enabled:
+        SCRIPT_LOGGER.info(
+            "Outgoing API auth type: %s",
+            args.outgoing_api_auth_type,
+        )
+        SCRIPT_LOGGER.info(
+            "Outgoing API queue table: %s",
+            DEFAULT_OUTGOING_API_QUEUE_TABLE,
+        )
     SCRIPT_LOGGER.info("Raw scan data log directory: %s", args.scan_data_log_dir)
     SCRIPT_LOGGER.info(
         "Client idle timeout: %s",
@@ -2489,6 +3255,9 @@ def main():
         server.close()
         logger.close()
         return 1
+
+    if outgoing_sender is not None:
+        outgoing_sender.start()
 
     server.settimeout(0.5)
 
@@ -2570,6 +3339,9 @@ def main():
 
         for thread in threads_to_join:
             thread.join(timeout=args.shutdown_timeout)
+
+        if outgoing_sender is not None:
+            outgoing_sender.stop(args.shutdown_timeout)
 
         logger.close()
 

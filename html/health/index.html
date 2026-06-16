@@ -20,6 +20,11 @@
       Data source: <code>/api/v1/dashboard/health</code>
     </div>
 
+    <div id="storage-warning-banner" class="health-alert hidden">
+      <div class="health-alert-title">Low Drive Space Warning</div>
+      <div id="storage-warning-detail"></div>
+    </div>
+
     <section class="grid">
       <div class="card">
         <h2>Scanner Receiver Service</h2>
@@ -46,6 +51,26 @@
           <span id="db-status">Checking...</span>
         </div>
         <div id="db-detail" class="detail"></div>
+      </div>
+
+      <div class="card">
+        <h2>Outgoing API</h2>
+        <div class="status-row">
+          <span id="outgoing-api-dot" class="dot"></span>
+          <span id="outgoing-api-status">Checking...</span>
+        </div>
+        <div id="outgoing-api-queue" class="big-value">0 queued</div>
+        <div id="outgoing-api-detail" class="detail"></div>
+      </div>
+
+      <div class="card">
+        <h2>Storage</h2>
+        <div class="status-row">
+          <span id="storage-dot" class="dot"></span>
+          <span id="storage-status">Checking...</span>
+        </div>
+        <div id="storage-free" class="big-value">Checking...</div>
+        <div id="storage-detail" class="detail"></div>
       </div>
     </section>
 
@@ -192,16 +217,132 @@
     let healthRefreshTimer = null;
     let healthRefreshIntervalMs = null;
 
-    function setIndicator(prefix, active, statusText, detailText) {
+    function setIndicator(prefix, active, statusText, detailText, tone = null) {
       const dot = document.getElementById(`${prefix}-dot`);
       const status = document.getElementById(`${prefix}-status`);
       const detail = document.getElementById(`${prefix}-detail`);
+      const indicatorTone = tone || (active ? "green" : "red");
 
-      dot.classList.remove("green", "red");
-      dot.classList.add(active ? "green" : "red");
+      dot.classList.remove("green", "red", "yellow");
+      dot.classList.add(indicatorTone);
 
       status.textContent = statusText;
       detail.textContent = detailText || "";
+    }
+
+    function renderOutgoingApi(outgoingApi) {
+      const queueElement = document.getElementById("outgoing-api-queue");
+
+      if (!outgoingApi) {
+        setIndicator(
+          "outgoing-api",
+          false,
+          "Unknown",
+          "No outgoing API health data returned."
+        );
+        queueElement.textContent = "0 queued";
+        return;
+      }
+
+      const queueCount = Number(outgoingApi.queue_count || 0);
+      const queueLabel = `${queueCount.toLocaleString()} queued`;
+      queueElement.textContent = queueLabel;
+
+      if (!outgoingApi.enabled) {
+        setIndicator(
+          "outgoing-api",
+          true,
+          "Disabled",
+          "Outgoing API sending is disabled.",
+          "yellow"
+        );
+        return;
+      }
+
+      if (outgoingApi.state === "ok") {
+        setIndicator(
+          "outgoing-api",
+          true,
+          "Connected",
+          "Queue is empty."
+        );
+        return;
+      }
+
+      if (outgoingApi.state === "pending") {
+        setIndicator(
+          "outgoing-api",
+          false,
+          "Pending",
+          `${queueLabel}. Waiting for the sender to drain the queue.`,
+          "yellow"
+        );
+        return;
+      }
+
+      if (outgoingApi.state === "misconfigured") {
+        setIndicator(
+          "outgoing-api",
+          false,
+          "Misconfigured",
+          `${queueLabel}${outgoingApi.error ? `: ${outgoingApi.error}` : ""}`
+        );
+        return;
+      }
+
+      const errorText = outgoingApi.last_error || outgoingApi.error || "";
+      setIndicator(
+        "outgoing-api",
+        false,
+        "Unavailable",
+        `${queueLabel}${errorText ? `: ${errorText}` : ""}`
+      );
+    }
+
+    function renderStorage(storage) {
+      const banner = document.getElementById("storage-warning-banner");
+      const bannerDetail = document.getElementById("storage-warning-detail");
+      const freeElement = document.getElementById("storage-free");
+
+      if (!storage || !storage.lowest) {
+        setIndicator(
+          "storage",
+          false,
+          "Unknown",
+          "Storage health data is unavailable."
+        );
+        freeElement.textContent = "Unknown";
+        banner.classList.add("hidden");
+        bannerDetail.textContent = "";
+        return;
+      }
+
+      const lowest = storage.lowest;
+      const freeText =
+        `${formatBytes(lowest.free_bytes)} free (${formatPercent(lowest.free_percent)})`;
+      const detailText =
+        `${lowest.label}: ${lowest.path}. ` +
+        `Warning threshold: ${formatPercent(storage.warning_percent)} or ` +
+        `${formatBytes(storage.warning_bytes)} free.`;
+
+      freeElement.textContent = freeText;
+      setIndicator(
+        "storage",
+        Boolean(storage.ok),
+        storage.ok ? "OK" : "Low Drive Space",
+        detailText,
+        storage.ok ? "green" : "red"
+      );
+
+      if (storage.ok) {
+        banner.classList.add("hidden");
+        bannerDetail.textContent = "";
+        return;
+      }
+
+      banner.classList.remove("hidden");
+      bannerDetail.textContent =
+        `${lowest.label} has ${freeText}. Scanner logging can fail if the disk fills.`;
     }
 
     function renderMandatoryScanners(mandatoryScanners) {
@@ -396,6 +537,30 @@
         minimumFractionDigits: 0,
         maximumFractionDigits: 1
       });
+    }
+
+    function formatPercent(value) {
+      return `${Number(value || 0).toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2
+      })}%`;
+    }
+
+    function formatBytes(value) {
+      const bytes = Number(value || 0);
+      const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+      let unitIndex = 0;
+      let displayValue = bytes;
+
+      while (displayValue >= 1024 && unitIndex < units.length - 1) {
+        displayValue /= 1024;
+        unitIndex += 1;
+      }
+
+      return `${displayValue.toLocaleString(undefined, {
+        minimumFractionDigits: unitIndex === 0 ? 0 : 1,
+        maximumFractionDigits: unitIndex === 0 ? 0 : 1
+      })} ${units[unitIndex]}`;
     }
 
     function scanAgeClass(scanDate, scanTime) {
@@ -670,6 +835,8 @@
           database.active ? data.last_received : null,
           data.current_scan_rate_stale_seconds
         );
+        renderStorage(data.storage);
+        renderOutgoingApi(data.outgoing_api);
         renderRecentScans(data.recent_scans);
         renderScriptLog(data.script_log);
         configureHealthRefresh(data.health_page_refresh_seconds);
@@ -681,6 +848,12 @@
         setIndicator("scanner", false, "Unknown", "API unavailable.");
         setIndicator("api", false, "Unavailable", error.message);
         setIndicator("db", false, "Unknown", "API unavailable.");
+        setIndicator("storage", false, "Unknown", "API unavailable.");
+        document.getElementById("storage-free").textContent = "Unknown";
+        document.getElementById("storage-warning-banner").classList.add("hidden");
+        document.getElementById("storage-warning-detail").textContent = "";
+        setIndicator("outgoing-api", false, "Unknown", "API unavailable.");
+        document.getElementById("outgoing-api-queue").textContent = "0 queued";
 
         document.getElementById("last-received").innerHTML =
           `<span class="error">Unable to load health data.</span>`;

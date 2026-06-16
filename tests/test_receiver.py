@@ -16,11 +16,14 @@ from industrial_scanner_logger import __version__  # noqa: E402
 from industrial_scanner_logger.receiver import (  # noqa: E402
     DAILY_CSV_HEADER,
     DailyCsvLogger,
+    OutgoingAPIClient,
+    OutgoingAPIUnavailable,
     PostgreSQLScanLogger,
     clean_barcode,
     configure_script_logging,
     handle_client,
     load_receiver_config,
+    outgoing_api_payload,
     oversized_scan_marker,
     parse_configured_scanner_ids,
     parse_scanner_pairs,
@@ -29,6 +32,7 @@ from industrial_scanner_logger.receiver import (  # noqa: E402
     scanner_id_for_postgresql,
     scanner_id_from_addr,
     tracking_number_from_barcode,
+    validate_outgoing_api_url,
 )
 
 
@@ -178,6 +182,9 @@ class ReceiverTests(unittest.TestCase):
         self.assertIn("AT TIME ZONE ''America/Detroit''", schema_sql)
         self.assertIn("AT TIME ZONE ''UTC''", schema_sql)
         self.assertNotIn("current_setting(''TimeZone'')", schema_sql)
+        self.assertIn("scanner_logger.outgoing_scan_queue", schema_sql)
+        self.assertIn("scan_event_id BIGINT NOT NULL UNIQUE", schema_sql)
+        self.assertIn("REFERENCES scanner_logger.scan_events", schema_sql)
 
     def test_clean_barcode_removes_scanner_line_noise(self):
         self.assertEqual(clean_barcode("\x0012345\r\n"), "12345")
@@ -238,6 +245,61 @@ class ReceiverTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_postgresql_table("scanner_logger.scan-events")
 
+    def test_validate_outgoing_api_url_requires_https_for_external_hosts(self):
+        self.assertEqual(
+            validate_outgoing_api_url("https://api.example.test/scans", True),
+            "https://api.example.test/scans",
+        )
+        self.assertEqual(
+            validate_outgoing_api_url("http://localhost:9000/scans", True),
+            "http://localhost:9000/scans",
+        )
+
+        with self.assertRaises(ValueError):
+            validate_outgoing_api_url("http://api.example.test/scans", True)
+
+        with self.assertRaises(ValueError):
+            validate_outgoing_api_url("https://user:secret@example.test/scans", True)
+
+        with self.assertRaises(ValueError):
+            validate_outgoing_api_url("", True)
+
+    def test_outgoing_api_payload_uses_processed_scan_row_fields(self):
+        scan_timestamp = datetime(2026, 6, 16, 14, 30, 5)
+        payload = outgoing_api_payload({
+            "scan_event_id": 42,
+            "scan_timestamp": scan_timestamp,
+            "scan_date": "2026-06-16",
+            "scan_time": "14:30:05",
+            "scanner_id": 20,
+            "scanner_name": "Lane 1 Scanner",
+            "last_scanner_id": 21,
+            "is_duplicate": False,
+            "is_repaired": True,
+            "tracking_number": "123456789012",
+            "barcode": "9" * 34,
+            "barcode_length": 34,
+            "is_success": True,
+            "failure_reason": None,
+        })
+
+        self.assertEqual(payload["scan_event_id"], 42)
+        self.assertEqual(payload["scan_timestamp"], "2026-06-16T14:30:05")
+        self.assertEqual(payload["scanner_id"], 20)
+        self.assertEqual(payload["tracking_number"], "123456789012")
+        self.assertTrue(payload["is_repaired"])
+        self.assertTrue(payload["is_success"])
+
+    def test_outgoing_api_bearer_auth_requires_token_file(self):
+        client = OutgoingAPIClient(
+            url="https://api.example.test/scans",
+            auth_type="bearer",
+            bearer_token_file="",
+        )
+
+        with self.assertRaises(OutgoingAPIUnavailable):
+            client._headers()
+
     def test_load_receiver_config_reads_ini_options(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "industrial-scanner-logger.conf"
@@ -274,6 +336,20 @@ table = scanner_logger.scan_events
 connect_timeout = 4
 retry_interval = 12
 
+[outgoing_api]
+enabled = true
+url = https://api.example.test/scans
+auth_type = bearer
+bearer_token_file = /etc/industrial-scanner-logger/outgoing-api-token
+oauth2_token_url = https://api.example.test/oauth/token
+oauth2_client_id = scanner-client
+oauth2_client_secret_file = /etc/industrial-scanner-logger/oauth-secret
+oauth2_scope = scans.write
+timeout = 8
+retry_interval = 17
+poll_interval = 2
+batch_size = 25
+
 [scanners]
 last_scanner_id = 21
 mandatory_scanner_ids = 20, 21
@@ -291,6 +367,8 @@ health_page_refresh_seconds = 4
 tv_dashboard_refresh_seconds = 2
 tv_duplicate_alert_enabled = false
 tv_duplicate_alert_seconds = 75
+disk_space_warning_percent = 12
+disk_space_warning_bytes = 123456789
 
 [api]
 enabled = true
@@ -327,6 +405,27 @@ log_level = warning
             self.assertEqual(config.postgresql_table, "scanner_logger.scan_events")
             self.assertEqual(config.postgresql_connect_timeout, 4)
             self.assertEqual(config.postgresql_retry_interval, 12)
+            self.assertTrue(config.outgoing_api_enabled)
+            self.assertEqual(config.outgoing_api_url, "https://api.example.test/scans")
+            self.assertEqual(config.outgoing_api_auth_type, "bearer")
+            self.assertEqual(
+                config.outgoing_api_bearer_token_file,
+                "/etc/industrial-scanner-logger/outgoing-api-token",
+            )
+            self.assertEqual(
+                config.outgoing_api_oauth2_token_url,
+                "https://api.example.test/oauth/token",
+            )
+            self.assertEqual(config.outgoing_api_oauth2_client_id, "scanner-client")
+            self.assertEqual(
+                config.outgoing_api_oauth2_client_secret_file,
+                "/etc/industrial-scanner-logger/oauth-secret",
+            )
+            self.assertEqual(config.outgoing_api_oauth2_scope, "scans.write")
+            self.assertEqual(config.outgoing_api_timeout, 8)
+            self.assertEqual(config.outgoing_api_retry_interval, 17)
+            self.assertEqual(config.outgoing_api_poll_interval, 2)
+            self.assertEqual(config.outgoing_api_batch_size, 25)
             self.assertEqual(config.last_scanner_id, "21")
             self.assertEqual(
                 config.scanner_pairs,
@@ -353,10 +452,31 @@ log_level = warning
             self.assertEqual(config.tv_dashboard_refresh_seconds, 2)
             self.assertFalse(config.tv_duplicate_alert_enabled)
             self.assertEqual(config.tv_duplicate_alert_seconds, 75)
+            self.assertEqual(config.disk_space_warning_percent, 12)
+            self.assertEqual(config.disk_space_warning_bytes, 123456789)
             self.assertEqual(config.api_host, "0.0.0.0")
             self.assertEqual(config.api_port, 8080)
             self.assertEqual(config.api_root_path, "/api")
             self.assertEqual(config.api_log_level, "warning")
+
+    def test_load_receiver_config_allows_outgoing_api_queue_without_sender_url(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "industrial-scanner-logger.conf"
+            config_path.write_text(
+                """
+[outgoing_api]
+enabled = true
+url =
+auth_type = none
+""".strip(),
+                encoding="utf-8",
+            )
+
+            config = load_receiver_config(str(config_path))
+
+        self.assertTrue(config.outgoing_api_enabled)
+        self.assertEqual(config.outgoing_api_url, "")
+        self.assertEqual(config.outgoing_api_auth_type, "none")
 
     def test_classify_scan_accepts_only_expected_numeric_length(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):

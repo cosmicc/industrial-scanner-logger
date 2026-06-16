@@ -17,16 +17,11 @@ UPDATE_SERVICES_BIN="${UPDATE_SERVICES_BIN:-/usr/local/bin/update-services}"
 REFRESH_APP_CONFIG_BIN="${REFRESH_APP_CONFIG_BIN:-/usr/local/bin/refresh-app-config}"
 REFRESH_NGINX_BIN="${REFRESH_NGINX_BIN:-/usr/local/bin/refresh-nginx-config}"
 
-if [[ "${EUID}" -ne 0 ]]; then
-    echo "This uninstaller must be run as root. Re-run it with sudo." >&2
-    exit 1
-fi
-
 usage() {
     cat <<USAGE
 Usage: sudo scripts/uninstall.sh [options]
 
-Uninstall the Industrial Scanner Logger services, nginx site, and UFW firewall.
+Uninstall the Industrial Scanner Logger service startup integration.
 
 Options:
   --service-name NAME    systemd service name [${SERVICE_NAME}]
@@ -34,22 +29,23 @@ Options:
   --install-dir DIR      application install directory to preserve [${INSTALL_DIR}]
   --user USER            service user name to preserve [${SERVICE_USER}]
   --group GROUP          service group name to preserve [${SERVICE_GROUP}]
-  --output-dir DIR       scanner CSV output directory [${OUTPUT_DIR}]
-  --log-file PATH        troubleshooting log file [${LOG_FILE}]
-  --scan-data-log-dir DIR daily raw scan event log directory [${SCAN_DATA_LOG_DIR}]
-  --nginx-site-name NAME nginx site file name [${NGINX_SITE_NAME}]
-  --nginx-web-root DIR   document root to remove if empty [${NGINX_WEB_ROOT}]
-  --refresh-app-config-bin PATH app config refresh helper path [${REFRESH_APP_CONFIG_BIN}]
-  --refresh-nginx-bin PATH nginx refresh helper path [${REFRESH_NGINX_BIN}]
+  --output-dir DIR       scanner CSV output directory to preserve [${OUTPUT_DIR}]
+  --log-file PATH        troubleshooting log file to preserve [${LOG_FILE}]
+  --scan-data-log-dir DIR daily raw scan event log directory to preserve [${SCAN_DATA_LOG_DIR}]
+  --nginx-site-name NAME nginx site file name to remove [${NGINX_SITE_NAME}]
+  --nginx-web-root DIR   document root to preserve [${NGINX_WEB_ROOT}]
+  --refresh-app-config-bin PATH app config refresh helper path to preserve [${REFRESH_APP_CONFIG_BIN}]
+  --refresh-nginx-bin PATH nginx refresh helper path to preserve [${REFRESH_NGINX_BIN}]
   -h, --help             show this help
 
-The receiver config file is always removed.
+The receiver config file is always preserved.
 The old /etc/default service defaults file is removed if present.
-The installed application directory is always preserved.
-The service user and group are always preserved for future installs.
-Scanner CSV logs, script logs, and raw scan data logs are always preserved.
-The nginx package is preserved because it may serve other sites.
-The UFW firewall is disabled and the ufw package is removed.
+The installed application directory is preserved.
+The service user and group are preserved so existing files keep valid owners.
+Scanner CSV logs, script logs, raw scan data logs, helper scripts, and web files are preserved.
+PostgreSQL, PostgreSQL roles, databases, schemas, and scan data are preserved.
+The nginx package is preserved because it may serve other sites, but the app nginx site is removed.
+The UFW firewall package and host firewall state are preserved.
 USAGE
 }
 
@@ -60,15 +56,43 @@ require_command() {
     fi
 }
 
-uninstall_ufw_firewall() {
-    if command -v ufw >/dev/null 2>&1; then
-        ufw --force disable || true
+load_existing_app_config() {
+    if [[ ! -f "${CONFIG_FILE}" ]]; then
+        return
     fi
 
-    require_command apt-get
+    echo "Reading preserved app config for uninstall metadata: ${CONFIG_FILE}"
 
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get purge -y ufw
+    # The config file is preserved. Its path values are used only for accurate
+    # reporting and for finding the app nginx site name to remove.
+    eval "$(
+        python3 - "${CONFIG_FILE}" <<'PY'
+import configparser
+import shlex
+import sys
+
+
+config_path = sys.argv[1]
+config = configparser.ConfigParser(interpolation=None)
+config.read(config_path)
+
+
+def emit(name: str, value: str):
+    print(f"{name}={shlex.quote(str(value))}")
+
+
+def emit_option(section: str, option: str, variable: str):
+    if config.has_option(section, option):
+        emit(variable, config.get(section, option, raw=True))
+
+
+emit_option("receiver", "output_dir", "OUTPUT_DIR")
+emit_option("logging", "log_file", "LOG_FILE")
+emit_option("logging", "scan_data_log_dir", "SCAN_DATA_LOG_DIR")
+emit_option("nginx", "site_name", "NGINX_SITE_NAME")
+emit_option("nginx", "web_root", "NGINX_WEB_ROOT")
+PY
+    )"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -135,6 +159,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ "${EUID}" -ne 0 ]]; then
+    echo "This uninstaller must be run as root. Re-run it with sudo." >&2
+    exit 1
+fi
+
+require_command python3
+load_existing_app_config
+
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 API_UNIT_FILE="/etc/systemd/system/${API_SERVICE_NAME}.service"
 NGINX_SITE_FILE="/etc/nginx/sites-available/${NGINX_SITE_NAME}.conf"
@@ -145,18 +177,11 @@ if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now "${API_SERVICE_NAME}.service" >/dev/null 2>&1 || true
 fi
 
-uninstall_ufw_firewall
-
 rm -f "${NGINX_SITE_LINK}"
 rm -f "${NGINX_SITE_FILE}"
 rm -f "${UNIT_FILE}"
 rm -f "${API_UNIT_FILE}"
-rm -f "${CONFIG_FILE}"
 rm -f "${LEGACY_ENV_FILE}"
-rm -f "${UPDATE_SERVICES_BIN}"
-rm -f "${REFRESH_APP_CONFIG_BIN}"
-rm -f "${REFRESH_NGINX_BIN}"
-rmdir "${NGINX_WEB_ROOT}" >/dev/null 2>&1 || true
 
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload
@@ -174,30 +199,26 @@ Uninstalled ${SERVICE_NAME}.service
 Removed:
   ${UNIT_FILE}
   ${API_UNIT_FILE}
-  ${CONFIG_FILE}
   ${LEGACY_ENV_FILE}
-  ${UPDATE_SERVICES_BIN}
-  ${REFRESH_APP_CONFIG_BIN}
-  ${REFRESH_NGINX_BIN}
   ${NGINX_SITE_FILE}
   ${NGINX_SITE_LINK}
-  ufw firewall/package
 DONE
 
 cat <<KEPT
 
 Preserved:
+  ${CONFIG_FILE}
   ${INSTALL_DIR}
   ${OUTPUT_DIR}
   ${LOG_FILE}
   ${SCAN_DATA_LOG_DIR}
-  ${NGINX_WEB_ROOT} (if it contains files)
+  ${NGINX_WEB_ROOT}
+  ${UPDATE_SERVICES_BIN}
+  ${REFRESH_APP_CONFIG_BIN}
+  ${REFRESH_NGINX_BIN}
+  service user/group: ${SERVICE_USER}:${SERVICE_GROUP}
+  PostgreSQL package/service
+  PostgreSQL roles, databases, schemas, and scan data
   nginx package
+  UFW firewall package and host firewall state
 KEPT
-
-cat <<USER_GROUP
-
-Service identity preserved for future installs:
-  user: ${SERVICE_USER}
-  group: ${SERVICE_GROUP}
-USER_GROUP

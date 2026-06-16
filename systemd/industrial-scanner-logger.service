@@ -1,8 +1,9 @@
 [Unit]
 Description=Industrial Scanner TCP Receiver and CSV Logger
 Documentation=file:@INSTALL_DIR@/README.md
-Wants=network-online.target
-After=network-online.target
+Wants=network-online.target postgresql.service
+After=network-online.target postgresql.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -12,8 +13,8 @@ WorkingDirectory=@INSTALL_DIR@
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 ExecStart=@PYTHON_BIN@ @INSTALL_DIR@/scanner_tcp_receiver.py
-Restart=on-failure
-RestartSec=5
+Restart=always
+RestartSec=2
 KillSignal=SIGINT
 TimeoutStopSec=10
 NoNewPrivileges=true
