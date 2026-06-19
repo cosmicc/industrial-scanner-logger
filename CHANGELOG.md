@@ -34,6 +34,9 @@ All notable changes to this project will be documented in this file.
 - Run the `industrial-scanner-health` wrapper as the scanner service user when
   invoked through sudo/root so local PostgreSQL peer-auth installs report the
   same database-backed health and today totals as the web health page.
+- Colorize `industrial-scanner-health` terminal output with green healthy
+  statuses, yellow warnings, red failures, readable section headings, and
+  `--color auto|always|never` control.
 
 ## 1.3 - 2026-06-05
 

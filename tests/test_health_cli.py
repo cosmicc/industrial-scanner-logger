@@ -1,9 +1,11 @@
 import importlib.util
+import os
 import sys
 import unittest
 from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -144,6 +146,79 @@ class HealthCliTests(unittest.TestCase):
         self.assertIn("[WARN] state: not checked (database unavailable)", report)
         self.assertIn("queue: unavailable until database health can be checked", report)
         self.assertNotIn("queue: 0 pending, 0 failed", report)
+
+    def test_health_report_colorizes_statuses_when_enabled(self):
+        config = self.config(api_enabled=True)
+        dashboard_health = self.dashboard_health()
+        dashboard_health["outgoing_api"] = {
+            "enabled": True,
+            "active": False,
+            "state": "pending",
+            "queue_count": 3,
+            "failed_queue_count": 0,
+            "oldest_queued_at": None,
+            "last_attempt_at": None,
+            "last_error": None,
+            "last_http_status": None,
+            "url_configured": True,
+            "api_key_configured": True,
+            "error": None,
+        }
+        services = self.service_statuses()
+        services["nginx"] = {
+            "unit": "nginx.service",
+            "active": False,
+            "state": "inactive",
+            "error": None,
+        }
+        cli_health = self.health_cli.build_cli_payload(
+            config,
+            dashboard_health,
+            services,
+        )
+
+        report = self.health_cli.format_health_report(cli_health, color_enabled=True)
+
+        self.assertIn("\033[32m[OK]\033[0m", report)
+        self.assertIn("\033[33m[WARN]\033[0m", report)
+        self.assertIn("\033[31m[FAIL]\033[0m", report)
+        self.assertIn("\033[1m\033[36mServices\033[0m", report)
+        self.assertIn("\033[33m3\033[0m pending", report)
+
+    def test_should_use_color_obeys_modes_and_no_color(self):
+        class FakeStream:
+            def __init__(self, tty):
+                self.tty = tty
+
+            def isatty(self):
+                return self.tty
+
+        self.assertTrue(
+            self.health_cli.should_use_color(
+                self.health_cli.COLOR_ALWAYS,
+                FakeStream(False),
+            )
+        )
+        self.assertFalse(
+            self.health_cli.should_use_color(
+                self.health_cli.COLOR_NEVER,
+                FakeStream(True),
+            )
+        )
+        with patch.dict(os.environ, {"NO_COLOR": ""}):
+            self.assertTrue(
+                self.health_cli.should_use_color(
+                    self.health_cli.COLOR_AUTO,
+                    FakeStream(True),
+                )
+            )
+        with patch.dict(os.environ, {"NO_COLOR": "1"}):
+            self.assertFalse(
+                self.health_cli.should_use_color(
+                    self.health_cli.COLOR_AUTO,
+                    FakeStream(True),
+                )
+            )
 
     def test_service_unit_name_adds_missing_suffix(self):
         self.assertEqual(
