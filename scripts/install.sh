@@ -61,6 +61,7 @@ NGINX_DISABLE_DEFAULT_SITE="${NGINX_DISABLE_DEFAULT_SITE:-1}"
 UPDATE_SERVICES_BIN="${UPDATE_SERVICES_BIN:-/usr/local/bin/update-services}"
 REFRESH_APP_CONFIG_BIN="${REFRESH_APP_CONFIG_BIN:-/usr/local/bin/refresh-app-config}"
 REFRESH_NGINX_BIN="${REFRESH_NGINX_BIN:-/usr/local/bin/refresh-nginx-config}"
+HEALTH_BIN="${HEALTH_BIN:-/usr/local/bin/industrial-scanner-health}"
 START_SERVICE="${START_SERVICE:-1}"
 OVERWRITE_CONFIG="${OVERWRITE_CONFIG:-0}"
 APT_UPDATED=0
@@ -132,6 +133,7 @@ Options:
   --keep-nginx-default-site keep Ubuntu's default nginx site enabled
   --refresh-app-config-bin PATH app config refresh helper path [${REFRESH_APP_CONFIG_BIN}]
   --refresh-nginx-bin PATH nginx refresh helper path [${REFRESH_NGINX_BIN}]
+  --health-bin PATH        command-line health helper path [${HEALTH_BIN}]
   --overwrite-config        replace an existing config file
   --no-start                install and enable the service, but do not start it now
   -h, --help                show this help
@@ -670,6 +672,10 @@ while [[ $# -gt 0 ]]; do
             REFRESH_NGINX_BIN="$2"
             shift 2
             ;;
+        --health-bin)
+            HEALTH_BIN="$2"
+            shift 2
+            ;;
         --overwrite-config)
             OVERWRITE_CONFIG=1
             shift
@@ -708,6 +714,7 @@ HTML_SOURCE_DIR="${PROJECT_ROOT}/html"
 UPDATE_SERVICES_SOURCE="${PROJECT_ROOT}/scripts/update-services"
 REFRESH_APP_CONFIG_SOURCE="${PROJECT_ROOT}/scripts/refresh-app-config"
 REFRESH_NGINX_SOURCE="${PROJECT_ROOT}/scripts/refresh-nginx-config"
+HEALTH_SOURCE="${PROJECT_ROOT}/scripts/industrial-scanner-health"
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 API_UNIT_FILE="/etc/systemd/system/${API_SERVICE_NAME}.service"
 NGINX_AVAILABLE_DIR="/etc/nginx/sites-available"
@@ -765,6 +772,11 @@ fi
 
 if [[ ! -f "${REFRESH_NGINX_SOURCE}" ]]; then
     echo "Missing nginx refresh helper script: ${REFRESH_NGINX_SOURCE}" >&2
+    exit 1
+fi
+
+if [[ ! -f "${HEALTH_SOURCE}" ]]; then
+    echo "Missing health helper script: ${HEALTH_SOURCE}" >&2
     exit 1
 fi
 
@@ -841,6 +853,8 @@ install -d -o root -g root -m 0755 "$(dirname -- "${REFRESH_APP_CONFIG_BIN}")"
 install -o root -g root -m 0755 "${REFRESH_APP_CONFIG_SOURCE}" "${REFRESH_APP_CONFIG_BIN}"
 install -d -o root -g root -m 0755 "$(dirname -- "${REFRESH_NGINX_BIN}")"
 install -o root -g root -m 0755 "${REFRESH_NGINX_SOURCE}" "${REFRESH_NGINX_BIN}"
+install -d -o root -g root -m 0755 "$(dirname -- "${HEALTH_BIN}")"
+install -o root -g root -m 0755 "${HEALTH_SOURCE}" "${HEALTH_BIN}"
 
 install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${OUTPUT_DIR}"
 install -d -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" -m 0750 "${SCAN_DATA_LOG_DIR}"
@@ -1221,6 +1235,7 @@ UFW firewall:
   enabled; incoming allow list is 22/tcp, 55256/tcp, 80/tcp, 443/tcp
 
 Useful commands:
+  sudo industrial-scanner-health
   sudo update-services
   sudo refresh-app-config
   sudo refresh-nginx-config

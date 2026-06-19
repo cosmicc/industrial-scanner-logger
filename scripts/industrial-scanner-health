@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Installed systems use the project virtualenv so the report uses the exact
+# package and dependency versions that run the receiver and API services.
+INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
+PYTHON_BIN="${PYTHON_BIN:-${INSTALL_DIR}/.venv/bin/python}"
+
+if [[ -x "${PYTHON_BIN}" ]]; then
+    exec "${PYTHON_BIN}" -m industrial_scanner_logger.health_cli "$@"
+fi
+
+# Checkout runs are useful before installation and during maintenance. The src
+# path is added only when this script is still inside a project checkout.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+
+if [[ -d "${PROJECT_ROOT}/src" ]]; then
+    export PYTHONPATH="${PROJECT_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
+fi
+
+exec python3 -m industrial_scanner_logger.health_cli "$@"

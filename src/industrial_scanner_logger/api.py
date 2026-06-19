@@ -207,7 +207,11 @@ VIEW_DEFINITIONS = {
 }
 
 
-def build_dashboard_health(config):
+def build_dashboard_health(
+    config,
+    scanner_service_unit: str = SCANNER_SERVICE_UNIT,
+    api_service_unit: str = API_SERVICE_UNIT,
+):
     current_day = date.today()
     previous_day = current_day - timedelta(days=1)
     generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -223,14 +227,15 @@ def build_dashboard_health(config):
     )
 
     services = {
-        "scanner": systemd_service_status(SCANNER_SERVICE_UNIT),
-        "api": systemd_service_status(API_SERVICE_UNIT),
+        "scanner": systemd_service_status(scanner_service_unit),
+        "api": systemd_service_status(api_service_unit),
     }
 
     connected_scanner_ids = connected_scanner_ids_from_ss(config.port)
     connected_scanners = dashboard_connected_scanners(config, connected_scanner_ids)
     mandatory_scanners = dashboard_mandatory_scanners(config, connected_scanner_ids)
-    script_log = read_last_log_lines(SCANNER_SCRIPT_LOG_PATH, line_count=10)
+    script_log_path = Path(getattr(config, "log_file", SCANNER_SCRIPT_LOG_PATH))
+    script_log = read_last_log_lines(script_log_path, line_count=10)
     storage = build_storage_health(config)
 
     database = {

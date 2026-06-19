@@ -241,11 +241,13 @@ restart delay and no start-rate limit. This lets the services recover from
 temporary startup failures, including local PostgreSQL not being ready during
 boot.
 Run `sudo update-services` after deploying a new version to refresh the
-database schema, web files, rendered systemd units, and running services.
+database schema, web files, command-line health helper, rendered systemd units,
+and running services.
 
 Useful service commands:
 
 ```bash
+sudo industrial-scanner-health
 sudo systemctl status industrial-scanner-logger
 sudo systemctl status industrial-scanner-logger-api
 sudo systemctl status nginx
@@ -261,6 +263,16 @@ sudo systemctl restart industrial-scanner-logger-api
 sudo systemctl reload nginx
 sudo systemctl stop industrial-scanner-logger
 ```
+
+`industrial-scanner-health` prints a read-only command-line version of the app
+health view for SSH troubleshooting and monitoring. It reports receiver, API,
+nginx, and PostgreSQL service states; database health; outgoing API queue
+status; disk-space checks; connected and mandatory scanner status; current scan
+rate; today's scan totals; active duplicate/package alerts; and troubleshooting
+log availability. The report summarizes scan counts and status only. It does
+not print API keys, database passwords, bearer tokens, or full raw scanner
+payloads. The command exits nonzero when a required health check is degraded;
+use `--no-fail` when collecting a report without making the shell command fail.
 
 The troubleshooting log records service startup, version, configuration, scanner
 connections and disconnections, warnings, and errors. The service journal and

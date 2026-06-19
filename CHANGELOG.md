@@ -25,6 +25,9 @@ All notable changes to this project will be documented in this file.
   preserving `/etc/industrial-scanner-logger.conf`, the installed app directory,
   logs, CSV files, helper scripts, service identity, UFW state, and PostgreSQL
   data; make reinstall use the preserved config before database setup.
+- Add the `industrial-scanner-health` CLI helper for read-only service,
+  database, outgoing API, storage, mandatory scanner, and same-day scan
+  monitoring from a shell.
 
 ## 1.3 - 2026-06-05
 
