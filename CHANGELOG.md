@@ -28,6 +28,9 @@ All notable changes to this project will be documented in this file.
 - Add the `industrial-scanner-health` CLI helper for read-only service,
   database, outgoing API, storage, mandatory scanner, and same-day scan
   monitoring from a shell.
+- Make `scripts/install.sh` safe to re-run as an install refresh, preserving
+  existing config, app data, PostgreSQL state, logs, and unrelated UFW rules
+  while refreshing managed files, schema, helpers, units, nginx, and services.
 
 ## 1.3 - 2026-06-05
 

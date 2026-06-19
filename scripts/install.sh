@@ -71,6 +71,9 @@ usage() {
 Usage: sudo scripts/install.sh [options]
 
 Install the Industrial Scanner Logger runtime, services, nginx API proxy, and UFW firewall.
+Re-running this installer on an existing install refreshes managed files,
+schema, helper scripts, systemd units, nginx files, and services without
+deleting preserved data or resetting unrelated firewall rules.
 
 Options:
   --service-name NAME       systemd service name [${SERVICE_NAME}]
@@ -416,14 +419,20 @@ install_ufw_firewall() {
         apt-get install -y ufw
     fi
 
-    echo "Configuring ufw firewall..."
-    ufw --force reset
+    echo "Ensuring ufw firewall policy and app rules..."
+
+    # The installer may be re-run as a refresh operation. Do not reset UFW here:
+    # this host firewall can contain rules that are not owned by this app.
     ufw default deny incoming
     ufw default allow outgoing
     ufw allow 22/tcp
-    ufw allow 55256/tcp
-    ufw allow 80/tcp
-    ufw allow 443/tcp
+    ufw allow "${PORT}/tcp"
+
+    if [[ "${NGINX_ENABLED}" -eq 1 ]]; then
+        ufw allow 80/tcp
+        ufw allow 443/tcp
+    fi
+
     ufw --force enable
 }
 
@@ -723,6 +732,7 @@ NGINX_SITE_FILE="${NGINX_AVAILABLE_DIR}/${NGINX_SITE_NAME}.conf"
 NGINX_SITE_LINK="${NGINX_ENABLED_DIR}/${NGINX_SITE_NAME}.conf"
 NGINX_DEFAULT_SITE_LINK="${NGINX_ENABLED_DIR}/default"
 PYTHON_BIN="${INSTALL_DIR}/.venv/bin/python"
+INSTALL_RESULT_LABEL="Installed"
 
 require_command python3
 require_command systemctl
@@ -778,6 +788,14 @@ fi
 if [[ ! -f "${HEALTH_SOURCE}" ]]; then
     echo "Missing health helper script: ${HEALTH_SOURCE}" >&2
     exit 1
+fi
+
+if [[ -f "${CONFIG_FILE}" || -d "${INSTALL_DIR}" || -e "${UNIT_FILE}" || -e "${API_UNIT_FILE}" ]]; then
+    INSTALL_RESULT_LABEL="Refreshed"
+    echo "Existing installation detected; refreshing managed files, schema, helper scripts, units, and services."
+    echo "Preserved data, logs, PostgreSQL state, existing config values, and unrelated firewall rules will not be deleted."
+else
+    echo "No existing installation detected; performing a new install."
 fi
 
 load_existing_app_config
@@ -1189,8 +1207,13 @@ if [[ "${START_SERVICE}" -eq 1 ]]; then
     fi
 fi
 
+UFW_RULE_SUMMARY="22/tcp, ${PORT}/tcp"
+if [[ "${NGINX_ENABLED}" -eq 1 ]]; then
+    UFW_RULE_SUMMARY="${UFW_RULE_SUMMARY}, 80/tcp, 443/tcp"
+fi
+
 cat <<DONE
-Installed ${SERVICE_NAME}.service
+${INSTALL_RESULT_LABEL} ${SERVICE_NAME}.service
 
 Application directory:
   ${INSTALL_DIR}
@@ -1232,7 +1255,8 @@ Nginx refresh helper:
   ${REFRESH_NGINX_BIN}
 
 UFW firewall:
-  enabled; incoming allow list is 22/tcp, 55256/tcp, 80/tcp, 443/tcp
+  enabled; ensured incoming app rules include ${UFW_RULE_SUMMARY}
+  existing unrelated UFW rules were preserved
 
 Useful commands:
   sudo industrial-scanner-health

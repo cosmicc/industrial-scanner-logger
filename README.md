@@ -153,8 +153,18 @@ Python virtual environment, installs the Python package dependencies, creates a
 dedicated `scannerlogger` system user, installs the receiver and API systemd
 units, installs PostgreSQL and applies the database schema, installs nginx if
 needed, enables an nginx site for `/api`, and starts the services. It also
-installs UFW, denies incoming traffic by default, and allows only `22/tcp`,
-`55256/tcp`, `80/tcp`, and `443/tcp` incoming.
+installs UFW when needed, denies incoming traffic by default, allows outgoing
+traffic by default, and ensures incoming rules exist for SSH, the configured
+scanner TCP port, and nginx HTTP/HTTPS when nginx is enabled. Re-running the
+installer does not reset UFW or delete unrelated firewall rules.
+
+Re-running `sudo scripts/install.sh` on an existing installation is a supported
+refresh path. The installer detects an existing config file, install directory,
+or systemd unit, then refreshes the installed app files, Python virtual
+environment dependencies, PostgreSQL schema, helper scripts, rendered systemd
+units, nginx site and web files, and running services. It does not create
+duplicate users, groups, PostgreSQL roles/databases, systemd units, nginx site
+links, helper scripts, or UFW rules.
 
 If `/etc/industrial-scanner-logger.conf` already exists, the installer keeps it
 and uses its settings before database setup. This lets an uninstall followed by
