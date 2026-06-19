@@ -42,7 +42,7 @@ import socket
 import sys
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from urllib import error as url_error
@@ -50,6 +50,10 @@ from urllib import request as url_request
 from urllib.parse import urlparse
 
 from industrial_scanner_logger._version import __version__
+from industrial_scanner_logger.timezones import (
+    display_day_bounds_utc,
+    display_now,
+)
 
 DEFAULT_CONFIG_FILE = "/etc/industrial-scanner-logger.conf"
 DEFAULT_MAX_BARCODE_CHARS = 256
@@ -1063,12 +1067,15 @@ class PostgreSQLScanLogger:
     ) -> set[str]:
         self._connect()
         table_sql = self._table_sql()
+        repair_date = date.fromisoformat(scan_date)
+        day_start_utc, next_day_start_utc = display_day_bounds_utc(repair_date)
         query = self._sql.SQL(
             """
             SELECT DISTINCT barcode
             FROM {table}
             WHERE is_success = true
-              AND scan_timestamp::date = %s
+              AND scan_timestamp >= %s
+              AND scan_timestamp < %s
               AND barcode ~ '^[0-9]+$'
               AND char_length(barcode) = %s
             """
@@ -1076,7 +1083,10 @@ class PostgreSQLScanLogger:
 
         try:
             with self.conn.cursor() as cursor:
-                cursor.execute(query, [scan_date, success_length])
+                cursor.execute(
+                    query,
+                    [day_start_utc, next_day_start_utc, success_length],
+                )
                 rows = cursor.fetchall()
         except Exception as exc:
             self._mark_unavailable("repair candidate lookup", exc)
@@ -1487,8 +1497,6 @@ class PostgreSQLOutgoingScanQueue:
                 queue.attempt_count,
                 events.id AS scan_event_id,
                 events.scan_timestamp,
-                events.scan_timestamp::date AS scan_date,
-                events.scan_timestamp::time(0) AS scan_time,
                 events.scanner_id,
                 events.scanner_name,
                 events.last_scanner_id,
@@ -1778,16 +1786,16 @@ class DailyCsvLogger:
         self._rotate_if_needed()
 
     def _today_string(self) -> str:
-        return datetime.now().strftime("%Y-%m-%d")
+        return display_now().strftime("%Y-%m-%d")
 
     def _time_string(self) -> str:
-        return datetime.now().strftime("%H:%M:%S")
+        return display_now().strftime("%H:%M:%S")
 
     def _database_timestamp(self) -> datetime:
         return datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
 
     def _timestamp_string(self) -> str:
-        return datetime.now().strftime("%Y%m%d-%H%M%S")
+        return display_now().strftime("%Y%m%d-%H%M%S")
 
     def _csv_path_for_date(self, date_str: str) -> Path:
         filename = f"{self.file_prefix}_{date_str}.csv"

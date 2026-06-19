@@ -272,9 +272,11 @@ CREATE INDEX IF NOT EXISTS idx_outgoing_scan_queue_next_attempt
 CREATE INDEX IF NOT EXISTS idx_outgoing_scan_queue_last_attempt
     ON scanner_logger.outgoing_scan_queue (last_attempt_at DESC, id DESC);
 
+-- Human-facing views convert UTC-by-convention scan timestamps to the scanner
+-- site's America/Detroit display timezone. Base table storage remains UTC.
 CREATE OR REPLACE VIEW scanner_logger.daily_scan_totals AS
 SELECT
-    scan_timestamp::date AS scan_date,
+    ((scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::date AS scan_date,
     scanner_id,
     scanner_name,
     count(*) AS total_scan_events,
@@ -283,27 +285,27 @@ SELECT
     count(DISTINCT tracking_number) FILTER (WHERE is_success) AS unique_successful_barcodes
 FROM scanner_logger.scan_events
 GROUP BY
-    scan_timestamp::date,
+    ((scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::date,
     scanner_id,
     scanner_name;
 
 CREATE OR REPLACE VIEW scanner_logger.daily_scan_totals_all_scanners AS
 SELECT
-    scan_timestamp::date AS scan_date,
+    ((scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::date AS scan_date,
     count(*) AS total_scan_events,
     count(*) FILTER (WHERE is_success) AS successful_scans,
     count(*) FILTER (WHERE is_success = false) AS failed_scans,
     count(DISTINCT tracking_number) FILTER (WHERE is_success) AS unique_successful_barcodes
 FROM scanner_logger.scan_events
 GROUP BY
-    scan_timestamp::date;
+    ((scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::date;
 
 CREATE OR REPLACE VIEW scanner_logger.failed_scans AS
 SELECT
     id,
     scan_timestamp,
-    scan_timestamp::date AS scan_date,
-    scan_timestamp::time(0) AS scan_time,
+    ((scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::date AS scan_date,
+    ((scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::time(0) AS scan_time,
     scanner_id,
     scanner_name,
     last_scanner_id,
@@ -320,8 +322,8 @@ CREATE OR REPLACE VIEW scanner_logger.successful_scans AS
 SELECT
     id,
     scan_timestamp,
-    scan_timestamp::date AS scan_date,
-    scan_timestamp::time(0) AS scan_time,
+    ((scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::date AS scan_date,
+    ((scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::time(0) AS scan_time,
     scanner_id,
     scanner_name,
     last_scanner_id,
@@ -353,8 +355,8 @@ CREATE OR REPLACE VIEW scanner_logger.successful_scan_progression AS
 WITH events_with_time AS (
     SELECT
         events.*,
-        events.scan_timestamp::date AS scan_date,
-        events.scan_timestamp::time(0) AS scan_time
+        ((events.scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::date AS scan_date,
+        ((events.scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::time(0) AS scan_time
     FROM scanner_logger.scan_events AS events
     WHERE events.is_success = true
 ),
@@ -394,7 +396,7 @@ CREATE OR REPLACE VIEW scanner_logger.successful_scans_missing_last_scanner AS
 WITH source AS (
     SELECT
         events.*,
-        events.scan_timestamp::date AS scan_date
+        ((events.scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::date AS scan_date
     FROM scanner_logger.scan_events AS events
     WHERE events.is_success = true
 )
@@ -417,7 +419,7 @@ WHERE source.last_scanner_id IS NOT NULL
       SELECT 1
       FROM scanner_logger.scan_events AS last_scan
       WHERE last_scan.is_success = true
-        AND last_scan.scan_timestamp::date = source.scan_date
+        AND ((last_scan.scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::date = source.scan_date
         AND last_scan.tracking_number = source.tracking_number
         AND last_scan.scanner_id = source.last_scanner_id
   )

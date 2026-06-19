@@ -34,6 +34,7 @@ from industrial_scanner_logger.receiver import (  # noqa: E402
     validate_outgoing_api_api_key,
     validate_outgoing_api_url,
 )
+from industrial_scanner_logger.timezones import display_today  # noqa: E402
 
 
 class FakePostgreSQLLogger:
@@ -505,6 +506,34 @@ api_key =
             self.assertEqual(logger._classify_scan("A" * 34), "FAILED")
             self.assertEqual(logger._classify_scan("__NO_READ__"), "FAILED")
 
+    def test_daily_csv_logger_uses_detroit_display_clock_for_visible_files(self):
+        from unittest.mock import patch
+
+        fixed_display_time = datetime.fromisoformat("2026-06-16T05:30:05-04:00")
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            redirect_stdout(StringIO()),
+            patch(
+                "industrial_scanner_logger.receiver.display_now",
+                return_value=fixed_display_time,
+            ),
+        ):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+            )
+            logger.write_scan_event("1" * 34, "20")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+        self.assertEqual(logger.current_csv_path.name, "Test_2026-06-16.csv")
+        self.assertEqual(rows[0]["date"], "2026-06-16")
+        self.assertEqual(rows[0]["time"], "05:30:05")
+
     def test_rejects_unsafe_file_prefix(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with self.assertRaises(ValueError):
@@ -585,7 +614,7 @@ api_key =
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
             output_dir = Path(temp_dir)
             output_dir.mkdir(parents=True, exist_ok=True)
-            today = datetime.now().strftime("%Y-%m-%d")
+            today = display_today().isoformat()
             csv_path = output_dir / f"Test_{today}.csv"
             valid_tracking = "6" * 34
 

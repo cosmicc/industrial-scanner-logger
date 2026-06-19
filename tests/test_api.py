@@ -71,8 +71,8 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(
             params,
             [
-                datetime(2026, 5, 17),
-                datetime(2026, 5, 19),
+                datetime(2026, 5, 17, 4),
+                datetime(2026, 5, 19, 4),
                 20,
                 "1" * 34,
                 "1" * 34,
@@ -143,8 +143,8 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(
             params,
             [
-                datetime(2026, 5, 17),
-                datetime(2026, 5, 19),
+                datetime(2026, 5, 17, 4),
+                datetime(2026, 5, 19, 4),
                 20,
                 "123456789012",
                 12,
@@ -235,8 +235,8 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(
             db.cursor_instance.params,
             [
-                datetime(2026, 5, 17),
-                datetime(2026, 5, 19),
+                datetime(2026, 5, 17, 4),
+                datetime(2026, 5, 19, 4),
             ],
         )
         self.assertEqual(
@@ -320,8 +320,8 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(
             db.cursor_instance.params,
             [
-                datetime(2026, 5, 18),
-                datetime(2026, 5, 19),
+                datetime(2026, 5, 18, 4),
+                datetime(2026, 5, 19, 4),
             ],
         )
         self.assertEqual(
@@ -720,7 +720,7 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(health["queue_count"], 3)
         self.assertEqual(health["failed_queue_count"], 1)
         self.assertEqual(health["last_http_status"], 503)
-        self.assertEqual(health["oldest_queued_at"], "2026-06-16T09:00:00")
+        self.assertEqual(health["oldest_queued_at"], "2026-06-16T05:00:00-04:00")
         self.assertTrue(health["api_key_configured"])
 
     def test_fetch_outgoing_api_health_reports_missing_url_as_misconfigured(self):
@@ -865,6 +865,26 @@ class ApiQueryTests(unittest.TestCase):
 
         self.assertEqual(row["display_name"], "Lane 1 Scanner")
         self.assertEqual(row["scanner_name"], "Old Scanner Name")
+
+    def test_scan_row_formats_utc_database_timestamp_for_detroit_display(self):
+        from types import SimpleNamespace
+
+        from industrial_scanner_logger.api import scan_row_with_display_name
+
+        row = scan_row_with_display_name(
+            SimpleNamespace(scanner_names={"20": "Lane 1 Scanner"}),
+            {
+                "scan_timestamp": datetime(2026, 6, 16, 9, 30, 5),
+                "scanner_id": 20,
+                "scanner_name": "Old Scanner Name",
+                "barcode": "123",
+            },
+        )
+
+        self.assertEqual(row["scan_timestamp"], "2026-06-16T05:30:05-04:00")
+        self.assertEqual(row["scan_date"], "2026-06-16")
+        self.assertEqual(row["scan_time"], "05:30:05")
+        self.assertEqual(row["display_timezone"], "America/Detroit")
 
     def test_scan_row_display_name_falls_back_to_scanner_id(self):
         from types import SimpleNamespace

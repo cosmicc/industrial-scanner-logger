@@ -143,6 +143,7 @@
     const SEARCH_API_URL = "/api/v1/scans";
     const SEARCH_COUNT_API_URL = "/api/v1/scans/count";
     const SCANNERS_API_URL = "/api/v1/scanners";
+    const DISPLAY_TIME_ZONE = "America/Detroit";
     const DEFAULT_PAGE_SIZE = 10;
     const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 200];
     const FEDEX_FULL_BARCODE_DIGITS = 34;
@@ -261,35 +262,33 @@
     endDateInput.addEventListener("change", updateActiveDatePreset);
 
     function setDefaultDates() {
-      const today = new Date();
-      const start = new Date(today);
-      start.setDate(start.getDate() - 365);
+      const todayValue = todayDateString();
 
-      startDateInput.value = formatDateInput(start);
-      endDateInput.value = formatDateInput(today);
+      startDateInput.value = addDaysToDateString(todayValue, -365);
+      endDateInput.value = todayValue;
       setActiveDatePreset("last-year");
     }
 
     function applyDatePreset(preset) {
-      const today = new Date();
-      const start = new Date(today);
-      const end = new Date(today);
+      const todayValue = todayDateString();
+      let startValue = todayValue;
+      let endValue = todayValue;
 
       switch (preset) {
         case "today":
           break;
         case "yesterday":
-          start.setDate(today.getDate() - 1);
-          end.setDate(today.getDate() - 1);
+          startValue = addDaysToDateString(todayValue, -1);
+          endValue = startValue;
           break;
         case "last-7":
-          start.setDate(today.getDate() - 7);
+          startValue = addDaysToDateString(todayValue, -7);
           break;
         case "last-30":
-          start.setDate(today.getDate() - 30);
+          startValue = addDaysToDateString(todayValue, -30);
           break;
         case "last-year":
-          start.setDate(today.getDate() - 365);
+          startValue = addDaysToDateString(todayValue, -365);
           break;
         case "all-time":
           startDateInput.value = "";
@@ -301,8 +300,8 @@
           return;
       }
 
-      startDateInput.value = formatDateInput(start);
-      endDateInput.value = formatDateInput(end);
+      startDateInput.value = startValue;
+      endDateInput.value = endValue;
       setActiveDatePreset(preset);
       rerunSearchAfterDatePreset();
     }
@@ -320,8 +319,7 @@
     }
 
     function currentMatchingDatePreset() {
-      const today = new Date();
-      const todayValue = formatDateInput(today);
+      const todayValue = todayDateString();
       const startValue = startDateInput.value;
       const endValue = endDateInput.value;
 
@@ -333,19 +331,14 @@
         return "today";
       }
 
-      const yesterday = new Date(today);
-      yesterday.setDate(today.getDate() - 1);
-      const yesterdayValue = formatDateInput(yesterday);
+      const yesterdayValue = addDaysToDateString(todayValue, -1);
 
       if (startValue === yesterdayValue && endValue === yesterdayValue) {
         return "yesterday";
       }
 
       for (const [preset, dayCount] of [["last-7", 7], ["last-30", 30], ["last-year", 365]]) {
-        const start = new Date(today);
-        start.setDate(today.getDate() - dayCount);
-
-        if (startValue === formatDateInput(start) && endValue === todayValue) {
+        if (startValue === addDaysToDateString(todayValue, -dayCount) && endValue === todayValue) {
           return preset;
         }
       }
@@ -560,7 +553,7 @@
 
         tr.innerHTML = `
           <td>${formatValue(row.scan_date)}</td>
-          <td>${formatTime12(row.scan_date, row.scan_time)}</td>
+          <td>${formatTime12(row)}</td>
           <td>${escapeHtml(scannerDisplayName(row))}</td>
           <td>${statusCell}</td>
           <td>${yesNoPill(row.is_duplicate)}</td>
@@ -865,31 +858,46 @@
       return Number(value || 0).toLocaleString();
     }
 
-    function formatDateInput(value) {
-      const year = value.getFullYear();
-      const month = String(value.getMonth() + 1).padStart(2, "0");
-      const day = String(value.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
+    function todayDateString() {
+      return displayDateString(new Date());
     }
 
-    function formatTime12(scanDate, scanTime) {
-      if (!scanTime) {
+    function addDaysToDateString(dateText, dayOffset) {
+      const [year, month, day] = dateText.split("-").map(Number);
+      const dateValue = new Date(Date.UTC(year, month - 1, day + dayOffset, 12, 0, 0));
+      return dateValue.toISOString().slice(0, 10);
+    }
+
+    function displayDateString(value) {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: DISPLAY_TIME_ZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).formatToParts(value);
+      const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+      return `${values.year}-${values.month}-${values.day}`;
+    }
+
+    function formatTime12(scanDateOrRow, scanTime) {
+      const parts = scanDateTimeParts(scanDateOrRow, scanTime);
+
+      if (!parts.scanTime && !parts.scanTimestamp) {
         return "";
       }
 
-      const parsed = parseScanDateTime(scanDate, scanTime);
+      const parsed = parseScanDateTime(scanDateOrRow, scanTime);
 
       if (!parsed) {
-        return escapeHtml(scanTime);
+        return escapeHtml(parts.scanTime);
       }
 
       return escapeHtml(formatMeridiem(parsed));
     }
 
-    function parseScanDateTime(scanDate, scanTime) {
-      const datePart = scanDate || "1970-01-01";
-      const normalizedTime = String(scanTime).replace(/(\.\d{3})\d+$/, "$1");
-      const parsed = new Date(`${datePart}T${normalizedTime}`);
+    function parseScanDateTime(scanDateOrRow, scanTime) {
+      const parts = scanDateTimeParts(scanDateOrRow, scanTime);
+      const parsed = new Date(scanTimestampText(parts));
 
       if (Number.isNaN(parsed.getTime())) {
         return null;
@@ -898,8 +906,35 @@
       return parsed;
     }
 
+    function scanDateTimeParts(scanDateOrRow, scanTime) {
+      if (scanDateOrRow && typeof scanDateOrRow === "object") {
+        return {
+          scanDate: scanDateOrRow.scan_date || "",
+          scanTime: scanDateOrRow.scan_time || "",
+          scanTimestamp: scanDateOrRow.scan_timestamp || ""
+        };
+      }
+
+      return {
+        scanDate: scanDateOrRow || "",
+        scanTime: scanTime || "",
+        scanTimestamp: ""
+      };
+    }
+
+    function scanTimestampText(parts) {
+      if (parts.scanTimestamp) {
+        return String(parts.scanTimestamp);
+      }
+
+      const datePart = parts.scanDate || "1970-01-01";
+      const normalizedTime = String(parts.scanTime || "").replace(/(\.\d{3})\d+$/, "$1");
+      return `${datePart}T${normalizedTime}`;
+    }
+
     function formatMeridiem(value) {
       return value.toLocaleTimeString("en-US", {
+        timeZone: DISPLAY_TIME_ZONE,
         hour: "numeric",
         minute: "2-digit",
         second: "2-digit",

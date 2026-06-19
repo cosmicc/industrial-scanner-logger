@@ -37,6 +37,11 @@ All notable changes to this project will be documented in this file.
 - Colorize `industrial-scanner-health` terminal output with green healthy
   statuses, yellow warnings, red failures, readable section headings, and
   `--color auto|always|never` control.
+- Render all human-facing scan dates, scan times, CSV log dates, health totals,
+  search rows, TV dashboard rows, and CLI health data in `America/Detroit`
+  while keeping stored PostgreSQL timestamps and outgoing API payloads in UTC.
+- Document the scanner timezone contract in `AGENTS.md` so future changes keep
+  display time, database storage time, and outgoing API payload time separate.
 
 ## 1.3 - 2026-06-05
 

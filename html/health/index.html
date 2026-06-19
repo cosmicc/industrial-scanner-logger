@@ -213,7 +213,9 @@
 
   <script>
     const API_URL = "/api/v1/dashboard/health";
+    const DEFAULT_DISPLAY_TIME_ZONE = "America/Detroit";
     const DEFAULT_HEALTH_REFRESH_SECONDS = 3;
+    let displayTimeZone = DEFAULT_DISPLAY_TIME_ZONE;
     let healthRefreshTimer = null;
     let healthRefreshIntervalMs = null;
 
@@ -421,11 +423,11 @@
           row.is_success ? "Success" : "Failed",
           row.is_success ? "success" : "failed"
         );
-        tr.className = scanAgeClass(row.scan_date, row.scan_time);
+        tr.className = scanAgeClass(row);
 
         tr.innerHTML = `
           <td>${row.scan_date ?? ""}</td>
-          <td>${formatTime12(row.scan_date, row.scan_time)}</td>
+          <td>${formatTime12(row)}</td>
           <td>${escapeHtml(scannerDisplayName(row))}</td>
           <td>${statusCell}</td>
           <td>${yesNoPill(row.is_duplicate)}</td>
@@ -454,7 +456,7 @@
       const scansPerMinute = Number(scanRate.scans_per_minute || 0);
       const staleThresholdSeconds = Number(staleSeconds || 60);
       const elapsedSeconds = lastReceived
-        ? scanElapsedSeconds(lastReceived.scan_date, lastReceived.scan_time)
+        ? scanElapsedSeconds(lastReceived)
         : null;
       const fresh = elapsedSeconds !== null && elapsedSeconds <= staleThresholdSeconds;
 
@@ -563,8 +565,8 @@
       })} ${units[unitIndex]}`;
     }
 
-    function scanAgeClass(scanDate, scanTime) {
-      const elapsedSeconds = scanElapsedSeconds(scanDate, scanTime);
+    function scanAgeClass(scanDateOrRow, scanTime) {
+      const elapsedSeconds = scanElapsedSeconds(scanDateOrRow, scanTime);
 
       if (elapsedSeconds === null) {
         return "";
@@ -585,8 +587,8 @@
       return "scan-age-old";
     }
 
-    function scanElapsedSeconds(scanDate, scanTime, now = new Date()) {
-      const scanDateTime = parseScanDateTime(scanDate, scanTime);
+    function scanElapsedSeconds(scanDateOrRow, scanTime, now = new Date()) {
+      const scanDateTime = parseScanDateTime(scanDateOrRow, scanTime);
 
       if (!scanDateTime) {
         return null;
@@ -598,24 +600,26 @@
       );
     }
 
-    function formatTime12(scanDate, scanTime) {
-      if (!scanTime) {
+    function formatTime12(scanDateOrRow, scanTime) {
+      const parts = scanDateTimeParts(scanDateOrRow, scanTime);
+
+      if (!parts.scanTime && !parts.scanTimestamp) {
         return "";
       }
 
-      const parsed = parseScanDateTime(scanDate, scanTime);
+      const parsed = parseScanDateTime(scanDateOrRow, scanTime);
 
       if (!parsed) {
-        return escapeHtml(scanTime);
+        return escapeHtml(parts.scanTime);
       }
 
       return escapeHtml(formatMeridiem(parsed));
     }
 
-    function parseScanDateTime(scanDate, scanTime) {
-      const datePart = scanDate || "1970-01-01";
-      const normalizedTime = String(scanTime).replace(/(\.\d{3})\d+$/, "$1");
-      const parsed = new Date(`${datePart}T${normalizedTime}`);
+    function parseScanDateTime(scanDateOrRow, scanTime) {
+      const parts = scanDateTimeParts(scanDateOrRow, scanTime);
+      const timestampText = scanTimestampText(parts);
+      const parsed = new Date(timestampText);
 
       if (Number.isNaN(parsed.getTime())) {
         return null;
@@ -624,8 +628,35 @@
       return parsed;
     }
 
+    function scanDateTimeParts(scanDateOrRow, scanTime) {
+      if (scanDateOrRow && typeof scanDateOrRow === "object") {
+        return {
+          scanDate: scanDateOrRow.scan_date || "",
+          scanTime: scanDateOrRow.scan_time || "",
+          scanTimestamp: scanDateOrRow.scan_timestamp || ""
+        };
+      }
+
+      return {
+        scanDate: scanDateOrRow || "",
+        scanTime: scanTime || "",
+        scanTimestamp: ""
+      };
+    }
+
+    function scanTimestampText(parts) {
+      if (parts.scanTimestamp) {
+        return String(parts.scanTimestamp);
+      }
+
+      const datePart = parts.scanDate || "1970-01-01";
+      const normalizedTime = String(parts.scanTime || "").replace(/(\.\d{3})\d+$/, "$1");
+      return `${datePart}T${normalizedTime}`;
+    }
+
     function formatMeridiem(value) {
       return value.toLocaleTimeString("en-US", {
+        timeZone: displayTimeZone,
         hour: "numeric",
         minute: "2-digit",
         second: "2-digit",
@@ -633,12 +664,14 @@
       }).replace(/\s?(AM|PM)$/i, (suffix) => suffix.toLowerCase());
     }
 
-    function formatElapsedTime(scanDate, scanTime, now = new Date()) {
-      if (!scanDate || !scanTime) {
+    function formatElapsedTime(scanDateOrRow, scanTime, now = new Date()) {
+      const parts = scanDateTimeParts(scanDateOrRow, scanTime);
+
+      if (!parts.scanTimestamp && (!parts.scanDate || !parts.scanTime)) {
         return "Unknown";
       }
 
-      const scanDateTime = parseScanDateTime(scanDate, scanTime);
+      const scanDateTime = parseScanDateTime(scanDateOrRow, scanTime);
 
       if (!scanDateTime) {
         return "Unknown";
@@ -783,6 +816,8 @@
 
         const data = await response.json();
 
+        displayTimeZone = data.display_timezone || DEFAULT_DISPLAY_TIME_ZONE;
+
         const scanner = data.services?.scanner || {};
         const api = data.services?.api || {};
         const database = data.database || {};
@@ -813,15 +848,9 @@
 
         if (data.last_received) {
           document.getElementById("last-received").textContent =
-            formatElapsedTime(
-              data.last_received.scan_date,
-              data.last_received.scan_time
-            );
+            formatElapsedTime(data.last_received);
           document.getElementById("last-received-detail").textContent =
-            formatScanDateTime(
-              data.last_received.scan_date,
-              data.last_received.scan_time
-            );
+            formatScanDateTime(data.last_received);
         } else {
           document.getElementById("last-received").textContent =
             "No scan rows found.";
@@ -913,21 +942,36 @@
     }
 
     function formatDateTime12(value) {
-      return `${value.toLocaleDateString()} ${formatMeridiem(value)}`;
+      return `${value.toLocaleDateString("en-US", {
+        timeZone: displayTimeZone
+      })} ${formatMeridiem(value)}`;
     }
 
-    function formatScanDateTime(scanDate, scanTime) {
-      if (!scanDate && !scanTime) {
+    function formatScanDateTime(scanDateOrRow, scanTime) {
+      const parts = scanDateTimeParts(scanDateOrRow, scanTime);
+
+      if (!parts.scanDate && !parts.scanTime && !parts.scanTimestamp) {
         return "";
       }
 
-      const parsed = parseScanDateTime(scanDate, scanTime);
+      const parsed = parseScanDateTime(scanDateOrRow, scanTime);
 
       if (!parsed) {
-        return `${scanDate || ""} ${scanTime || ""}`.trim();
+        return `${parts.scanDate || ""} ${parts.scanTime || ""}`.trim();
       }
 
-      return `${scanDate || parsed.toLocaleDateString()} ${formatMeridiem(parsed)}`;
+      return `${parts.scanDate || displayDateString(parsed)} ${formatMeridiem(parsed)}`;
+    }
+
+    function displayDateString(value) {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: displayTimeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).formatToParts(value);
+      const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+      return `${values.year}-${values.month}-${values.day}`;
     }
   </script>
 </body>

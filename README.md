@@ -281,11 +281,12 @@ status; disk-space checks; connected and mandatory scanner status; current scan
 rate; today's scan totals; active duplicate/package alerts; and troubleshooting
 log availability. The report summarizes scan counts and status only. It does
 not print API keys, database passwords, bearer tokens, or full raw scanner
-payloads. The command exits nonzero when a required health check is degraded;
-use `--no-fail` when collecting a report without making the shell command fail.
-When the command is run with `sudo`, the wrapper collects health as the
-`scannerlogger` service user by default so local PostgreSQL peer authentication
-uses the same identity as the receiver and API services.
+payloads. Visible timestamps and today's totals are evaluated in
+`America/Detroit` time. The command exits nonzero when a required health check
+is degraded; use `--no-fail` when collecting a report without making the shell
+command fail. When the command is run with `sudo`, the wrapper collects health
+as the `scannerlogger` service user by default so local PostgreSQL peer
+authentication uses the same identity as the receiver and API services.
 Interactive terminal output is colorized by default: green for healthy checks,
 yellow for warnings, and red for failures. Use `--color always` to force color
 through a pipe, `--color never` to disable ANSI color, or set `NO_COLOR=1` to
@@ -346,6 +347,13 @@ not assign the scan event timestamp. PostgreSQL generated columns and views
 provide success/failure classification, failed scan queries, daily totals,
 package progression, duplicate queries, and successful packages missing the
 configured last scanner.
+
+Human-facing dates and times use the scanner site's `America/Detroit`
+timezone. That includes daily CSV filenames and rows, failed scan CSV rows, raw
+scan data logs, health page rows and totals, TV dashboard rows and totals, scan
+search results, CSV log metadata, and the `industrial-scanner-health` CLI. The
+stored PostgreSQL `scan_timestamp` values remain UTC, and the outgoing API
+payload is the only app output that intentionally sends UTC timestamps.
 
 Use `[scanners] last_scanner_id` for the final outbound scanner before boxes
 are loaded. Use `[scanners] mandatory_scanner_ids` for scanner IDs that must

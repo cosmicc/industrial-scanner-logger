@@ -25,6 +25,16 @@ from industrial_scanner_logger.receiver import (
     validate_outgoing_api_url,
     validate_positive_int,
 )
+from industrial_scanner_logger.timezones import (
+    DISPLAY_TIMEZONE,
+    DISPLAY_TIMEZONE_NAME,
+    display_datetime_from_utc,
+    display_day_start_utc,
+    display_now,
+    display_timestamp_from_utc,
+    display_today,
+    next_display_day_start_utc,
+)
 
 API_TITLE = "Industrial Scanner Logger API"
 DEFAULT_API_ROOT_PATH = "/api"
@@ -38,12 +48,14 @@ CURRENT_SCAN_RATE_WINDOW_SECONDS = 60
 CURRENT_SCAN_HOUR_WINDOW_SECONDS = 3600
 DAILY_CSV_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TRACKING_SUFFIX_SEARCH_LENGTHS = {12}
+DISPLAY_SCAN_DATE_SQL = (
+    "((scan_timestamp AT TIME ZONE 'UTC') "
+    f"AT TIME ZONE '{DISPLAY_TIMEZONE_NAME}')::date"
+)
 
 SCAN_EVENT_SELECT_COLUMNS = [
     sql.Identifier("id"),
     sql.Identifier("scan_timestamp"),
-    sql.SQL("scan_timestamp::date AS scan_date"),
-    sql.SQL("scan_timestamp::time(0) AS scan_time"),
     sql.Identifier("scanner_id"),
     sql.Identifier("scanner_name"),
     sql.Identifier("last_scanner_id"),
@@ -59,8 +71,6 @@ SCAN_EVENT_SELECT_COLUMNS = [
 SCAN_EVENT_SELECT_SQL = """
                     id,
                     scan_timestamp,
-                    scan_timestamp::date AS scan_date,
-                    scan_timestamp::time(0) AS scan_time,
                     scanner_id,
                     scanner_name,
                     last_scanner_id,
@@ -212,9 +222,9 @@ def build_dashboard_health(
     scanner_service_unit: str = SCANNER_SERVICE_UNIT,
     api_service_unit: str = API_SERVICE_UNIT,
 ):
-    current_day = date.today()
+    current_day = display_today()
     previous_day = current_day - timedelta(days=1)
-    generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    generated_at = display_now().isoformat(timespec="seconds")
     tv_duplicate_alert_enabled = getattr(
         config,
         "tv_duplicate_alert_enabled",
@@ -335,6 +345,7 @@ def build_dashboard_health(
         "status": "ok" if overall_ok else "degraded",
         "version": __version__,
         "generated_at": generated_at,
+        "display_timezone": DISPLAY_TIMEZONE_NAME,
         "current_scan_rate_stale_seconds": getattr(
             config,
             "current_scan_rate_stale_seconds",
@@ -438,8 +449,8 @@ def fetch_outgoing_api_health(db, config) -> dict:
     health.update({
         "queue_count": queue_count,
         "failed_queue_count": failed_queue_count,
-        "oldest_queued_at": api_timestamp(row.get("oldest_queued_at")),
-        "last_attempt_at": api_timestamp(row.get("last_attempt_at")),
+        "oldest_queued_at": display_health_timestamp(row.get("oldest_queued_at")),
+        "last_attempt_at": display_health_timestamp(row.get("last_attempt_at")),
         "last_error": last_error,
         "last_http_status": row.get("last_http_status"),
     })
@@ -490,12 +501,14 @@ def outgoing_api_config_error(config) -> Optional[str]:
     return None
 
 
-def api_timestamp(value):
+def display_health_timestamp(value):
     if value is None:
         return None
 
-    if hasattr(value, "isoformat"):
-        return value.isoformat(timespec="seconds")
+    display_timestamp = display_timestamp_from_utc(value)
+
+    if display_timestamp is not None:
+        return display_timestamp
 
     return str(value)
 
@@ -745,12 +758,43 @@ def scanner_name_value(config, scanner_id, fallback_name: str = "") -> str:
 
 def scan_row_with_display_name(config, row: dict) -> dict:
     scan_row = dict(row)
+    scan_datetime = display_datetime_from_utc(scan_row.get("scan_timestamp"))
+
+    if scan_datetime is not None:
+        scan_row["scan_timestamp"] = scan_datetime.isoformat(timespec="seconds")
+        scan_row["scan_date"] = scan_datetime.date().isoformat()
+        scan_row["scan_time"] = scan_datetime.time().replace(microsecond=0).isoformat()
+        scan_row["display_timezone"] = DISPLAY_TIMEZONE_NAME
+    else:
+        scan_row["scan_date"] = display_date_value(scan_row.get("scan_date"))
+        scan_row["scan_time"] = display_time_value(scan_row.get("scan_time"))
+
     scan_row["display_name"] = scanner_display_name(
         config,
         scan_row.get("scanner_id"),
         scan_row.get("scanner_name") or "",
     )
     return scan_row
+
+
+def display_date_value(value):
+    if value is None:
+        return None
+
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+
+    return str(value)
+
+
+def display_time_value(value):
+    if value is None:
+        return None
+
+    if hasattr(value, "isoformat"):
+        return value.isoformat(timespec="seconds")
+
+    return str(value)
 
 
 def scanner_pair_ids(config, scanner_id) -> list[int]:
@@ -777,7 +821,7 @@ def fetch_scanner_options(db, config) -> list[dict]:
             max(scanner_name) FILTER (
                 WHERE scanner_name IS NOT NULL AND scanner_name <> ''
             ) AS scanner_name,
-            max(scan_timestamp)::date AS last_scan_date
+            max(scan_timestamp) AS last_scan_timestamp
         FROM scanner_logger.scan_events
         WHERE scanner_id IS NOT NULL
         GROUP BY scanner_id
@@ -794,13 +838,20 @@ def fetch_scanner_options(db, config) -> list[dict]:
         existing = scanners.get(scanner_id, {})
         scanner_id_text = str(scanner_id)
         fallback_name = row.get("scanner_name") or existing.get("scanner_name", "")
+        last_scan_datetime = display_datetime_from_utc(row.get("last_scan_timestamp"))
+        last_scan_date = row.get("last_scan_date")
+
+        if last_scan_datetime is not None:
+            last_scan_date = last_scan_datetime.date().isoformat()
+        else:
+            last_scan_date = display_date_value(last_scan_date)
 
         scanners[scanner_id] = {
             "scanner_id": scanner_id,
             "scanner_name": scanner_name_value(config, scanner_id_text, fallback_name),
             "display_name": scanner_display_name(config, scanner_id_text, fallback_name),
             "paired_scanner_ids": scanner_pair_ids(config, scanner_id_text),
-            "last_scan_date": row.get("last_scan_date"),
+            "last_scan_date": last_scan_date,
         }
 
     return [scanners[scanner_id] for scanner_id in sorted(scanners)]
@@ -846,14 +897,6 @@ def scanner_id_int(value) -> Optional[int]:
     return None
 
 
-def utc_day_start(day: date) -> datetime:
-    return datetime(day.year, day.month, day.day)
-
-
-def next_utc_day_start(day: date) -> datetime:
-    return utc_day_start(day + timedelta(days=1))
-
-
 def dashboard_total_row(scan_date: date, row: Optional[dict] = None) -> dict:
     row = row or {}
     return {
@@ -872,9 +915,9 @@ def fetch_dashboard_daily_totals(
 ) -> dict:
     rows = fetch_all(
         db,
-        """
+        f"""
         SELECT
-            scan_timestamp::date AS scan_date,
+            {DISPLAY_SCAN_DATE_SQL} AS scan_date,
             count(*) AS total_scan_events,
             count(*) FILTER (WHERE is_success) AS successful_scans,
             count(*) FILTER (WHERE is_success = false) AS failed_scans,
@@ -884,7 +927,7 @@ def fetch_dashboard_daily_totals(
           AND scan_timestamp < %s
         GROUP BY 1
         """,
-        [utc_day_start(previous_day), next_utc_day_start(current_day)],
+        [display_day_start_utc(previous_day), next_display_day_start_utc(current_day)],
     )
     rows_by_date = {row["scan_date"]: row for row in rows}
 
@@ -912,7 +955,7 @@ def fetch_dashboard_today_scanner_totals(db, config, current_day: date) -> list[
         GROUP BY scanner_id
         ORDER BY scanner_id ASC
         """,
-        [utc_day_start(current_day), next_utc_day_start(current_day)],
+        [display_day_start_utc(current_day), next_display_day_start_utc(current_day)],
     )
 
     return [dashboard_scanner_total_row(config, row) for row in rows]
@@ -989,8 +1032,6 @@ def fetch_active_duplicate_alert(db, config, alert_seconds: int) -> Optional[dic
         SELECT
             id,
             scan_timestamp,
-            scan_timestamp::date AS scan_date,
-            scan_timestamp::time(0) AS scan_time,
             scanner_id,
             scanner_name,
             last_scanner_id,
@@ -1051,8 +1092,6 @@ def fetch_active_duplicate_package_alerts(db, config, alert_seconds: int) -> lis
         SELECT
             id,
             scan_timestamp,
-            scan_timestamp::date AS scan_date,
-            scan_timestamp::time(0) AS scan_time,
             scanner_id,
             scanner_name,
             last_scanner_id,
@@ -1128,7 +1167,7 @@ def last_digits(value, digit_count: int) -> str:
 
 
 def daily_csv_log_path(config, scan_date: date) -> Path:
-    if scan_date >= date.today():
+    if scan_date >= display_today():
         raise HTTPException(status_code=404, detail="daily CSV is not finalized")
 
     filename = f"{config.prefix}_{scan_date.isoformat()}.csv"
@@ -1157,7 +1196,10 @@ def daily_csv_log_row(config, csv_path: Path, scan_date: date) -> dict:
         "scan_date": scan_date.isoformat(),
         "filename": csv_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).astimezone().isoformat(
+        "modified_at": datetime.fromtimestamp(
+            stat.st_mtime,
+            tz=DISPLAY_TIMEZONE,
+        ).isoformat(
             timespec="seconds"
         ),
         "has_scans": has_scans,
@@ -1211,7 +1253,7 @@ def csv_truthy(value) -> bool:
 
 
 def list_completed_daily_csv_logs(config, current_day: Optional[date] = None) -> list:
-    current_day = current_day or date.today()
+    current_day = current_day or display_today()
     output_dir = Path(config.output_dir)
 
     if not output_dir.exists() or not output_dir.is_dir():
@@ -1555,7 +1597,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             limit=limit,
             offset=offset,
         )
-        return fetch_all(db, query, params)
+        return [display_view_row(row) for row in fetch_all(db, query, params)]
 
     @app.get(f"{API_VERSION_PREFIX}/dashboard/health")
     def dashboard_health(config=Depends(get_config)):
@@ -1564,7 +1606,8 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
     @app.get(f"{API_VERSION_PREFIX}/logs/daily-csv")
     def list_daily_csv_logs(config=Depends(get_config)):
         return {
-            "current_day_excluded": date.today().isoformat(),
+            "current_day_excluded": display_today().isoformat(),
+            "display_timezone": DISPLAY_TIMEZONE_NAME,
             "logs": list_completed_daily_csv_logs(config),
         }
 
@@ -1635,6 +1678,25 @@ def fetch_all(db, query, params):
     with db.cursor() as cursor:
         cursor.execute(query, params)
         return cursor.fetchall()
+
+
+def display_view_row(row: dict) -> dict:
+    display_row = dict(row)
+
+    for timestamp_key in ("scan_timestamp", "first_seen_at", "last_seen_at"):
+        if timestamp_key in display_row:
+            display_row[timestamp_key] = display_health_timestamp(
+                display_row.get(timestamp_key)
+            )
+
+    for date_key in ("scan_date", "last_scan_date"):
+        if date_key in display_row:
+            display_row[date_key] = display_date_value(display_row.get(date_key))
+
+    if "scan_time" in display_row:
+        display_row["scan_time"] = display_time_value(display_row.get("scan_time"))
+
+    return display_row
 
 
 def column_list(columns):
@@ -1846,7 +1908,7 @@ def add_common_filters(
 
         if date_column_kind == "timestamp_utc":
             conditions.append(sql.SQL("{} >= %s").format(sql.Identifier(date_column)))
-            params.append(utc_day_start(start_date))
+            params.append(display_day_start_utc(start_date))
         else:
             conditions.append(sql.SQL("{} >= %s").format(sql.Identifier(date_column)))
             params.append(start_date)
@@ -1857,7 +1919,7 @@ def add_common_filters(
 
         if date_column_kind == "timestamp_utc":
             conditions.append(sql.SQL("{} < %s").format(sql.Identifier(date_column)))
-            params.append(next_utc_day_start(end_date))
+            params.append(next_display_day_start_utc(end_date))
         else:
             conditions.append(sql.SQL("{} <= %s").format(sql.Identifier(date_column)))
             params.append(end_date)
