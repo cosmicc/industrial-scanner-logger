@@ -70,12 +70,7 @@ DEFAULT_POSTGRESQL_CONNECT_TIMEOUT_SECONDS = 3.0
 DEFAULT_POSTGRESQL_RETRY_INTERVAL_SECONDS = 30.0
 DEFAULT_OUTGOING_API_ENABLED = False
 DEFAULT_OUTGOING_API_URL = ""
-DEFAULT_OUTGOING_API_AUTH_TYPE = "none"
-DEFAULT_OUTGOING_API_BEARER_TOKEN_FILE = ""
-DEFAULT_OUTGOING_API_OAUTH2_TOKEN_URL = ""
-DEFAULT_OUTGOING_API_OAUTH2_CLIENT_ID = ""
-DEFAULT_OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE = ""
-DEFAULT_OUTGOING_API_OAUTH2_SCOPE = ""
+DEFAULT_OUTGOING_API_API_KEY = ""
 DEFAULT_OUTGOING_API_TIMEOUT_SECONDS = 10.0
 DEFAULT_OUTGOING_API_RETRY_INTERVAL_SECONDS = 30.0
 DEFAULT_OUTGOING_API_POLL_INTERVAL_SECONDS = 1.0
@@ -98,7 +93,6 @@ DUPLICATE_DISTINCT_SUCCESS_THRESHOLD = 3
 DUPLICATE_LOOKBACK_DAYS = 30
 UNKNOWN_SCANNER_ID = "UNKNOWN"
 ALL_SCANNERS_ID = "ALL"
-OUTGOING_API_AUTH_TYPES = {"none", "bearer", "oauth2"}
 OUTGOING_API_LOCAL_HTTP_HOSTS = {"127.0.0.1", "::1", "localhost"}
 OUTGOING_API_MAX_ERROR_CHARS = 1000
 DAILY_CSV_HEADER = [
@@ -153,12 +147,7 @@ CONFIG_DEFAULTS = {
     "outgoing_api": {
         "enabled": str(DEFAULT_OUTGOING_API_ENABLED).lower(),
         "url": DEFAULT_OUTGOING_API_URL,
-        "auth_type": DEFAULT_OUTGOING_API_AUTH_TYPE,
-        "bearer_token_file": DEFAULT_OUTGOING_API_BEARER_TOKEN_FILE,
-        "oauth2_token_url": DEFAULT_OUTGOING_API_OAUTH2_TOKEN_URL,
-        "oauth2_client_id": DEFAULT_OUTGOING_API_OAUTH2_CLIENT_ID,
-        "oauth2_client_secret_file": DEFAULT_OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE,
-        "oauth2_scope": DEFAULT_OUTGOING_API_OAUTH2_SCOPE,
+        "api_key": DEFAULT_OUTGOING_API_API_KEY,
         "timeout": str(DEFAULT_OUTGOING_API_TIMEOUT_SECONDS),
         "retry_interval": str(DEFAULT_OUTGOING_API_RETRY_INTERVAL_SECONDS),
         "poll_interval": str(DEFAULT_OUTGOING_API_POLL_INTERVAL_SECONDS),
@@ -483,22 +472,41 @@ def parse_postgresql_table(table_name: str):
     return schema_name, relation_name
 
 
-def validate_outgoing_api_auth_type(auth_type: str) -> str:
+def normalize_outgoing_api_api_key(api_key: str) -> str:
     """
-    Normalize the outgoing API authentication mode.
+    Trim config-file whitespace around the outgoing API key.
 
-    The placeholder OAuth2 value is accepted so config files can be prepared
-    before OAuth2 credentials are known, but OAuth2 sending is not active yet.
+    The key value itself is security-sensitive and must never be logged.
     """
-    normalized_auth_type = clean_barcode(auth_type).lower()
+    return str(api_key).strip()
 
-    if normalized_auth_type not in OUTGOING_API_AUTH_TYPES:
-        allowed_auth_types = ", ".join(sorted(OUTGOING_API_AUTH_TYPES))
-        raise ValueError(
-            f"outgoing_api.auth_type must be one of: {allowed_auth_types}"
-        )
 
-    return normalized_auth_type
+def validate_outgoing_api_api_key(api_key: str, enabled: bool = True) -> str:
+    """
+    Validate the configured X-Scanner-Api-Key header value.
+
+    Header control characters are rejected to prevent malformed outbound HTTP
+    requests and header-injection risks.
+    """
+    normalized_api_key = normalize_outgoing_api_api_key(api_key)
+
+    if not normalized_api_key:
+        if enabled:
+            raise ValueError(
+                "outgoing_api.api_key is required when outgoing_api.enabled is true"
+            )
+
+        return ""
+
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized_api_key):
+        raise ValueError("outgoing_api.api_key must not contain control characters")
+
+    try:
+        normalized_api_key.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("outgoing_api.api_key must contain only ASCII characters") from exc
+
+    return normalized_api_key
 
 
 def validate_outgoing_api_url(url: str, enabled: bool) -> str:
@@ -579,8 +587,9 @@ def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
     try:
         outgoing_api_enabled = config.getboolean("outgoing_api", "enabled")
         outgoing_api_url = normalize_outgoing_api_url(config.get("outgoing_api", "url"))
-        outgoing_api_auth_type = validate_outgoing_api_auth_type(
-            config.get("outgoing_api", "auth_type"),
+        outgoing_api_api_key = validate_outgoing_api_api_key(
+            config.get("outgoing_api", "api_key"),
+            enabled=False,
         )
 
         return argparse.Namespace(
@@ -617,24 +626,7 @@ def load_receiver_config(config_file: str = DEFAULT_CONFIG_FILE):
             postgresql_retry_interval=config.getfloat("postgresql", "retry_interval"),
             outgoing_api_enabled=outgoing_api_enabled,
             outgoing_api_url=outgoing_api_url,
-            outgoing_api_auth_type=outgoing_api_auth_type,
-            outgoing_api_bearer_token_file=config.get(
-                "outgoing_api",
-                "bearer_token_file",
-            ),
-            outgoing_api_oauth2_token_url=config.get(
-                "outgoing_api",
-                "oauth2_token_url",
-            ),
-            outgoing_api_oauth2_client_id=config.get(
-                "outgoing_api",
-                "oauth2_client_id",
-            ),
-            outgoing_api_oauth2_client_secret_file=config.get(
-                "outgoing_api",
-                "oauth2_client_secret_file",
-            ),
-            outgoing_api_oauth2_scope=config.get("outgoing_api", "oauth2_scope"),
+            outgoing_api_api_key=outgoing_api_api_key,
             outgoing_api_timeout=config.getfloat("outgoing_api", "timeout"),
             outgoing_api_retry_interval=config.getfloat(
                 "outgoing_api",
@@ -1229,65 +1221,23 @@ class OutgoingAPIClient:
     def __init__(
         self,
         url: str,
-        auth_type: str = DEFAULT_OUTGOING_API_AUTH_TYPE,
-        bearer_token_file: str = DEFAULT_OUTGOING_API_BEARER_TOKEN_FILE,
-        oauth2_token_url: str = DEFAULT_OUTGOING_API_OAUTH2_TOKEN_URL,
-        oauth2_client_id: str = DEFAULT_OUTGOING_API_OAUTH2_CLIENT_ID,
-        oauth2_client_secret_file: str = DEFAULT_OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE,
-        oauth2_scope: str = DEFAULT_OUTGOING_API_OAUTH2_SCOPE,
+        api_key: str = DEFAULT_OUTGOING_API_API_KEY,
         timeout: float = DEFAULT_OUTGOING_API_TIMEOUT_SECONDS,
     ):
         self.url = validate_outgoing_api_url(url, enabled=True)
-        self.auth_type = validate_outgoing_api_auth_type(auth_type)
-        self.bearer_token_file = clean_barcode(bearer_token_file)
-        self.oauth2_token_url = clean_barcode(oauth2_token_url)
-        self.oauth2_client_id = clean_barcode(oauth2_client_id)
-        self.oauth2_client_secret_file = clean_barcode(oauth2_client_secret_file)
-        self.oauth2_scope = clean_barcode(oauth2_scope)
+        self.api_key = validate_outgoing_api_api_key(api_key, enabled=True)
         self.timeout = validate_positive_float(timeout, "outgoing_api.timeout")
-
-    def _read_bearer_token(self) -> str:
-        """
-        Read the bearer token from disk for each request so token rotation works.
-        """
-        if not self.bearer_token_file:
-            raise OutgoingAPIUnavailable(
-                "bearer auth selected but bearer_token_file is not configured"
-            )
-
-        token_path = Path(self.bearer_token_file)
-
-        try:
-            token = token_path.read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            raise OutgoingAPIUnavailable(
-                "bearer token file could not be read"
-            ) from exc
-
-        if not token:
-            raise OutgoingAPIUnavailable("bearer token file is empty")
-
-        return token
 
     def _headers(self) -> dict[str, str]:
         """
         Build request headers without logging or exposing authentication secrets.
         """
-        headers = {
+        return {
             "Content-Type": "application/json",
             "Accept": "application/json",
+            "X-Scanner-Api-Key": self.api_key,
             "User-Agent": f"industrial-scanner-logger/{__version__}",
         }
-
-        if self.auth_type == "bearer":
-            headers["Authorization"] = f"Bearer {self._read_bearer_token()}"
-
-        elif self.auth_type == "oauth2":
-            raise OutgoingAPIUnavailable(
-                "oauth2 auth is configured but OAuth2 sending is not implemented yet"
-            )
-
-        return headers
 
     def post_scan(self, scan_row: dict) -> int:
         """
@@ -1308,7 +1258,10 @@ class OutgoingAPIClient:
 
         except url_error.HTTPError as exc:
             status_code = int(exc.code or 0)
-            error_text = outgoing_api_http_error_text(exc)
+            error_text = redact_outgoing_api_secret(
+                outgoing_api_http_error_text(exc),
+                self.api_key,
+            )
 
             if status_code == 429 or status_code >= 500:
                 raise OutgoingAPIUnavailable(error_text, status_code) from exc
@@ -1317,7 +1270,8 @@ class OutgoingAPIClient:
 
         except (OSError, TimeoutError, url_error.URLError) as exc:
             raise OutgoingAPIUnavailable(
-                f"outgoing API request failed: {safe_error_text(exc)}"
+                "outgoing API request failed: "
+                f"{redact_outgoing_api_secret(safe_error_text(exc), self.api_key)}"
             ) from exc
 
         if status_code < 200 or status_code >= 300:
@@ -1337,31 +1291,54 @@ class OutgoingAPIClient:
 
 def outgoing_api_payload(scan_row: dict) -> dict:
     """
-    Convert a scan_events row into the JSON body sent to the external API.
+    Convert a scan_events row into the external API's required JSON body.
     """
     return {
-        "scan_event_id": scan_row["scan_event_id"],
-        "scan_timestamp": outgoing_api_timestamp(scan_row["scan_timestamp"]),
-        "scan_date": str(scan_row["scan_date"]),
-        "scan_time": str(scan_row["scan_time"]),
         "scanner_id": scan_row["scanner_id"],
-        "scanner_name": scan_row["scanner_name"],
-        "last_scanner_id": scan_row["last_scanner_id"],
-        "is_duplicate": bool(scan_row["is_duplicate"]),
-        "is_repaired": bool(scan_row["is_repaired"]),
         "tracking_number": scan_row["tracking_number"],
         "barcode": scan_row["barcode"],
-        "barcode_length": scan_row["barcode_length"],
-        "is_success": bool(scan_row["is_success"]),
-        "failure_reason": scan_row["failure_reason"],
+        "is_repaired": bool(scan_row["is_repaired"]),
+        "is_duplicate": bool(scan_row["is_duplicate"]),
+        "scan_timestamp": outgoing_api_timestamp(scan_row["scan_timestamp"]),
     }
 
 
 def outgoing_api_timestamp(value) -> str:
-    if hasattr(value, "isoformat"):
-        return value.isoformat(timespec="seconds")
+    """
+    Format scan timestamps as UTC seconds with a trailing Z.
 
-    return str(value)
+    Database scan timestamps are stored as timezone-free UTC values. If a
+    timezone-aware value is supplied by a test or future driver, it is converted
+    to UTC before formatting.
+    """
+    if isinstance(value, datetime):
+        scan_timestamp = value
+    else:
+        raw_value = str(value).strip()
+        normalized_value = raw_value
+
+        if normalized_value.endswith("Z"):
+            normalized_value = f"{normalized_value[:-1]}+00:00"
+
+        try:
+            scan_timestamp = datetime.fromisoformat(normalized_value)
+        except ValueError as exc:
+            raise ValueError("scan_timestamp could not be formatted for outgoing API") from exc
+
+    if scan_timestamp.tzinfo is not None:
+        scan_timestamp = scan_timestamp.astimezone(timezone.utc).replace(tzinfo=None)
+
+    return f"{scan_timestamp.replace(microsecond=0).isoformat(timespec='seconds')}Z"
+
+
+def redact_outgoing_api_secret(message: str, api_key: str) -> str:
+    """
+    Remove the configured outgoing API key from diagnostic text if echoed back.
+    """
+    if not api_key:
+        return message
+
+    return message.replace(api_key, "[REDACTED_OUTGOING_API_KEY]")
 
 
 def outgoing_api_http_error_text(exc: url_error.HTTPError) -> str:
@@ -3075,7 +3052,7 @@ def main():
             args.postgresql_retry_interval,
             "postgresql_retry_interval",
         )
-        validate_outgoing_api_auth_type(args.outgoing_api_auth_type)
+        validate_outgoing_api_api_key(args.outgoing_api_api_key, enabled=False)
         validate_positive_float(args.outgoing_api_timeout, "outgoing_api.timeout")
         validate_nonnegative_float(
             args.outgoing_api_retry_interval,
@@ -3137,13 +3114,7 @@ def main():
     if args.outgoing_api_enabled:
         try:
             validate_outgoing_api_url(args.outgoing_api_url, enabled=True)
-            if args.outgoing_api_auth_type == "bearer" and not (
-                args.outgoing_api_bearer_token_file
-            ):
-                raise ValueError(
-                    "outgoing_api.bearer_token_file is required when bearer "
-                    "auth is enabled"
-                )
+            validate_outgoing_api_api_key(args.outgoing_api_api_key, enabled=True)
 
             outgoing_queue = PostgreSQLOutgoingScanQueue(
                 dsn=args.postgresql_dsn,
@@ -3153,12 +3124,7 @@ def main():
             )
             outgoing_client = OutgoingAPIClient(
                 url=args.outgoing_api_url,
-                auth_type=args.outgoing_api_auth_type,
-                bearer_token_file=args.outgoing_api_bearer_token_file,
-                oauth2_token_url=args.outgoing_api_oauth2_token_url,
-                oauth2_client_id=args.outgoing_api_oauth2_client_id,
-                oauth2_client_secret_file=args.outgoing_api_oauth2_client_secret_file,
-                oauth2_scope=args.outgoing_api_oauth2_scope,
+                api_key=args.outgoing_api_api_key,
                 timeout=args.outgoing_api_timeout,
             )
             outgoing_queue.verify_connection()
@@ -3221,8 +3187,12 @@ def main():
     )
     if args.outgoing_api_enabled:
         SCRIPT_LOGGER.info(
-            "Outgoing API auth type: %s",
-            args.outgoing_api_auth_type,
+            "Outgoing API URL configured: %s",
+            "yes" if args.outgoing_api_url else "no",
+        )
+        SCRIPT_LOGGER.info(
+            "Outgoing API key configured: %s",
+            "yes" if args.outgoing_api_api_key else "no",
         )
         SCRIPT_LOGGER.info(
             "Outgoing API queue table: %s",

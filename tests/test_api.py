@@ -710,8 +710,8 @@ class ApiQueryTests(unittest.TestCase):
             FakeDb(),
             SimpleNamespace(
                 outgoing_api_enabled=True,
-                outgoing_api_auth_type="none",
                 outgoing_api_url="https://api.example.test/scans",
+                outgoing_api_api_key="scanner-config-key",
             ),
         )
 
@@ -721,6 +721,7 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(health["failed_queue_count"], 1)
         self.assertEqual(health["last_http_status"], 503)
         self.assertEqual(health["oldest_queued_at"], "2026-06-16T09:00:00")
+        self.assertTrue(health["api_key_configured"])
 
     def test_fetch_outgoing_api_health_reports_missing_url_as_misconfigured(self):
         from types import SimpleNamespace
@@ -755,8 +756,8 @@ class ApiQueryTests(unittest.TestCase):
             FakeDb(),
             SimpleNamespace(
                 outgoing_api_enabled=True,
-                outgoing_api_auth_type="none",
                 outgoing_api_url="",
+                outgoing_api_api_key="scanner-config-key",
             ),
         )
 
@@ -764,6 +765,49 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(health["state"], "misconfigured")
         self.assertEqual(health["queue_count"], 2)
         self.assertIn("outgoing_api.url is required", health["error"])
+
+    def test_fetch_outgoing_api_health_reports_missing_api_key_as_misconfigured(self):
+        from types import SimpleNamespace
+
+        from industrial_scanner_logger.api import fetch_outgoing_api_health
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return None
+
+            def execute(self, _query, _params):
+                return None
+
+            def fetchone(self):
+                return {
+                    "queue_count": 1,
+                    "failed_queue_count": 0,
+                    "oldest_queued_at": None,
+                    "last_attempt_at": None,
+                    "last_error": None,
+                    "last_http_status": None,
+                }
+
+        class FakeDb:
+            def cursor(self):
+                return FakeCursor()
+
+        health = fetch_outgoing_api_health(
+            FakeDb(),
+            SimpleNamespace(
+                outgoing_api_enabled=True,
+                outgoing_api_url="https://api.example.test/scans",
+                outgoing_api_api_key="",
+            ),
+        )
+
+        self.assertFalse(health["active"])
+        self.assertEqual(health["state"], "misconfigured")
+        self.assertFalse(health["api_key_configured"])
+        self.assertIn("outgoing_api.api_key is required", health["error"])
 
     def test_dashboard_mandatory_scanners_reports_missing_required_ids(self):
         from types import SimpleNamespace

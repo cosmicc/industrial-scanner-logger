@@ -11,6 +11,10 @@ All notable changes to this project will be documented in this file.
 - Add an optional outgoing API sender with a PostgreSQL-backed processed-scan
   queue, retry metadata, secure config placeholders, and health page queue
   status.
+- Send outgoing scan webhooks with the configured `X-Scanner-Api-Key`, the
+  required scan JSON fields, and UTC `Z` timestamps.
+- Add `[outgoing_api] api_key` to the app config and restrict refreshed
+  installed config files to root plus the scanner service group.
 - Harden production uptime by making installed services always restart,
   keeping scanner intake running when outgoing API sender config is not ready,
   and adding health page disk-space monitoring with a prominent low-space

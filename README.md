@@ -101,6 +101,15 @@ table = scanner_logger.scan_events
 connect_timeout = 3
 retry_interval = 30
 
+[outgoing_api]
+enabled = false
+url =
+api_key =
+timeout = 10
+retry_interval = 30
+poll_interval = 1
+batch_size = 50
+
 [scanners]
 last_scanner_id =
 mandatory_scanner_ids =
@@ -211,6 +220,10 @@ sudo systemctl restart industrial-scanner-logger-api
 sudo refresh-app-config
 sudo refresh-nginx-config
 ```
+
+Because the config file can contain the outgoing API key, installs and config
+refreshes keep `/etc/industrial-scanner-logger.conf` readable by root and the
+scanner service group only.
 
 `refresh-app-config` updates `/etc/industrial-scanner-logger.conf` from the
 installed default `config/industrial-scanner-logger.conf` schema. It keeps
@@ -355,23 +368,26 @@ repeats that are not inserted into `scan_events` are not sent, while processed
 failed rows are sent. Successfully delivered rows are removed from the outgoing
 queue only; the main scan history remains in `scan_events`.
 
-The outgoing API sender posts one processed scan per request and includes the
-scan timestamp, scanner metadata, duplicate and repair flags, tracking number,
-barcode, success state, and failure reason. If the external API is unavailable
-or rejects a row, the queue row is retained with attempt metadata and retried
-later. The health page shows the outgoing API state and queued scan count
-without marking the whole app degraded.
+The outgoing API sender posts one processed scan per request using
+`Content-Type: application/json` and `X-Scanner-Api-Key` from
+`[outgoing_api] api_key`. The JSON body contains only the external contract
+fields: `scanner_id`, `tracking_number`, `barcode`, `is_repaired`,
+`is_duplicate`, and `scan_timestamp`. `scan_timestamp` is always formatted as
+UTC seconds with a trailing `Z`, such as `2026-06-12T14:30:00Z`. If the
+external API is unavailable or rejects a row, the queue row is retained with
+attempt metadata and retried later. The health page shows the outgoing API
+state and queued scan count without marking the whole app degraded.
 
-If outgoing API sending is enabled but the URL or auth configuration is not
-ready, the receiver still starts and continues accepting scanner data. Processed
-rows remain queued locally where possible, and the health page reports the
-outgoing API as misconfigured until the sender can be started safely.
+If outgoing API sending is enabled but the URL or API key is not ready, the
+receiver still starts and continues accepting scanner data. Processed rows
+remain queued locally where possible, and the health page reports the outgoing
+API as misconfigured until the sender can be started safely.
 
 For security, external outgoing API URLs must use `https://`; `http://` is
-accepted only for `localhost` test endpoints. Bearer auth is configured with a
-token file path instead of putting the token directly on the health page or in
-logs. OAuth2 config keys are present as placeholders for a future credential
-workflow.
+accepted only for `localhost` test endpoints. The configured API key is sent
+only as the `X-Scanner-Api-Key` header. It is not shown on the health page and
+is redacted from outgoing API diagnostic text if an upstream response echoes it
+back.
 
 The installer enables PostgreSQL logging by default with local Unix socket peer
 authentication:

@@ -33,12 +33,7 @@ POSTGRESQL_CONNECT_TIMEOUT="${POSTGRESQL_CONNECT_TIMEOUT:-3}"
 POSTGRESQL_RETRY_INTERVAL="${POSTGRESQL_RETRY_INTERVAL:-30}"
 OUTGOING_API_ENABLED="${OUTGOING_API_ENABLED:-0}"
 OUTGOING_API_URL="${OUTGOING_API_URL:-}"
-OUTGOING_API_AUTH_TYPE="${OUTGOING_API_AUTH_TYPE:-none}"
-OUTGOING_API_BEARER_TOKEN_FILE="${OUTGOING_API_BEARER_TOKEN_FILE:-}"
-OUTGOING_API_OAUTH2_TOKEN_URL="${OUTGOING_API_OAUTH2_TOKEN_URL:-}"
-OUTGOING_API_OAUTH2_CLIENT_ID="${OUTGOING_API_OAUTH2_CLIENT_ID:-}"
-OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE="${OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE:-}"
-OUTGOING_API_OAUTH2_SCOPE="${OUTGOING_API_OAUTH2_SCOPE:-}"
+OUTGOING_API_API_KEY="${OUTGOING_API_API_KEY:-}"
 OUTGOING_API_TIMEOUT="${OUTGOING_API_TIMEOUT:-10}"
 OUTGOING_API_RETRY_INTERVAL="${OUTGOING_API_RETRY_INTERVAL:-30}"
 OUTGOING_API_POLL_INTERVAL="${OUTGOING_API_POLL_INTERVAL:-1}"
@@ -108,8 +103,6 @@ Options:
   --enable-outgoing-api    enable external API delivery for processed scan rows
   --disable-outgoing-api   disable external API delivery [default]
   --outgoing-api-url URL   external HTTPS API URL that receives scan JSON [${OUTGOING_API_URL:-not set}]
-  --outgoing-api-auth-type TYPE auth mode: none, bearer, or oauth2 [${OUTGOING_API_AUTH_TYPE}]
-  --outgoing-api-bearer-token-file PATH bearer token file when auth type is bearer [${OUTGOING_API_BEARER_TOKEN_FILE:-not set}]
   --outgoing-api-timeout SEC outgoing API request timeout [${OUTGOING_API_TIMEOUT}]
   --outgoing-api-retry-interval SEC retry delay after outgoing API failures [${OUTGOING_API_RETRY_INTERVAL}]
   --outgoing-api-poll-interval SEC queue drain poll interval [${OUTGOING_API_POLL_INTERVAL}]
@@ -321,16 +314,7 @@ emit_option("postgresql", "connect_timeout", "POSTGRESQL_CONNECT_TIMEOUT")
 emit_option("postgresql", "retry_interval", "POSTGRESQL_RETRY_INTERVAL")
 emit_bool("outgoing_api", "enabled", "OUTGOING_API_ENABLED")
 emit_option("outgoing_api", "url", "OUTGOING_API_URL")
-emit_option("outgoing_api", "auth_type", "OUTGOING_API_AUTH_TYPE")
-emit_option("outgoing_api", "bearer_token_file", "OUTGOING_API_BEARER_TOKEN_FILE")
-emit_option("outgoing_api", "oauth2_token_url", "OUTGOING_API_OAUTH2_TOKEN_URL")
-emit_option("outgoing_api", "oauth2_client_id", "OUTGOING_API_OAUTH2_CLIENT_ID")
-emit_option(
-    "outgoing_api",
-    "oauth2_client_secret_file",
-    "OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE",
-)
-emit_option("outgoing_api", "oauth2_scope", "OUTGOING_API_OAUTH2_SCOPE")
+emit_option("outgoing_api", "api_key", "OUTGOING_API_API_KEY")
 emit_option("outgoing_api", "timeout", "OUTGOING_API_TIMEOUT")
 emit_option("outgoing_api", "retry_interval", "OUTGOING_API_RETRY_INTERVAL")
 emit_option("outgoing_api", "poll_interval", "OUTGOING_API_POLL_INTERVAL")
@@ -567,14 +551,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --outgoing-api-url)
             OUTGOING_API_URL="$2"
-            shift 2
-            ;;
-        --outgoing-api-auth-type)
-            OUTGOING_API_AUTH_TYPE="$2"
-            shift 2
-            ;;
-        --outgoing-api-bearer-token-file)
-            OUTGOING_API_BEARER_TOKEN_FILE="$2"
             shift 2
             ;;
         --outgoing-api-timeout)
@@ -1001,36 +977,16 @@ retry_interval = ${POSTGRESQL_RETRY_INTERVAL}
 
 [outgoing_api]
 # Enables delivery of processed scan rows to an external API.
-# Default: false. Set true only after url and any required auth options are configured.
+# Default: false. Set true only after url and api_key are configured.
 enabled = ${OUTGOING_API_ENABLED_TEXT}
 
 # HTTPS endpoint that receives one processed scan row per JSON POST.
 # Default: blank. Required when enabled = true. Plain HTTP is only allowed for localhost testing.
 url = ${OUTGOING_API_URL}
 
-# Authentication mode for the outgoing API.
-# Default: none. Allowed: none, bearer, oauth2. OAuth2 is reserved for a future credential workflow.
-auth_type = ${OUTGOING_API_AUTH_TYPE}
-
-# File containing the bearer token when auth_type = bearer.
-# Default: blank. Store secrets outside this config when possible, readable only by the service user.
-bearer_token_file = ${OUTGOING_API_BEARER_TOKEN_FILE}
-
-# OAuth2 token endpoint placeholder for future support.
-# Default: blank. Not used until OAuth2 sending is implemented.
-oauth2_token_url = ${OUTGOING_API_OAUTH2_TOKEN_URL}
-
-# OAuth2 client ID placeholder for future support.
-# Default: blank. Not used until OAuth2 sending is implemented.
-oauth2_client_id = ${OUTGOING_API_OAUTH2_CLIENT_ID}
-
-# File containing the OAuth2 client secret placeholder for future support.
-# Default: blank. Not used until OAuth2 sending is implemented.
-oauth2_client_secret_file = ${OUTGOING_API_OAUTH2_CLIENT_SECRET_FILE}
-
-# OAuth2 scope placeholder for future support.
-# Default: blank. Not used until OAuth2 sending is implemented.
-oauth2_scope = ${OUTGOING_API_OAUTH2_SCOPE}
+# API key sent in the X-Scanner-Api-Key header.
+# Default: blank. Required when enabled = true. Keep this file readable only by root and the service group.
+api_key = ${OUTGOING_API_API_KEY}
 
 # Seconds to wait for one outgoing API request.
 # Default: 10. Range: greater than 0.
@@ -1142,10 +1098,11 @@ web_root = ${NGINX_WEB_ROOT}
 # Default: true, because the default listen value also uses default_server.
 disable_default_site = $([[ "${NGINX_DISABLE_DEFAULT_SITE}" -eq 1 ]] && echo "true" || echo "false")
 CONFIG
-    chmod 0644 "${CONFIG_FILE}"
 else
     echo "Keeping existing config file: ${CONFIG_FILE}"
 fi
+chown "root:${SERVICE_GROUP}" "${CONFIG_FILE}"
+chmod 0640 "${CONFIG_FILE}"
 
 if [[ -f "${LEGACY_ENV_FILE}" ]]; then
     rm -f "${LEGACY_ENV_FILE}"

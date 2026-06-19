@@ -1,12 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${EUID}" -ne 0 ]]; then
-    echo "refresh-app-config must be run as root. Re-run it with sudo." >&2
-    exit 1
-fi
-
 SERVICE_NAME="${SERVICE_NAME:-industrial-scanner-logger}"
+SERVICE_GROUP="${SERVICE_GROUP:-scannerlogger}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
 CONFIG_FILE="${CONFIG_FILE:-/etc/industrial-scanner-logger.conf}"
 
@@ -29,6 +25,7 @@ Options:
   --config-file PATH     running app config file [${CONFIG_FILE}]
   --defaults-file PATH   default config file used as the schema [${DEFAULTS_FILE}]
   --service-name NAME    receiver systemd service name [${SERVICE_NAME}]
+  --service-group GROUP  service group allowed to read the config [${SERVICE_GROUP}]
   -h, --help             show this help
 
 The default config file is never changed. The running config keeps existing
@@ -60,6 +57,10 @@ while [[ $# -gt 0 ]]; do
             SERVICE_UNIT="${SERVICE_NAME%.service}.service"
             shift 2
             ;;
+        --service-group)
+            SERVICE_GROUP="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -71,6 +72,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ "${EUID}" -ne 0 ]]; then
+    echo "refresh-app-config must be run as root. Re-run it with sudo." >&2
+    exit 1
+fi
 
 require_command python3
 require_command systemctl
@@ -203,9 +209,11 @@ else
         echo "Backed up existing config: ${BACKUP_FILE}"
     fi
 
-    install -o root -g root -m 0644 "${MERGED_TEMP}" "${CONFIG_FILE}"
+    install -o root -g "${SERVICE_GROUP}" -m 0640 "${MERGED_TEMP}" "${CONFIG_FILE}"
     echo "Refreshed app config: ${CONFIG_FILE}"
 fi
+chown "root:${SERVICE_GROUP}" "${CONFIG_FILE}"
+chmod 0640 "${CONFIG_FILE}"
 
 echo "Starting ${SERVICE_UNIT}..."
 systemctl start "${SERVICE_UNIT}"

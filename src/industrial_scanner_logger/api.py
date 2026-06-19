@@ -21,6 +21,7 @@ from industrial_scanner_logger.receiver import (
     DEFAULT_TV_DUPLICATE_ALERT_SECONDS,
     load_receiver_config,
     parse_postgresql_table,
+    validate_outgoing_api_api_key,
     validate_outgoing_api_url,
     validate_positive_int,
 )
@@ -378,8 +379,8 @@ def empty_outgoing_api_health(config) -> dict:
         "last_attempt_at": None,
         "last_error": None,
         "last_http_status": None,
-        "auth_type": getattr(config, "outgoing_api_auth_type", "none"),
         "url_configured": bool(getattr(config, "outgoing_api_url", "")),
+        "api_key_configured": bool(getattr(config, "outgoing_api_api_key", "")),
         "error": config_error,
     }
 
@@ -473,10 +474,13 @@ def outgoing_api_config_error(config) -> Optional[str]:
     except ValueError as exc:
         return str(exc)
 
-    auth_type = getattr(config, "outgoing_api_auth_type", "none")
-
-    if auth_type == "bearer" and not getattr(config, "outgoing_api_bearer_token_file", ""):
-        return "outgoing_api.bearer_token_file is required when bearer auth is enabled"
+    try:
+        validate_outgoing_api_api_key(
+            getattr(config, "outgoing_api_api_key", ""),
+            enabled=True,
+        )
+    except ValueError as exc:
+        return str(exc)
 
     return None
 

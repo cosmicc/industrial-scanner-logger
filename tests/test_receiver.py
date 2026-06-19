@@ -17,7 +17,6 @@ from industrial_scanner_logger.receiver import (  # noqa: E402
     DAILY_CSV_HEADER,
     DailyCsvLogger,
     OutgoingAPIClient,
-    OutgoingAPIUnavailable,
     PostgreSQLScanLogger,
     clean_barcode,
     configure_script_logging,
@@ -32,6 +31,7 @@ from industrial_scanner_logger.receiver import (  # noqa: E402
     scanner_id_for_postgresql,
     scanner_id_from_addr,
     tracking_number_from_barcode,
+    validate_outgoing_api_api_key,
     validate_outgoing_api_url,
 )
 
@@ -264,7 +264,7 @@ class ReceiverTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_outgoing_api_url("", True)
 
-    def test_outgoing_api_payload_uses_processed_scan_row_fields(self):
+    def test_outgoing_api_payload_matches_external_contract(self):
         scan_timestamp = datetime(2026, 6, 16, 14, 30, 5)
         payload = outgoing_api_payload({
             "scan_event_id": 42,
@@ -283,22 +283,54 @@ class ReceiverTests(unittest.TestCase):
             "failure_reason": None,
         })
 
-        self.assertEqual(payload["scan_event_id"], 42)
-        self.assertEqual(payload["scan_timestamp"], "2026-06-16T14:30:05")
-        self.assertEqual(payload["scanner_id"], 20)
-        self.assertEqual(payload["tracking_number"], "123456789012")
-        self.assertTrue(payload["is_repaired"])
-        self.assertTrue(payload["is_success"])
-
-    def test_outgoing_api_bearer_auth_requires_token_file(self):
-        client = OutgoingAPIClient(
-            url="https://api.example.test/scans",
-            auth_type="bearer",
-            bearer_token_file="",
+        self.assertEqual(
+            payload,
+            {
+                "scanner_id": 20,
+                "tracking_number": "123456789012",
+                "barcode": "9999999999999999999999999999999999",
+                "is_repaired": True,
+                "is_duplicate": False,
+                "scan_timestamp": "2026-06-16T14:30:05Z",
+            },
         )
 
-        with self.assertRaises(OutgoingAPIUnavailable):
-            client._headers()
+    def test_outgoing_api_payload_converts_aware_timestamp_to_utc(self):
+        payload = outgoing_api_payload({
+            "scan_timestamp": datetime.fromisoformat("2026-06-16T10:30:05-04:00"),
+            "scanner_id": 20,
+            "is_duplicate": False,
+            "is_repaired": False,
+            "tracking_number": "123456789012",
+            "barcode": "9" * 34,
+        })
+
+        self.assertEqual(payload["scan_timestamp"], "2026-06-16T14:30:05Z")
+
+    def test_outgoing_api_client_requires_api_key(self):
+        with self.assertRaises(ValueError):
+            OutgoingAPIClient(
+                url="https://api.example.test/scans",
+                api_key="",
+            )
+
+    def test_outgoing_api_headers_include_scanner_api_key(self):
+        client = OutgoingAPIClient(
+            url="https://api.example.test/scans",
+            api_key="scanner-test-key",
+        )
+
+        headers = client._headers()
+
+        self.assertEqual(headers["X-Scanner-Api-Key"], "scanner-test-key")
+        self.assertNotIn("Authorization", headers)
+
+    def test_validate_outgoing_api_api_key_rejects_header_control_characters(self):
+        with self.assertRaises(ValueError):
+            validate_outgoing_api_api_key("scanner-key\nInjected: bad")
+
+        with self.assertRaises(ValueError):
+            validate_outgoing_api_api_key("scanner-key-\N{SNOWMAN}")
 
     def test_load_receiver_config_reads_ini_options(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -339,12 +371,7 @@ retry_interval = 12
 [outgoing_api]
 enabled = true
 url = https://api.example.test/scans
-auth_type = bearer
-bearer_token_file = /etc/industrial-scanner-logger/outgoing-api-token
-oauth2_token_url = https://api.example.test/oauth/token
-oauth2_client_id = scanner-client
-oauth2_client_secret_file = /etc/industrial-scanner-logger/oauth-secret
-oauth2_scope = scans.write
+api_key = scanner-config-key
 timeout = 8
 retry_interval = 17
 poll_interval = 2
@@ -407,21 +434,7 @@ log_level = warning
             self.assertEqual(config.postgresql_retry_interval, 12)
             self.assertTrue(config.outgoing_api_enabled)
             self.assertEqual(config.outgoing_api_url, "https://api.example.test/scans")
-            self.assertEqual(config.outgoing_api_auth_type, "bearer")
-            self.assertEqual(
-                config.outgoing_api_bearer_token_file,
-                "/etc/industrial-scanner-logger/outgoing-api-token",
-            )
-            self.assertEqual(
-                config.outgoing_api_oauth2_token_url,
-                "https://api.example.test/oauth/token",
-            )
-            self.assertEqual(config.outgoing_api_oauth2_client_id, "scanner-client")
-            self.assertEqual(
-                config.outgoing_api_oauth2_client_secret_file,
-                "/etc/industrial-scanner-logger/oauth-secret",
-            )
-            self.assertEqual(config.outgoing_api_oauth2_scope, "scans.write")
+            self.assertEqual(config.outgoing_api_api_key, "scanner-config-key")
             self.assertEqual(config.outgoing_api_timeout, 8)
             self.assertEqual(config.outgoing_api_retry_interval, 17)
             self.assertEqual(config.outgoing_api_poll_interval, 2)
@@ -467,7 +480,7 @@ log_level = warning
 [outgoing_api]
 enabled = true
 url =
-auth_type = none
+api_key =
 """.strip(),
                 encoding="utf-8",
             )
@@ -476,7 +489,7 @@ auth_type = none
 
         self.assertTrue(config.outgoing_api_enabled)
         self.assertEqual(config.outgoing_api_url, "")
-        self.assertEqual(config.outgoing_api_auth_type, "none")
+        self.assertEqual(config.outgoing_api_api_key, "")
 
     def test_classify_scan_accepts_only_expected_numeric_length(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
