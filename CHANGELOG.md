@@ -40,8 +40,9 @@ All notable changes to this project will be documented in this file.
 - Render all human-facing scan dates, scan times, CSV log dates, health totals,
   search rows, TV dashboard rows, and CLI health data in `America/Detroit`
   while keeping stored PostgreSQL timestamps and outgoing API payloads in UTC.
-- Document the scanner timezone contract in `AGENTS.md` so future changes keep
-  display time, database storage time, and outgoing API payload time separate.
+- Expand `AGENTS.md` into a comprehensive agent onboarding guide covering app
+  architecture, scan flow, storage invariants, timezone handling, outgoing API
+  behavior, install/uninstall boundaries, security rules, and validation.
 
 ## 1.3 - 2026-06-05
 
