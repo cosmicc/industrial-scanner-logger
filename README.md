@@ -283,6 +283,9 @@ log availability. The report summarizes scan counts and status only. It does
 not print API keys, database passwords, bearer tokens, or full raw scanner
 payloads. The command exits nonzero when a required health check is degraded;
 use `--no-fail` when collecting a report without making the shell command fail.
+When the command is run with `sudo`, the wrapper collects health as the
+`scannerlogger` service user by default so local PostgreSQL peer authentication
+uses the same identity as the receiver and API services.
 
 The troubleshooting log records service startup, version, configuration, scanner
 connections and disconnections, warnings, and errors. The service journal and

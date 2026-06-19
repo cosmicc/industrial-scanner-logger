@@ -128,7 +128,10 @@ def build_cli_payload(config, dashboard_health: dict, service_statuses: dict) ->
     database_ok = bool(dashboard_health.get("database", {}).get("active"))
     storage_ok = bool(dashboard_health.get("storage", {}).get("ok"))
     mandatory_scanners_ok = bool(dashboard_health.get("mandatory_scanners", {}).get("ok"))
-    outgoing_api_ok = outgoing_api_ready(dashboard_health.get("outgoing_api", {}))
+    outgoing_api_ok = outgoing_api_ready(
+        dashboard_health.get("outgoing_api", {}),
+        dashboard_health.get("database", {}),
+    )
     config_loaded = bool(getattr(config, "config_loaded", False))
     problem_count = sum(
         [
@@ -166,11 +169,23 @@ def required_services(config, service_statuses: dict) -> list[str]:
     return required_service_keys
 
 
-def outgoing_api_ready(outgoing_api: dict) -> bool:
+def outgoing_api_ready(outgoing_api: dict, database: Optional[dict] = None) -> bool:
     if not outgoing_api.get("enabled", False):
         return True
 
+    if outgoing_api_not_checked(outgoing_api, database or {}):
+        return True
+
     return bool(outgoing_api.get("active", False))
+
+
+def outgoing_api_not_checked(outgoing_api: dict, database: dict) -> bool:
+    return (
+        bool(outgoing_api.get("enabled", False))
+        and str(outgoing_api.get("state", "")).strip().lower() == "unknown"
+        and not bool(database.get("active", False))
+        and not outgoing_api.get("error")
+    )
 
 
 def format_health_report(cli_health: dict) -> str:
@@ -258,18 +273,27 @@ def format_database(cli_health: dict) -> list[str]:
 
 def format_outgoing_api(dashboard_health: dict) -> list[str]:
     outgoing_api = dashboard_health.get("outgoing_api", {})
+    database = dashboard_health.get("database", {})
     enabled = bool(outgoing_api.get("enabled", False))
-    active = outgoing_api_ready(outgoing_api)
-    state = outgoing_api.get("state", "unknown")
+    not_checked = outgoing_api_not_checked(outgoing_api, database)
+    active = outgoing_api_ready(outgoing_api, database)
+    state = outgoing_api_display_state(outgoing_api, not_checked)
+    state_marker = "[WARN]" if not_checked else marker_for_bool(active)
     lines = [
-        f"  {marker_for_bool(active)} state: {sanitize_message(state)}",
+        f"  {state_marker} state: {sanitize_message(state)}",
         f"  enabled: {yes_no(enabled)}",
         f"  url configured: {yes_no(outgoing_api.get('url_configured'))}",
         f"  API key configured: {yes_no(outgoing_api.get('api_key_configured'))}",
-        "  queue: "
-        f"{int_or_zero(outgoing_api.get('queue_count'))} pending, "
-        f"{int_or_zero(outgoing_api.get('failed_queue_count'))} failed",
     ]
+
+    if not_checked:
+        lines.append("  queue: unavailable until database health can be checked")
+    else:
+        lines.append(
+            "  queue: "
+            f"{int_or_zero(outgoing_api.get('queue_count'))} pending, "
+            f"{int_or_zero(outgoing_api.get('failed_queue_count'))} failed"
+        )
 
     optional_fields = [
         ("oldest queued", outgoing_api.get("oldest_queued_at")),
@@ -285,6 +309,13 @@ def format_outgoing_api(dashboard_health: dict) -> list[str]:
             lines.append(f"  {label}: {sanitized_value}")
 
     return lines
+
+
+def outgoing_api_display_state(outgoing_api: dict, not_checked: bool) -> str:
+    if not_checked:
+        return "not checked (database unavailable)"
+
+    return outgoing_api.get("state", "unknown")
 
 
 def format_storage(dashboard_health: dict) -> list[str]:

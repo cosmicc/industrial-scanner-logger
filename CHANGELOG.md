@@ -31,6 +31,9 @@ All notable changes to this project will be documented in this file.
 - Make `scripts/install.sh` safe to re-run as an install refresh, preserving
   existing config, app data, PostgreSQL state, logs, and unrelated UFW rules
   while refreshing managed files, schema, helpers, units, nginx, and services.
+- Run the `industrial-scanner-health` wrapper as the scanner service user when
+  invoked through sudo/root so local PostgreSQL peer-auth installs report the
+  same database-backed health and today totals as the web health page.
 
 ## 1.3 - 2026-06-05
 

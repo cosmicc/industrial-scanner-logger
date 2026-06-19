@@ -5,9 +5,32 @@ set -euo pipefail
 # package and dependency versions that run the receiver and API services.
 INSTALL_DIR="${INSTALL_DIR:-/opt/industrial-scanner-logger}"
 PYTHON_BIN="${PYTHON_BIN:-${INSTALL_DIR}/.venv/bin/python}"
+SERVICE_USER="${SERVICE_USER:-scannerlogger}"
+HEALTH_RUN_AS_SERVICE_USER="${HEALTH_RUN_AS_SERVICE_USER:-1}"
+
+run_health_module() {
+    local python_bin="$1"
+    shift
+
+    # The default PostgreSQL DSN uses local peer authentication for the service
+    # user. When an operator runs this helper through sudo, collect health as
+    # that same user so the CLI sees the same database rows as the web health
+    # page and does not print misleading empty totals.
+    if [[ "${HEALTH_RUN_AS_SERVICE_USER}" == "1" && "${EUID}" -eq 0 ]]; then
+        if command -v runuser >/dev/null 2>&1 && id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+            if [[ -n "${PYTHONPATH:-}" ]]; then
+                exec runuser -u "${SERVICE_USER}" -- env PYTHONPATH="${PYTHONPATH}" "${python_bin}" -m industrial_scanner_logger.health_cli "$@"
+            fi
+
+            exec runuser -u "${SERVICE_USER}" -- "${python_bin}" -m industrial_scanner_logger.health_cli "$@"
+        fi
+    fi
+
+    exec "${python_bin}" -m industrial_scanner_logger.health_cli "$@"
+}
 
 if [[ -x "${PYTHON_BIN}" ]]; then
-    exec "${PYTHON_BIN}" -m industrial_scanner_logger.health_cli "$@"
+    run_health_module "${PYTHON_BIN}" "$@"
 fi
 
 # Checkout runs are useful before installation and during maintenance. The src
@@ -19,4 +42,4 @@ if [[ -d "${PROJECT_ROOT}/src" ]]; then
     export PYTHONPATH="${PROJECT_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
 fi
 
-exec python3 -m industrial_scanner_logger.health_cli "$@"
+run_health_module python3 "$@"

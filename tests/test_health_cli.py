@@ -110,6 +110,41 @@ class HealthCliTests(unittest.TestCase):
         self.assertEqual(cli_health["status"], "ok")
         self.assertEqual(cli_health["required_service_keys"], ["scanner"])
 
+    def test_outgoing_api_queue_is_unavailable_when_database_is_unavailable(self):
+        config = self.config(api_enabled=True)
+        dashboard_health = self.dashboard_health()
+        dashboard_health["database"] = {
+            "active": False,
+            "state": "unavailable",
+            "error": "peer authentication failed",
+        }
+        dashboard_health["outgoing_api"] = {
+            "enabled": True,
+            "active": False,
+            "state": "unknown",
+            "queue_count": 0,
+            "failed_queue_count": 0,
+            "oldest_queued_at": None,
+            "last_attempt_at": None,
+            "last_error": None,
+            "last_http_status": None,
+            "url_configured": True,
+            "api_key_configured": True,
+            "error": None,
+        }
+
+        cli_health = self.health_cli.build_cli_payload(
+            config,
+            dashboard_health,
+            self.service_statuses(),
+        )
+        report = self.health_cli.format_health_report(cli_health)
+
+        self.assertEqual(cli_health["status"], "degraded")
+        self.assertIn("[WARN] state: not checked (database unavailable)", report)
+        self.assertIn("queue: unavailable until database health can be checked", report)
+        self.assertNotIn("queue: 0 pending, 0 failed", report)
+
     def test_service_unit_name_adds_missing_suffix(self):
         self.assertEqual(
             self.health_cli.service_unit_name("industrial-scanner-logger"),
