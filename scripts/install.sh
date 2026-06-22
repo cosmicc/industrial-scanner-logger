@@ -104,7 +104,7 @@ Options:
   --postgresql-table NAME  PostgreSQL table in schema.table format [${POSTGRESQL_TABLE}]
   --postgresql-connect-timeout SEC PostgreSQL connection timeout [${POSTGRESQL_CONNECT_TIMEOUT}]
   --postgresql-retry-interval SEC  retry delay after PostgreSQL failures [${POSTGRESQL_RETRY_INTERVAL}]
-  --enable-outgoing-api    enable external API delivery for processed scan rows
+  --enable-outgoing-api    enable external API delivery for queued scan rows
   --disable-outgoing-api   disable external API delivery [default]
   --outgoing-api-url URL   external HTTPS API URL that receives scan JSON [${OUTGOING_API_URL:-not set}]
   --outgoing-api-timeout SEC outgoing API request timeout [${OUTGOING_API_TIMEOUT}]
@@ -1008,11 +1008,11 @@ connect_timeout = ${POSTGRESQL_CONNECT_TIMEOUT}
 retry_interval = ${POSTGRESQL_RETRY_INTERVAL}
 
 [outgoing_api]
-# Enables delivery of processed scan rows to an external API.
+# Enables delivery of successful scans and failed scan rows to an external API.
 # Default: false. Set true only after url and api_key are configured.
 enabled = ${OUTGOING_API_ENABLED_TEXT}
 
-# HTTPS endpoint that receives one processed scan row per JSON POST.
+# HTTPS endpoint that receives one queued scan row per JSON POST.
 # Default: blank. Required when enabled = true. Plain HTTP is only allowed for localhost testing.
 url = ${OUTGOING_API_URL}
 

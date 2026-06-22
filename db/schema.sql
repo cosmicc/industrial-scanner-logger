@@ -94,8 +94,12 @@ CREATE TABLE IF NOT EXISTS scanner_logger.outgoing_scan_queue (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
 
     -- Processed scan_events row that will be sent to the external API.
-    scan_event_id BIGINT NOT NULL UNIQUE
+    scan_event_id BIGINT UNIQUE
         REFERENCES scanner_logger.scan_events (id) ON DELETE CASCADE,
+
+    -- Raw-only failed scan row, such as a no-read marker, sent to the external API.
+    raw_scan_event_id BIGINT UNIQUE
+        REFERENCES scanner_logger.raw_scan_events (id) ON DELETE CASCADE,
 
     -- UTC queue insertion time stored without timezone metadata.
     created_at TIMESTAMP(0) WITHOUT TIME ZONE NOT NULL
@@ -118,8 +122,71 @@ CREATE TABLE IF NOT EXISTS scanner_logger.outgoing_scan_queue (
     last_http_status INTEGER CHECK (
         last_http_status IS NULL
         OR last_http_status BETWEEN 100 AND 599
+    ),
+
+    CONSTRAINT outgoing_scan_queue_one_event_source CHECK (
+        (
+            scan_event_id IS NOT NULL
+            AND raw_scan_event_id IS NULL
+        )
+        OR (
+            scan_event_id IS NULL
+            AND raw_scan_event_id IS NOT NULL
+        )
     )
 );
+
+ALTER TABLE scanner_logger.outgoing_scan_queue
+    ALTER COLUMN scan_event_id DROP NOT NULL;
+
+ALTER TABLE scanner_logger.outgoing_scan_queue
+    ADD COLUMN IF NOT EXISTS raw_scan_event_id BIGINT;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'scanner_logger.outgoing_scan_queue'::REGCLASS
+          AND conname = 'outgoing_scan_queue_raw_scan_event_id_key'
+    ) THEN
+        ALTER TABLE scanner_logger.outgoing_scan_queue
+            ADD CONSTRAINT outgoing_scan_queue_raw_scan_event_id_key
+            UNIQUE (raw_scan_event_id);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'scanner_logger.outgoing_scan_queue'::REGCLASS
+          AND conname = 'outgoing_scan_queue_raw_scan_event_id_fkey'
+    ) THEN
+        ALTER TABLE scanner_logger.outgoing_scan_queue
+            ADD CONSTRAINT outgoing_scan_queue_raw_scan_event_id_fkey
+            FOREIGN KEY (raw_scan_event_id)
+            REFERENCES scanner_logger.raw_scan_events (id) ON DELETE CASCADE;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'scanner_logger.outgoing_scan_queue'::REGCLASS
+          AND conname = 'outgoing_scan_queue_one_event_source'
+    ) THEN
+        ALTER TABLE scanner_logger.outgoing_scan_queue
+            ADD CONSTRAINT outgoing_scan_queue_one_event_source
+            CHECK (
+                (
+                    scan_event_id IS NOT NULL
+                    AND raw_scan_event_id IS NULL
+                )
+                OR (
+                    scan_event_id IS NULL
+                    AND raw_scan_event_id IS NOT NULL
+                )
+            );
+    END IF;
+END $$;
 
 DROP TABLE IF EXISTS scanner_logger.pending_orders;
 

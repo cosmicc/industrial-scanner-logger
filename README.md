@@ -398,27 +398,33 @@ normal `scanner_logger.scan_events` table skips failed nonnumeric scans such as
 no-read markers; those rows remain available in `raw_scan_events`.
 
 When `[outgoing_api] enabled = true`, each processed row inserted into
-`scanner_logger.scan_events` is also queued in
-`scanner_logger.outgoing_scan_queue` for JSON delivery to the configured
-external API URL. The queue follows the processed table exactly: same-scanner
-repeats that are not inserted into `scan_events` are not sent, while processed
-failed rows are sent. Successfully delivered rows are removed from the outgoing
-queue only; the main scan history remains in `scan_events`.
+`scanner_logger.scan_events` and each raw-only failed row inserted into
+`scanner_logger.raw_scan_events` is queued in `scanner_logger.outgoing_scan_queue`
+for JSON delivery to the configured external API URL. Same-scanner repeats that
+are suppressed by duplicate handling are not inserted into `scan_events` or
+`raw_scan_events`, so they are not sent. Successfully delivered rows are removed
+from the outgoing queue only; the main scan history remains in `scan_events`
+and `raw_scan_events`.
 
-The outgoing API sender posts one processed scan per request using
+The outgoing API sender posts one queued scan per request using
 `Content-Type: application/json` and `X-Scanner-Api-Key` from
 `[outgoing_api] api_key`. The JSON body contains only the external contract
-fields: `scanner_id`, `tracking_number`, `barcode`, `is_repaired`,
-`is_duplicate`, and `scan_timestamp`. `scan_timestamp` is always formatted as
-UTC seconds with a trailing `Z`, such as `2026-06-12T14:30:00Z`. If the
-external API is unavailable or rejects a row, the queue row is retained with
-attempt metadata and retried later. The health page shows the outgoing API
-state and queued scan count without marking the whole app degraded.
+fields: `scanner_id`, `scanner_name`, `tracking_number`, `barcode`,
+`is_success`, `failure_reason`, `is_repaired`, `is_duplicate`, and
+`scan_timestamp`. `scanner_name` is the value configured in `[scanner_names]`
+for that scanner ID. Successful rows send `is_success: true` and
+`failure_reason: null`; failed rows send `is_success: false` with the generated
+failure reason, such as `non_numeric`, `too_short`, or `too_long`.
+`scan_timestamp` is always formatted as UTC seconds with a trailing `Z`, such
+as `2026-06-12T14:30:00Z`. If the external API is unavailable or rejects a row,
+the queue row is retained with attempt metadata and retried later. The health
+page shows the outgoing API state and queued scan count without marking the
+whole app degraded.
 
 If outgoing API sending is enabled but the URL or API key is not ready, the
-receiver still starts and continues accepting scanner data. Processed rows
-remain queued locally where possible, and the health page reports the outgoing
-API as misconfigured until the sender can be started safely.
+receiver still starts and continues accepting scanner data. Queued rows remain
+local where possible, and the health page reports the outgoing API as
+misconfigured until the sender can be started safely.
 
 For security, external outgoing API URLs must use `https://`; `http://` is
 accepted only for `localhost` test endpoints. The configured API key is sent

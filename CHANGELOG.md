@@ -8,11 +8,15 @@ All notable changes to this project will be documented in this file.
   field and migrate existing split date/time rows.
 - Force PostgreSQL app sessions to UTC and convert legacy local scan times with
   an explicit `America/Detroit` timezone.
-- Add an optional outgoing API sender with a PostgreSQL-backed processed-scan
+- Add an optional outgoing API sender with a PostgreSQL-backed scan delivery
   queue, retry metadata, secure config placeholders, and health page queue
   status.
 - Send outgoing scan webhooks with the configured `X-Scanner-Api-Key`, the
   required scan JSON fields, and UTC `Z` timestamps.
+- Include configured `scanner_name`, `is_success`, and `failure_reason` in
+  outgoing scan webhook payloads, and queue raw-only failed scans for delivery.
+- Clarify and test that suppressed duplicate repeats are not queued for
+  outgoing API delivery.
 - Add `[outgoing_api] api_key` to the app config and restrict refreshed
   installed config files to root plus the scanner service group.
 - Harden production uptime by making installed services always restart,

@@ -763,7 +763,8 @@ class PostgreSQLScanLogger:
         self.conn = None
         self.insert_sql = None
         self.raw_insert_sql = None
-        self.queue_insert_sql = None
+        self.queue_scan_insert_sql = None
+        self.queue_raw_insert_sql = None
         self.next_retry_time = 0.0
         self.driver_unavailable = False
         self._psycopg = None
@@ -824,15 +825,24 @@ class PostgreSQLScanLogger:
             "(scan_timestamp, scanner_id, scanner_name, last_scanner_id, "
             "is_duplicate, is_repaired, "
             "tracking_number, barcode) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+            "RETURNING id"
         ).format(
             sql.Identifier(self.raw_schema_name),
             sql.Identifier(self.raw_relation_name),
         )
-        self.queue_insert_sql = sql.SQL(
+        self.queue_scan_insert_sql = sql.SQL(
             "INSERT INTO {}.{} (scan_event_id) "
             "VALUES (%s) "
             "ON CONFLICT (scan_event_id) DO NOTHING"
+        ).format(
+            sql.Identifier(self.outgoing_queue_schema_name),
+            sql.Identifier(self.outgoing_queue_relation_name),
+        )
+        self.queue_raw_insert_sql = sql.SQL(
+            "INSERT INTO {}.{} (raw_scan_event_id) "
+            "VALUES (%s) "
+            "ON CONFLICT (raw_scan_event_id) DO NOTHING"
         ).format(
             sql.Identifier(self.outgoing_queue_schema_name),
             sql.Identifier(self.outgoing_queue_relation_name),
@@ -1131,11 +1141,21 @@ class PostgreSQLScanLogger:
         """
         Queue one processed scan row for external API delivery.
 
-        Only processed rows from scan_events are queued. Raw-only rows are not
-        queued because the external API must receive the post-repair result.
+        Processed rows include successful scans, repaired scans, and numeric
+        failures stored in scan_events.
         """
         with self.conn.cursor() as cursor:
-            cursor.execute(self.queue_insert_sql, (scan_event_id,))
+            cursor.execute(self.queue_scan_insert_sql, (scan_event_id,))
+
+    def _enqueue_outgoing_raw_scan(self, raw_scan_event_id: int):
+        """
+        Queue one raw-only failed scan row for external API delivery.
+
+        Raw-only rows cover failures that remain outside scan_events, such as
+        scanner no-read markers and other nonnumeric failed reads.
+        """
+        with self.conn.cursor() as cursor:
+            cursor.execute(self.queue_raw_insert_sql, (raw_scan_event_id,))
 
     def write_scan_event(
         self,
@@ -1164,7 +1184,7 @@ class PostgreSQLScanLogger:
 
         try:
             with self.conn.transaction():
-                self._insert_scan_event(
+                raw_event_id = self._insert_scan_event(
                     self.raw_insert_sql,
                     raw_tracking_number,
                     raw_barcode,
@@ -1174,6 +1194,7 @@ class PostgreSQLScanLogger:
                     raw_is_duplicate,
                     False,
                     scan_timestamp,
+                    returning_id=True,
                 )
 
                 if write_scan_event:
@@ -1192,6 +1213,8 @@ class PostgreSQLScanLogger:
 
                     if self.outgoing_api_enabled and scan_event_id is not None:
                         self._enqueue_outgoing_scan(scan_event_id)
+                elif self.outgoing_api_enabled and raw_event_id is not None:
+                    self._enqueue_outgoing_raw_scan(raw_event_id)
         except Exception as exc:
             self._mark_unavailable("insert", exc)
 
@@ -1251,7 +1274,7 @@ class OutgoingAPIClient:
 
     def post_scan(self, scan_row: dict) -> int:
         """
-        Send one processed scan row to the configured external API.
+        Send one queued scan row to the configured external API.
         """
         payload = outgoing_api_payload(scan_row)
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -1301,12 +1324,17 @@ class OutgoingAPIClient:
 
 def outgoing_api_payload(scan_row: dict) -> dict:
     """
-    Convert a scan_events row into the external API's required JSON body.
+    Convert a queued scan row into the external API's required JSON body.
     """
+    is_success = bool(scan_row["is_success"])
+
     return {
         "scanner_id": scan_row["scanner_id"],
+        "scanner_name": scan_row.get("scanner_name") or "",
         "tracking_number": scan_row["tracking_number"],
         "barcode": scan_row["barcode"],
+        "is_success": is_success,
+        "failure_reason": None if is_success else scan_row.get("failure_reason"),
         "is_repaired": bool(scan_row["is_repaired"]),
         "is_duplicate": bool(scan_row["is_duplicate"]),
         "scan_timestamp": outgoing_api_timestamp(scan_row["scan_timestamp"]),
@@ -1393,6 +1421,8 @@ class PostgreSQLOutgoingScanQueue:
         self.scan_schema_name, self.scan_relation_name = parse_postgresql_table(
             scan_table_name
         )
+        self.raw_scan_schema_name = self.scan_schema_name
+        self.raw_scan_relation_name = f"raw_{self.scan_relation_name}"
         self.queue_schema_name, self.queue_relation_name = parse_postgresql_table(
             queue_table_name
         )
@@ -1482,6 +1512,12 @@ class PostgreSQLOutgoingScanQueue:
             self._sql.Identifier(self.scan_relation_name),
         )
 
+    def _raw_scan_table_sql(self):
+        return self._sql.SQL("{}.{}").format(
+            self._sql.Identifier(self.raw_scan_schema_name),
+            self._sql.Identifier(self.raw_scan_relation_name),
+        )
+
     def _queue_table_sql(self):
         return self._sql.SQL("{}.{}").format(
             self._sql.Identifier(self.queue_schema_name),
@@ -1496,27 +1532,39 @@ class PostgreSQLOutgoingScanQueue:
                 queue.id AS queue_id,
                 queue.attempt_count,
                 events.id AS scan_event_id,
-                events.scan_timestamp,
-                events.scanner_id,
-                events.scanner_name,
-                events.last_scanner_id,
-                events.is_duplicate,
-                events.is_repaired,
-                events.tracking_number,
-                events.barcode,
-                events.barcode_length,
-                events.is_success,
-                events.failure_reason
+                raw_events.id AS raw_scan_event_id,
+                CASE
+                    WHEN events.id IS NOT NULL THEN 'scan_events'
+                    ELSE 'raw_scan_events'
+                END AS queue_source,
+                COALESCE(events.scan_timestamp, raw_events.scan_timestamp) AS scan_timestamp,
+                COALESCE(events.scanner_id, raw_events.scanner_id) AS scanner_id,
+                COALESCE(events.scanner_name, raw_events.scanner_name) AS scanner_name,
+                COALESCE(events.last_scanner_id, raw_events.last_scanner_id) AS last_scanner_id,
+                COALESCE(events.is_duplicate, raw_events.is_duplicate) AS is_duplicate,
+                COALESCE(events.is_repaired, raw_events.is_repaired) AS is_repaired,
+                COALESCE(events.tracking_number, raw_events.tracking_number) AS tracking_number,
+                COALESCE(events.barcode, raw_events.barcode) AS barcode,
+                COALESCE(events.barcode_length, raw_events.barcode_length) AS barcode_length,
+                COALESCE(events.is_success, raw_events.is_success) AS is_success,
+                COALESCE(events.failure_reason, raw_events.failure_reason) AS failure_reason
             FROM {queue_table} AS queue
-            JOIN {scan_table} AS events
+            LEFT JOIN {scan_table} AS events
               ON events.id = queue.scan_event_id
+            LEFT JOIN {raw_scan_table} AS raw_events
+              ON raw_events.id = queue.raw_scan_event_id
             WHERE queue.next_attempt_at <= (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+              AND (
+                  events.id IS NOT NULL
+                  OR raw_events.id IS NOT NULL
+              )
             ORDER BY queue.created_at ASC, queue.id ASC
             LIMIT %s
             """
         ).format(
             queue_table=self._queue_table_sql(),
             scan_table=self._scan_table_sql(),
+            raw_scan_table=self._raw_scan_table_sql(),
         )
 
         try:
@@ -1643,29 +1691,29 @@ class OutgoingAPISender:
 
         for scan_row in queued_scans:
             queue_id = int(scan_row["queue_id"])
-            scan_event_id = int(scan_row["scan_event_id"])
+            event_label = outgoing_queue_event_label(scan_row)
 
             try:
                 self.client.post_scan(scan_row)
             except OutgoingAPIPermanentError as exc:
-                self._record_delivery_failure(queue_id, scan_event_id, exc)
+                self._record_delivery_failure(queue_id, event_label, exc)
                 continue
             except OutgoingAPIUnavailable as exc:
-                self._record_delivery_failure(queue_id, scan_event_id, exc)
+                self._record_delivery_failure(queue_id, event_label, exc)
                 break
             except Exception as exc:
                 wrapped_error = OutgoingAPIUnavailable(
                     f"unexpected outgoing API sender error: {safe_error_text(exc)}"
                 )
-                self._record_delivery_failure(queue_id, scan_event_id, wrapped_error)
+                self._record_delivery_failure(queue_id, event_label, wrapped_error)
                 break
 
             self.queue.delete_queue_row(queue_id)
             sent_count += 1
             SCRIPT_LOGGER.info(
-                "Outgoing API scan delivered queue_id=%s scan_event_id=%s",
+                "Outgoing API scan delivered queue_id=%s %s",
                 queue_id,
-                scan_event_id,
+                event_label,
             )
 
         return sent_count
@@ -1673,7 +1721,7 @@ class OutgoingAPISender:
     def _record_delivery_failure(
         self,
         queue_id: int,
-        scan_event_id: int,
+        event_label: str,
         exc: OutgoingAPIError,
     ):
         error_message = safe_error_text(exc)
@@ -1684,13 +1732,29 @@ class OutgoingAPISender:
             self.retry_interval,
         )
         SCRIPT_LOGGER.warning(
-            "Outgoing API scan delivery failed queue_id=%s scan_event_id=%s "
+            "Outgoing API scan delivery failed queue_id=%s %s "
             "http_status=%s error=%s",
             queue_id,
-            scan_event_id,
+            event_label,
             exc.http_status or "none",
             error_message,
         )
+
+
+def outgoing_queue_event_label(scan_row: dict) -> str:
+    """
+    Return a concise queue source label for delivery logs.
+    """
+    scan_event_id = scan_row.get("scan_event_id")
+    raw_scan_event_id = scan_row.get("raw_scan_event_id")
+
+    if scan_event_id is not None:
+        return f"scan_event_id={scan_event_id}"
+
+    if raw_scan_event_id is not None:
+        return f"raw_scan_event_id={raw_scan_event_id}"
+
+    return "scan_event_id=unknown"
 
 
 class DailyCsvLogger:
@@ -3146,7 +3210,8 @@ def main():
         except (RuntimeError, ValueError, OutgoingAPIError) as exc:
             SCRIPT_LOGGER.warning(
                 "Outgoing API sender disabled; scanner intake will continue "
-                "and processed scans will remain queued if possible. error=%s",
+                "and queued scan rows will remain stored locally where possible. "
+                "error=%s",
                 exc,
             )
 

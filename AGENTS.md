@@ -10,7 +10,7 @@ broken.
 Industrial Scanner Logger is a Debian/Ubuntu, systemd-managed Python app for
 fixed-mount industrial barcode scanners. It accepts scanner output over TCP,
 classifies FedEx scan events, writes CSV and raw scan logs, stores scan data in
-PostgreSQL, optionally delivers processed scans to an outgoing API, exposes a
+PostgreSQL, optionally delivers queued scan rows to an outgoing API, exposes a
 read-only FastAPI service behind nginx, serves static browser dashboards, and
 provides a shell health report.
 
@@ -121,8 +121,8 @@ scan history.
 8. Accepted events are written to the daily CSV, failed scans CSV when
    applicable, raw scan data log, `scanner_logger.raw_scan_events`, and usually
    `scanner_logger.scan_events`.
-9. If outgoing API is enabled, accepted processed `scan_events` rows are queued
-   in `scanner_logger.outgoing_scan_queue`.
+9. If outgoing API is enabled, accepted processed `scan_events` rows and
+   raw-only failed rows are queued in `scanner_logger.outgoing_scan_queue`.
 10. The API, browser pages, and CLI health report read from PostgreSQL and
     local service/log state; they do not mutate scan history.
 
@@ -135,7 +135,8 @@ scan history.
 - `scanner_logger.raw_scan_events` stores pre-repair/raw scanner values and is
   the source for raw scan rows shown on the health page.
 - Nonnumeric failed scans, including the no-read marker, are raw-only in
-  PostgreSQL. They still appear in CSV/failed-scan logging.
+  PostgreSQL. They still appear in CSV/failed-scan logging and can be queued
+  for outgoing API delivery as failures.
 - Repaired scans store the repaired full 34-digit barcode in `barcode` and the
   12-digit suffix in `tracking_number`; the original short read remains in
   `raw_scan_events`.
@@ -154,6 +155,8 @@ scan history.
   tracking numbers accepted in that group since the previous accepted scan of
   the same tracking number.
 - Once the threshold is met, the repeat is accepted with `is_duplicate = true`.
+- Suppressed duplicate successes are not written to `scan_events` or
+  `raw_scan_events`, and they must not be queued for outgoing API delivery.
 - PostgreSQL duplicate lookup considers the previous 30 days with UTC stored
   timestamps. The in-memory state is only a fallback/restart helper.
 
@@ -231,13 +234,17 @@ scan history.
 
 - Outgoing delivery is optional. Scanner intake should continue when outgoing
   API config is absent or the sender cannot start.
-- Only processed rows inserted into `scanner_logger.scan_events` are queued.
-  Raw-only rows are not sent.
+- Processed rows inserted into `scanner_logger.scan_events` are queued. Raw-only
+  failed rows from `scanner_logger.raw_scan_events` are also queued so no-read
+  and nonnumeric failures can be sent without changing scan history semantics.
 - The sender posts one JSON row per request with `Content-Type:
   application/json`, `Accept: application/json`, and `X-Scanner-Api-Key`.
 - The outgoing JSON body is intentionally small:
-  `scanner_id`, `tracking_number`, `barcode`, `is_repaired`, `is_duplicate`,
-  and UTC `scan_timestamp`.
+  `scanner_id`, `scanner_name`, `tracking_number`, `barcode`, `is_success`,
+  `failure_reason`, `is_repaired`, `is_duplicate`, and UTC `scan_timestamp`.
+- `scanner_name` comes from the `[scanner_names]` config value stored with the
+  scan row. Successful rows send `is_success = true` and `failure_reason = null`;
+  failed rows send `is_success = false` with the generated failure reason.
 - Successful delivery deletes only the queue row. It never deletes scan
   history.
 - HTTP `429` and `5xx` responses are retryable. Other non-2xx responses are

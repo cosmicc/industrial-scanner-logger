@@ -110,6 +110,74 @@ class FakeDuplicatePostgreSQLLogger(FakePostgreSQLLogger):
         return self.duplicate_state
 
 
+class FakePostgreSQLTransaction:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        return None
+
+
+class CapturingPostgreSQLScanLogger(PostgreSQLScanLogger):
+    def __init__(self):
+        super().__init__(outgoing_api_enabled=True)
+        self.conn = self
+        self.next_insert_id = 100
+        self.inserted_rows = []
+        self.queued_scan_event_ids = []
+        self.queued_raw_scan_event_ids = []
+
+    def transaction(self):
+        return FakePostgreSQLTransaction()
+
+    def _connect(self):
+        return None
+
+    def duplicate_state_for_success(
+        self,
+        _scanner_id,
+        _tracking_number,
+        _scan_timestamp,
+        _paired_scanner_ids=None,
+    ):
+        return None
+
+    def _insert_scan_event(
+        self,
+        insert_sql,
+        tracking_number,
+        barcode,
+        scanner_id,
+        scanner_name,
+        last_scanner_id,
+        is_duplicate,
+        is_repaired,
+        scan_timestamp,
+        returning_id=False,
+    ):
+        self.next_insert_id += 1
+        self.inserted_rows.append({
+            "insert_sql": insert_sql,
+            "tracking_number": tracking_number,
+            "barcode": barcode,
+            "scanner_id": scanner_id,
+            "scanner_name": scanner_name,
+            "last_scanner_id": last_scanner_id,
+            "is_duplicate": is_duplicate,
+            "is_repaired": is_repaired,
+            "scan_timestamp": scan_timestamp,
+            "returning_id": returning_id,
+            "id": self.next_insert_id,
+        })
+        return self.next_insert_id if returning_id else None
+
+    def _enqueue_outgoing_scan(self, scan_event_id):
+        self.queued_scan_event_ids.append(scan_event_id)
+
+    def _enqueue_outgoing_raw_scan(self, raw_scan_event_id):
+        self.queued_raw_scan_event_ids.append(raw_scan_event_id)
+
+
 class FakeSocket:
     def __init__(self, chunks):
         self.chunks = list(chunks)
@@ -184,8 +252,11 @@ class ReceiverTests(unittest.TestCase):
         self.assertIn("AT TIME ZONE ''UTC''", schema_sql)
         self.assertNotIn("current_setting(''TimeZone'')", schema_sql)
         self.assertIn("scanner_logger.outgoing_scan_queue", schema_sql)
-        self.assertIn("scan_event_id BIGINT NOT NULL UNIQUE", schema_sql)
+        self.assertIn("scan_event_id BIGINT UNIQUE", schema_sql)
+        self.assertIn("raw_scan_event_id BIGINT UNIQUE", schema_sql)
         self.assertIn("REFERENCES scanner_logger.scan_events", schema_sql)
+        self.assertIn("REFERENCES scanner_logger.raw_scan_events", schema_sql)
+        self.assertIn("outgoing_scan_queue_one_event_source", schema_sql)
 
     def test_clean_barcode_removes_scanner_line_noise(self):
         self.assertEqual(clean_barcode("\x0012345\r\n"), "12345")
@@ -288,9 +359,41 @@ class ReceiverTests(unittest.TestCase):
             payload,
             {
                 "scanner_id": 20,
+                "scanner_name": "Lane 1 Scanner",
                 "tracking_number": "123456789012",
                 "barcode": "9999999999999999999999999999999999",
+                "is_success": True,
+                "failure_reason": None,
                 "is_repaired": True,
+                "is_duplicate": False,
+                "scan_timestamp": "2026-06-16T14:30:05Z",
+            },
+        )
+
+    def test_outgoing_api_payload_includes_failure_reason_for_failed_scans(self):
+        scan_timestamp = datetime(2026, 6, 16, 14, 30, 5)
+        payload = outgoing_api_payload({
+            "scan_timestamp": scan_timestamp,
+            "scanner_id": 20,
+            "scanner_name": "Lane 1 Scanner",
+            "is_duplicate": False,
+            "is_repaired": False,
+            "tracking_number": "__NO_READ__",
+            "barcode": "__NO_READ__",
+            "is_success": False,
+            "failure_reason": "non_numeric",
+        })
+
+        self.assertEqual(
+            payload,
+            {
+                "scanner_id": 20,
+                "scanner_name": "Lane 1 Scanner",
+                "tracking_number": "__NO_READ__",
+                "barcode": "__NO_READ__",
+                "is_success": False,
+                "failure_reason": "non_numeric",
+                "is_repaired": False,
                 "is_duplicate": False,
                 "scan_timestamp": "2026-06-16T14:30:05Z",
             },
@@ -300,13 +403,80 @@ class ReceiverTests(unittest.TestCase):
         payload = outgoing_api_payload({
             "scan_timestamp": datetime.fromisoformat("2026-06-16T10:30:05-04:00"),
             "scanner_id": 20,
+            "scanner_name": "Lane 1 Scanner",
             "is_duplicate": False,
             "is_repaired": False,
             "tracking_number": "123456789012",
             "barcode": "9" * 34,
+            "is_success": True,
+            "failure_reason": None,
         })
 
         self.assertEqual(payload["scan_timestamp"], "2026-06-16T14:30:05Z")
+
+    def test_postgresql_logger_queues_raw_only_failures_for_outgoing_api(self):
+        logger = CapturingPostgreSQLScanLogger()
+        scan_timestamp = datetime(2026, 6, 16, 14, 30, 5)
+
+        logger.write_scan_event(
+            tracking_number="__NO_READ__",
+            barcode="__NO_READ__",
+            scanner_id="20",
+            scanner_name="Lane 1 Scanner",
+            last_scanner_id="21",
+            is_duplicate=False,
+            is_repaired=False,
+            scan_timestamp=scan_timestamp,
+            write_scan_event=False,
+        )
+
+        self.assertEqual(len(logger.inserted_rows), 1)
+        self.assertEqual(logger.inserted_rows[0]["scanner_name"], "Lane 1 Scanner")
+        self.assertEqual(logger.queued_scan_event_ids, [])
+        self.assertEqual(logger.queued_raw_scan_event_ids, [101])
+
+    def test_postgresql_logger_queues_processed_rows_for_outgoing_api(self):
+        logger = CapturingPostgreSQLScanLogger()
+        scan_timestamp = datetime(2026, 6, 16, 14, 30, 5)
+
+        logger.write_scan_event(
+            tracking_number="123456789012",
+            barcode="9" * 34,
+            scanner_id="20",
+            scanner_name="Lane 1 Scanner",
+            last_scanner_id="21",
+            is_duplicate=False,
+            is_repaired=False,
+            scan_timestamp=scan_timestamp,
+        )
+
+        self.assertEqual(len(logger.inserted_rows), 2)
+        self.assertEqual(logger.queued_scan_event_ids, [102])
+        self.assertEqual(logger.queued_raw_scan_event_ids, [])
+
+    def test_suppressed_duplicates_are_not_queued_for_outgoing_api(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            postgresql_logger = CapturingPostgreSQLScanLogger()
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                postgresql_logger=postgresql_logger,
+            )
+
+            valid_tracking = "1" * 34
+
+            logger.write_scan_event(valid_tracking, "20")
+            logger.write_scan_event(valid_tracking, "20")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(len(postgresql_logger.inserted_rows), 2)
+            self.assertEqual(postgresql_logger.queued_scan_event_ids, [102])
+            self.assertEqual(postgresql_logger.queued_raw_scan_event_ids, [])
 
     def test_outgoing_api_client_requires_api_key(self):
         with self.assertRaises(ValueError):
