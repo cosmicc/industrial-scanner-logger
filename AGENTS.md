@@ -279,6 +279,9 @@ scan history.
 - Uvicorn routes are `/v1/...`; nginx strips the `/api` prefix when proxying.
 - `/api/v1/dashboard/health` is the shared payload for the web health page, TV
   dashboard, and CLI health report.
+- The dashboard `last_received` row must come from actual scanner data rows in
+  `raw_scan_events`; scanner connect/disconnect log messages must not update
+  latest received data.
 - `/api/v1/scans` and `/api/v1/scans/count` support date range, scanner,
   barcode/tracking, status, duplicate, repair, limit, and offset filters.
 - Numeric 12-digit barcode filters match `tracking_number` and the rightmost

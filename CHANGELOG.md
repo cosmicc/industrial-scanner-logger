@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## 1.4 - 2026-06-24
+
 - Store PostgreSQL scan event timing in one timezone-free UTC `scan_timestamp`
   field and migrate existing split date/time rows.
 - Force PostgreSQL app sessions to UTC and convert legacy local scan times with
@@ -44,6 +46,10 @@ All notable changes to this project will be documented in this file.
 - Render all human-facing scan dates, scan times, CSV log dates, health totals,
   search rows, TV dashboard rows, and CLI health data in `America/Detroit`
   while keeping stored PostgreSQL timestamps and outgoing API payloads in UTC.
+- Use raw scan data rows, not scanner connection or disconnection log messages,
+  for the health dashboard's latest received data.
+- Remove the API service card from the health page and move PostgreSQL and
+  storage status cards into the first status row.
 - Expand `AGENTS.md` into a comprehensive agent onboarding guide covering app
   architecture, scan flow, storage invariants, timezone handling, outgoing API
   behavior, install/uninstall boundaries, security rules, and validation.

@@ -264,19 +264,7 @@ def build_dashboard_health(
     try:
         db = connect_db(config)
         try:
-            last_received = fetch_one(
-                db,
-                f"""
-                SELECT
-{SCAN_EVENT_SELECT_SQL}
-                FROM scanner_logger.scan_events
-                ORDER BY scan_timestamp DESC, id DESC
-                LIMIT 1
-                """,
-                [],
-            )
-            if last_received:
-                last_received = scan_row_with_display_name(config, last_received)
+            last_received = fetch_last_received_scan_data(db, config)
 
             recent_scans = [
                 scan_row_with_display_name(config, row)
@@ -379,6 +367,31 @@ def build_dashboard_health(
         "outgoing_api": outgoing_api,
         "script_log": script_log,
     }
+
+
+def fetch_last_received_scan_data(db, config) -> Optional[dict]:
+    """Return the newest scanner data frame recorded in PostgreSQL.
+
+    Connection lifecycle messages are troubleshooting log entries only. The
+    dashboard's latest received data must come from scanner data rows so
+    connecting or disconnecting a scanner does not reset the visible scan age.
+    """
+    row = fetch_one(
+        db,
+        f"""
+        SELECT
+{SCAN_EVENT_SELECT_SQL}
+        FROM scanner_logger.raw_scan_events
+        ORDER BY scan_timestamp DESC, id DESC
+        LIMIT 1
+        """,
+        [],
+    )
+
+    if not row:
+        return None
+
+    return scan_row_with_display_name(config, row)
 
 
 def empty_outgoing_api_health(config) -> dict:

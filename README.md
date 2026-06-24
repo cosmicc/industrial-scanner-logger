@@ -4,7 +4,7 @@
 [![CI](https://github.com/cosmicc/industrial-scanner-logger/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/cosmicc/industrial-scanner-logger/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/github/actions/workflow/status/cosmicc/industrial-scanner-logger/ci.yml?branch=main&label=tests&logo=githubactions&logoColor=white)](https://github.com/cosmicc/industrial-scanner-logger/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12-3776ab?logo=python&logoColor=white)](pyproject.toml)
-[![Release](https://img.shields.io/badge/release-1.3-blue.svg)](https://github.com/cosmicc/industrial-scanner-logger/releases/tag/v1.3)
+[![Release](https://img.shields.io/badge/release-1.4-blue.svg)](https://github.com/cosmicc/industrial-scanner-logger/releases/tag/v1.4)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-required-336791?logo=postgresql&logoColor=white)](README.md#requirements)
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](README.md#current-behavior)
 <!-- badges:end -->
@@ -510,8 +510,9 @@ and shows the newest entries first in groups of 10. `/health` refreshes every 3
 seconds by default, and `/tv-dashboard` refreshes every second by default. The
 TV dashboard is formatted for a 1920x1080 display and currently shows scan
 rate, today's total, successful, duplicate, and failed counts, last received
-scan age, connected scanner count, and mandatory scanner warnings from the
-health dashboard data.
+scanner-data age, connected scanner count, and mandatory scanner warnings from
+the health dashboard data. Scanner connect and disconnect log messages do not
+count as last received scanner data.
 
 The health page also monitors free disk space for the CSV output directory, raw
 scan data log directory, troubleshooting log directory, and root filesystem. It

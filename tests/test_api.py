@@ -457,6 +457,63 @@ class ApiQueryTests(unittest.TestCase):
             },
         )
 
+    def test_last_received_scan_data_uses_raw_scan_rows(self):
+        from types import SimpleNamespace
+
+        from industrial_scanner_logger.api import fetch_last_received_scan_data
+
+        class FakeCursor:
+            def __init__(self):
+                self.query = None
+                self.params = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return None
+
+            def execute(self, query, params):
+                self.query = str(query)
+                self.params = params
+
+            def fetchone(self):
+                return {
+                    "id": 42,
+                    "scan_timestamp": datetime(2026, 6, 16, 9, 30, 5),
+                    "scanner_id": 20,
+                    "scanner_name": "",
+                    "last_scanner_id": 21,
+                    "is_duplicate": False,
+                    "is_repaired": False,
+                    "tracking_number": "__NO_READ__",
+                    "barcode": "__NO_READ__",
+                    "barcode_length": 11,
+                    "is_success": False,
+                    "failure_reason": "non_numeric",
+                }
+
+        class FakeDb:
+            def __init__(self):
+                self.cursor_instance = FakeCursor()
+
+            def cursor(self):
+                return self.cursor_instance
+
+        db = FakeDb()
+        row = fetch_last_received_scan_data(
+            db,
+            SimpleNamespace(scanner_names={"20": "Lane 1 Scanner"}),
+        )
+
+        self.assertIn("FROM scanner_logger.raw_scan_events", db.cursor_instance.query)
+        self.assertNotIn("FROM scanner_logger.scan_events", db.cursor_instance.query)
+        self.assertEqual(db.cursor_instance.params, [])
+        self.assertEqual(row["display_name"], "Lane 1 Scanner")
+        self.assertEqual(row["scan_timestamp"], "2026-06-16T05:30:05-04:00")
+        self.assertFalse(row["is_success"])
+        self.assertEqual(row["failure_reason"], "non_numeric")
+
     def test_active_duplicate_alert_returns_latest_duplicate(self):
         from types import SimpleNamespace
 

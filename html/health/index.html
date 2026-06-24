@@ -36,31 +36,12 @@
       </div>
 
       <div class="card">
-        <h2>API Service</h2>
-        <div class="status-row">
-          <span id="api-dot" class="dot"></span>
-          <span id="api-status">Checking...</span>
-        </div>
-        <div id="api-detail" class="detail"></div>
-      </div>
-
-      <div class="card">
         <h2>PostgreSQL</h2>
         <div class="status-row">
           <span id="db-dot" class="dot"></span>
           <span id="db-status">Checking...</span>
         </div>
         <div id="db-detail" class="detail"></div>
-      </div>
-
-      <div class="card">
-        <h2>Outgoing API</h2>
-        <div class="status-row">
-          <span id="outgoing-api-dot" class="dot"></span>
-          <span id="outgoing-api-status">Checking...</span>
-        </div>
-        <div id="outgoing-api-queue" class="big-value">0 queued</div>
-        <div id="outgoing-api-detail" class="detail"></div>
       </div>
 
       <div class="card">
@@ -71,6 +52,16 @@
         </div>
         <div id="storage-free" class="big-value">Checking...</div>
         <div id="storage-detail" class="detail"></div>
+      </div>
+
+      <div class="card">
+        <h2>Outgoing API</h2>
+        <div class="status-row">
+          <span id="outgoing-api-dot" class="dot"></span>
+          <span id="outgoing-api-status">Checking...</span>
+        </div>
+        <div id="outgoing-api-queue" class="big-value">0 queued</div>
+        <div id="outgoing-api-detail" class="detail"></div>
       </div>
     </section>
 
@@ -819,7 +810,6 @@
         displayTimeZone = data.display_timezone || DEFAULT_DISPLAY_TIME_ZONE;
 
         const scanner = data.services?.scanner || {};
-        const api = data.services?.api || {};
         const database = data.database || {};
 
         document.getElementById("app-version").textContent =
@@ -830,13 +820,6 @@
           Boolean(scanner.active),
           scanner.active ? "Running" : "Not Running",
           `${scanner.unit || "scanner service"}: ${scanner.state || "unknown"}`
-        );
-
-        setIndicator(
-          "api",
-          Boolean(api.active),
-          api.active ? "Running" : "Not Running",
-          `${api.unit || "api service"}: ${api.state || "unknown"}`
         );
 
         setIndicator(
@@ -875,7 +858,6 @@
 
       } catch (error) {
         setIndicator("scanner", false, "Unknown", "API unavailable.");
-        setIndicator("api", false, "Unavailable", error.message);
         setIndicator("db", false, "Unknown", "API unavailable.");
         setIndicator("storage", false, "Unknown", "API unavailable.");
         document.getElementById("storage-free").textContent = "Unknown";

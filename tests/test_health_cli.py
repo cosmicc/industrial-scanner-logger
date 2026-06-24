@@ -281,7 +281,7 @@ class HealthCliTests(unittest.TestCase):
     def dashboard_health(self):
         return {
             "status": "ok",
-            "version": "1.3",
+            "version": "1.4",
             "generated_at": "2026-06-18T14:00:00-04:00",
             "services": {},
             "database": {
