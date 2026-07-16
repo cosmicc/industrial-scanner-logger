@@ -81,6 +81,10 @@ scan history.
 - `nginx/industrial-scanner-logger.conf` is the nginx site template.
 - `html/` contains static browser UI: home, health, logs, search, TV dashboard,
   and shared CSS.
+- `VERSION` contains the current development or release version and must match
+  `src/industrial_scanner_logger/_version.py`.
+- `TROUBLESHOOTING.md` contains operator diagnostics, including remote web
+  proxy and application-firewall checks.
 - `scanner_tcp_receiver.py` is the compatibility wrapper for the receiver.
 - `tests/` contains unit tests for receiver behavior, API/query behavior, CLI
   health formatting, and installer script expectations.
@@ -284,6 +288,10 @@ scan history.
   latest received data.
 - `/api/v1/scans` and `/api/v1/scans/count` support date range, scanner,
   barcode/tracking, status, duplicate, repair, limit, and offset filters.
+- `/api/v1/scans/summary` uses the same search filters and returns matching all,
+  successful, failed, duplicate, and repaired totals.
+- Search scanner choices and result rows should identify both scanner ID and
+  configured scanner name so operators can use either value.
 - Numeric 12-digit barcode filters match `tracking_number` and the rightmost
   12 digits of full barcode fields.
 - `/api/v1/logs/daily-csv` excludes the current `America/Detroit` day because
@@ -291,6 +299,14 @@ scan history.
 - Browser pages are static files under `html/`; after install they are copied
   to the nginx web root. If you change static assets, install/update workflows
   must copy them.
+- The TV dashboard's last-received age must use the health payload's
+  server-generated timestamp rather than trusting the viewing device clock.
+- Keep explicit no-redirect nginx routes for `/health`, `/search`, `/logs`, and
+  `/tv-dashboard`; remote reverse proxies may otherwise receive an internal
+  host or port in an automatic directory redirect.
+- Home, Health, and TV use `/api/v1/dashboard/health`, while Search and CSV Logs
+  use additional API paths. When only the latter fail remotely, trace those API
+  requests through the reverse proxy or WAF before changing scanner logic.
 - UI health output must be useful for troubleshooting without exposing secrets.
 
 ## CLI Health Contract

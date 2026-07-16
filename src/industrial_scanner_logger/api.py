@@ -1490,6 +1490,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/health"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans/count"),
+                external_path(request_root_path, f"{API_VERSION_PREFIX}/scans/summary"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scans/{{scan_id}}"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/scanners"),
                 external_path(request_root_path, f"{API_VERSION_PREFIX}/views"),
@@ -1568,6 +1569,38 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
         )
         row = fetch_one(db, query, params)
         return {"total_results": int(row.get("total_results") or 0)}
+
+    @app.get(f"{API_VERSION_PREFIX}/scans/summary")
+    def summarize_scans(
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        scanner_id: Optional[int] = Query(default=None, ge=0, le=255),
+        barcode: Optional[str] = None,
+        is_success: Optional[bool] = None,
+        is_duplicate: Optional[bool] = None,
+        is_repaired: Optional[bool] = None,
+        db=Depends(get_db),
+    ):
+        query, params = build_scan_events_summary_query(
+            start_date=start_date,
+            end_date=end_date,
+            scanner_id=scanner_id,
+            barcode=barcode,
+            is_success=is_success,
+            is_duplicate=is_duplicate,
+            is_repaired=is_repaired,
+        )
+        row = fetch_one(db, query, params) or {}
+        return {
+            key: int(row.get(key) or 0)
+            for key in (
+                "total_results",
+                "successful_scans",
+                "failed_scans",
+                "duplicate_scans",
+                "repaired_scans",
+            )
+        }
 
     @app.get(f"{API_VERSION_PREFIX}/scans/{{scan_id}}")
     def get_scan(scan_id: int, db=Depends(get_db), config=Depends(get_config)):
@@ -1804,6 +1837,39 @@ def build_scan_events_count_query(
     query = sql.SQL("SELECT count(*) AS total_results FROM scanner_logger.scan_events{}").format(
         where_clause(conditions)
     )
+    return query, params
+
+
+def build_scan_events_summary_query(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    scanner_id: Optional[int] = None,
+    barcode: Optional[str] = None,
+    is_success: Optional[bool] = None,
+    is_duplicate: Optional[bool] = None,
+    is_repaired: Optional[bool] = None,
+):
+    """Build one aggregate query for the totals shown above search results."""
+    conditions, params = scan_events_filter_conditions(
+        start_date=start_date,
+        end_date=end_date,
+        scanner_id=scanner_id,
+        barcode=barcode,
+        is_success=is_success,
+        is_duplicate=is_duplicate,
+        is_repaired=is_repaired,
+    )
+    query = sql.SQL(
+        """
+        SELECT
+            count(*) AS total_results,
+            count(*) FILTER (WHERE is_success) AS successful_scans,
+            count(*) FILTER (WHERE NOT is_success) AS failed_scans,
+            count(*) FILTER (WHERE is_duplicate) AS duplicate_scans,
+            count(*) FILTER (WHERE is_repaired) AS repaired_scans
+        FROM scanner_logger.scan_events{}
+        """
+    ).format(where_clause(conditions))
     return query, params
 
 

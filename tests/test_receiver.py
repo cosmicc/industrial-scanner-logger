@@ -214,7 +214,7 @@ class FakeSocket:
 
 class ReceiverTests(unittest.TestCase):
     def test_project_version_is_1_4(self):
-        self.assertEqual(__version__, "1.4")
+        self.assertEqual(__version__, "1.5")
 
     def test_postgresql_logger_forces_utc_session_timezone(self):
         class FakePsycopg:
