@@ -151,7 +151,7 @@
         packageAlertsFromPayload(data),
         data.tv_duplicate_alert_seconds || DEFAULT_TV_DUPLICATE_ALERT_SECONDS
       );
-      renderLastReceived(data.last_received);
+      renderLastReceived(data.last_received, data.generated_at);
       renderConnectedScanners(data);
     }
 
@@ -159,7 +159,7 @@
       document.getElementById(id).textContent = value;
     }
 
-    function renderLastReceived(lastReceived) {
+    function renderLastReceived(lastReceived, generatedAt) {
       if (!lastReceived) {
         setText("tv-last-received-time", "No Data");
         setText("tv-last-received-detail", "No scan rows found.");
@@ -168,12 +168,17 @@
 
       setText(
         "tv-last-received-time",
-        formatElapsedTime(lastReceived)
+        formatElapsedTime(lastReceived, undefined, dashboardReferenceTime(generatedAt))
       );
       setText(
         "tv-last-received-detail",
         formatScanDateTime(lastReceived)
       );
+    }
+
+    function dashboardReferenceTime(generatedAt) {
+      const referenceTime = new Date(String(generatedAt || ""));
+      return Number.isNaN(referenceTime.getTime()) ? new Date() : referenceTime;
     }
 
     function renderConnectedScanners(data) {

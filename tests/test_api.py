@@ -25,6 +25,7 @@ class ApiQueryTests(unittest.TestCase):
         self.assertIn("/v1/logs/daily-csv/{scan_date}", route_paths)
         self.assertIn("/v1/scans", route_paths)
         self.assertIn("/v1/scans/count", route_paths)
+        self.assertIn("/v1/scans/summary", route_paths)
         self.assertIn("/v1/scanners", route_paths)
         self.assertNotIn("/api/v1/health", route_paths)
 
@@ -153,6 +154,35 @@ class ApiQueryTests(unittest.TestCase):
                 12,
                 "123456789012",
                 True,
+                True,
+                False,
+            ],
+        )
+
+    def test_build_scan_events_summary_query_collects_filters_without_pagination(self):
+        from industrial_scanner_logger.api import build_scan_events_summary_query
+
+        query, params = build_scan_events_summary_query(
+            start_date=date(2026, 5, 17),
+            end_date=date(2026, 5, 18),
+            scanner_id=20,
+            is_success=False,
+            is_duplicate=True,
+            is_repaired=False,
+        )
+
+        query_text = str(query)
+        self.assertIn("successful_scans", query_text)
+        self.assertIn("failed_scans", query_text)
+        self.assertIn("duplicate_scans", query_text)
+        self.assertIn("repaired_scans", query_text)
+        self.assertEqual(
+            params,
+            [
+                datetime(2026, 5, 17, 4),
+                datetime(2026, 5, 19, 4),
+                20,
+                False,
                 True,
                 False,
             ],

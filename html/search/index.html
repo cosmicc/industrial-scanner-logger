@@ -27,6 +27,7 @@
             Search Type
             <select id="search-mode" class="search-select" name="search-mode">
               <option value="tracking">Tracking Number / Barcode</option>
+              <option value="scanner">Scanner ID / Name</option>
               <option value="all">All Scan Rows</option>
               <option value="successful">Successful Scans</option>
               <option value="failed">Failed Scans</option>
@@ -36,7 +37,7 @@
             </select>
           </label>
           <label class="search-label search-field" for="scanner-filter">
-            Scanner
+            Scanner ID / Name
             <select id="scanner-filter" class="search-select" name="scanner-filter">
               <option value="">All Scanners</option>
             </select>
@@ -99,6 +100,28 @@
           </select>
         </label>
       </div>
+      <div id="search-totals" class="search-total-grid" aria-label="Matching scan totals" hidden>
+        <div class="search-total-item">
+          <span>All Matching</span>
+          <strong id="search-total-all">0</strong>
+        </div>
+        <div class="search-total-item">
+          <span>Successful</span>
+          <strong id="search-total-successful">0</strong>
+        </div>
+        <div class="search-total-item">
+          <span>Failed</span>
+          <strong id="search-total-failed">0</strong>
+        </div>
+        <div class="search-total-item">
+          <span>Duplicates</span>
+          <strong id="search-total-duplicates">0</strong>
+        </div>
+        <div class="search-total-item">
+          <span>Repaired</span>
+          <strong id="search-total-repaired">0</strong>
+        </div>
+      </div>
       <div class="pagination" data-pagination-placement="top" hidden>
         <button class="button page-previous" type="button">Previous</button>
         <div class="page-number-controls" aria-label="Page selector"></div>
@@ -141,18 +164,25 @@
 
   <script>
     const SEARCH_API_URL = "/api/v1/scans";
-    const SEARCH_COUNT_API_URL = "/api/v1/scans/count";
+    const SEARCH_SUMMARY_API_URL = "/api/v1/scans/summary";
     const SCANNERS_API_URL = "/api/v1/scanners";
     const DISPLAY_TIME_ZONE = "America/Detroit";
     const DEFAULT_PAGE_SIZE = 10;
     const PAGE_SIZE_OPTIONS = [10, 25, 50, 100, 200];
     const FEDEX_FULL_BARCODE_DIGITS = 34;
     const FEDEX_TRACKING_DIGITS = 12;
+    const API_REQUEST_TIMEOUT_MS = 15000;
     const NO_RESULTS_MESSAGE = "No results were found based on your search";
     const SEARCH_MODES = {
       tracking: {
         label: "Tracking Number / Barcode",
         requiresTracking: true,
+        params: {}
+      },
+      scanner: {
+        label: "Scans by Scanner ID / Name",
+        requiresTracking: false,
+        requiresScanner: true,
         params: {}
       },
       all: {
@@ -204,6 +234,7 @@
     const fedexTrackingLink = document.getElementById("fedex-tracking-link");
     const fedexTrackingAnchor = document.getElementById("fedex-tracking-anchor");
     const summaryElement = document.getElementById("result-summary");
+    const totalsElement = document.getElementById("search-totals");
     const resultsBody = document.getElementById("search-results");
     const paginationBars = Array.from(document.querySelectorAll("[data-pagination-placement]"));
 
@@ -392,6 +423,18 @@
         updateFedExTrackingLink("");
         summaryElement.textContent = "No search has been run.";
         renderEmptyResults("Search results will appear here.");
+        renderSearchTotals(null);
+        updatePaginationControls(null, false);
+        lastSearchRequest = null;
+        return;
+      }
+
+      if (request.mode.requiresScanner && !request.scannerId) {
+        statusElement.textContent = "Select a scanner ID or name to list its scans.";
+        updateFedExTrackingLink("");
+        summaryElement.textContent = "No search has been run.";
+        renderEmptyResults("Select a scanner and run the search.");
+        renderSearchTotals(null);
         updatePaginationControls(null, false);
         lastSearchRequest = null;
         return;
@@ -401,6 +444,7 @@
         statusElement.innerHTML = `<span class="error">Start date must be on or before end date.</span>`;
         summaryElement.textContent = "No search has been run.";
         renderEmptyResults("Fix the date range and search again.", true);
+        renderSearchTotals(null);
         updatePaginationControls(null, false);
         return;
       }
@@ -408,17 +452,19 @@
       lastSearchRequest = request;
       updateFedExTrackingLink(request.mode.requiresTracking ? trackingNumber : "");
       statusElement.textContent = `Loading page ${request.page} for ${searchDescription(request)} from the database...`;
-      summaryElement.textContent = `Counting matching rows and loading ${formatCount(request.pageSize)} results for page ${request.page}...`;
+      summaryElement.textContent = `Loading matching totals and ${formatCount(request.pageSize)} results for page ${request.page}...`;
       renderEmptyResults("Loading results from the database...");
       updatePaginationControls(request, false, true);
 
       try {
-        const totalResults = Number.isFinite(request.totalResults)
-          ? request.totalResults
-          : await fetchSearchCount(request, searchToken);
-        request.totalResults = totalResults;
+        const searchSummary = request.searchSummary
+          ? request.searchSummary
+          : await fetchSearchSummary(request, searchToken);
+        request.searchSummary = searchSummary;
+        request.totalResults = searchSummary.total_results;
+        renderSearchTotals(searchSummary);
 
-        const resultPage = totalResults > 0
+        const resultPage = request.totalResults > 0
           ? await fetchResultPage(request, searchToken)
           : { rows: [] };
 
@@ -436,16 +482,17 @@
         statusElement.innerHTML = `<span class="error">Search failed.</span>`;
         summaryElement.textContent = error.message;
         renderEmptyResults("Unable to load search results.", true);
+        renderSearchTotals(null);
         updatePaginationControls(request, false);
       }
     }
 
-    async function fetchSearchCount(request, searchToken) {
+    async function fetchSearchSummary(request, searchToken) {
       if (searchToken !== activeSearchToken) {
-        return 0;
+        return emptySearchSummary();
       }
 
-      const response = await fetch(buildSearchUrl(SEARCH_COUNT_API_URL, request), {
+      const response = await fetchWithTimeout(buildSearchUrl(SEARCH_SUMMARY_API_URL, request), {
         cache: "no-store"
       });
 
@@ -454,13 +501,17 @@
       }
 
       const payload = await response.json();
-      const totalResults = Number(payload?.total_results);
+      const searchSummary = {};
 
-      if (!Number.isFinite(totalResults) || totalResults < 0) {
-        throw new Error("API returned an unexpected count response.");
+      for (const key of Object.keys(emptySearchSummary())) {
+        const value = Number(payload?.[key]);
+        if (!Number.isFinite(value) || value < 0) {
+          throw new Error("API returned an unexpected summary response.");
+        }
+        searchSummary[key] = value;
       }
 
-      return totalResults;
+      return searchSummary;
     }
 
     async function fetchResultPage(request, searchToken) {
@@ -472,7 +523,7 @@
       url.searchParams.set("limit", String(request.pageSize));
       url.searchParams.set("offset", String((request.page - 1) * request.pageSize));
 
-      const response = await fetch(url, { cache: "no-store" });
+      const response = await fetchWithTimeout(url, { cache: "no-store" });
 
       if (!response.ok) {
         throw new Error(`API returned HTTP ${response.status}`);
@@ -485,6 +536,35 @@
       }
 
       return { rows: pageRows };
+    }
+
+    function emptySearchSummary() {
+      return {
+        total_results: 0,
+        successful_scans: 0,
+        failed_scans: 0,
+        duplicate_scans: 0,
+        repaired_scans: 0
+      };
+    }
+
+    function renderSearchTotals(searchSummary) {
+      totalsElement.hidden = !searchSummary;
+
+      if (!searchSummary) {
+        return;
+      }
+
+      document.getElementById("search-total-all").textContent =
+        formatCount(searchSummary.total_results);
+      document.getElementById("search-total-successful").textContent =
+        formatCount(searchSummary.successful_scans);
+      document.getElementById("search-total-failed").textContent =
+        formatCount(searchSummary.failed_scans);
+      document.getElementById("search-total-duplicates").textContent =
+        formatCount(searchSummary.duplicate_scans);
+      document.getElementById("search-total-repaired").textContent =
+        formatCount(searchSummary.repaired_scans);
     }
 
     function buildSearchUrl(apiUrl, request) {
@@ -521,7 +601,7 @@
       const firstRowNumber = (request.page - 1) * request.pageSize + 1;
       const lastRowNumber = firstRowNumber + rows.length - 1;
       summaryElement.textContent =
-        `Showing ${formatCount(firstRowNumber)}-${formatCount(lastRowNumber)} for ${searchDescription(request)}.`;
+        `Showing ${formatCount(firstRowNumber)}-${formatCount(lastRowNumber)} of ${formatCount(request.totalResults)} for ${searchDescription(request)}.`;
       updateFedExTrackingLink(
         request.mode.requiresTracking ? trackingValueForFedEx(rows[0]) : ""
       );
@@ -715,7 +795,7 @@
 
     async function loadScannerOptions() {
       try {
-        const response = await fetch(SCANNERS_API_URL, { cache: "no-store" });
+        const response = await fetchWithTimeout(SCANNERS_API_URL, { cache: "no-store" });
 
         if (!response.ok) {
           throw new Error(`API returned HTTP ${response.status}`);
@@ -724,8 +804,10 @@
         const payload = await response.json();
         const scanners = Array.isArray(payload?.scanners) ? payload.scanners : [];
         renderScannerOptions(scanners);
-      } catch (_error) {
+      } catch (error) {
         scannerSelect.innerHTML = `<option value="">All Scanners</option>`;
+        statusElement.innerHTML =
+          `<span class="error">Unable to load scanner IDs and names: ${escapeHtml(error.message)}</span>`;
       }
     }
 
@@ -741,7 +823,10 @@
 
         const option = document.createElement("option");
         option.value = String(scannerId);
-        option.textContent = scanner.display_name || `Scanner ${scannerId}`;
+        const scannerName = scanner.display_name || scanner.scanner_name || "";
+        option.textContent = scannerName && scannerName !== `Scanner ${scannerId}`
+          ? `${scannerName} (ID ${scannerId})`
+          : `Scanner ID ${scannerId}`;
         scannerSelect.appendChild(option);
       }
 
@@ -796,23 +881,19 @@
     }
 
     function scannerDisplayName(row) {
-      if (row.display_name) {
-        return row.display_name;
+      const scannerId = row.scanner_id;
+      const hasScannerId = scannerId !== undefined && scannerId !== null && scannerId !== "";
+      const scannerName = row.display_name || row.scanner_name || "";
+
+      if (scannerName && hasScannerId && scannerName !== `Scanner ${scannerId}`) {
+        return `${scannerName} (ID ${scannerId})`;
       }
 
-      if (row.scanner_name) {
-        return row.scanner_name;
+      if (hasScannerId) {
+        return `Scanner ID ${scannerId}`;
       }
 
-      if (
-        row.scanner_id !== undefined &&
-        row.scanner_id !== null &&
-        row.scanner_id !== ""
-      ) {
-        return `Scanner ${row.scanner_id}`;
-      }
-
-      return "";
+      return scannerName;
     }
 
     function fedExTrackingUrl(value) {
@@ -965,6 +1046,22 @@
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
+    }
+
+    async function fetchWithTimeout(url, options = {}) {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
+
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } catch (error) {
+        if (error.name === "AbortError") {
+          throw new Error("API request timed out. Check the remote proxy or firewall path rules.");
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timeout);
+      }
     }
 
     setDefaultDates();

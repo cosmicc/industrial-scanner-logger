@@ -51,6 +51,7 @@
     const API_ROOT = "/api";
     const LOGS_API_URL = `${API_ROOT}/v1/logs/daily-csv`;
     const LOGS_PAGE_SIZE = 10;
+    const API_REQUEST_TIMEOUT_MS = 15000;
     let allLogs = [];
     let currentPage = 1;
 
@@ -59,7 +60,7 @@
       const tbody = document.getElementById("logs-table");
 
       try {
-        const response = await fetch(LOGS_API_URL, { cache: "no-store" });
+        const response = await fetchWithTimeout(LOGS_API_URL, { cache: "no-store" });
 
         if (!response.ok) {
           throw new Error(`API returned HTTP ${response.status}`);
@@ -189,6 +190,22 @@
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
+    }
+
+    async function fetchWithTimeout(url, options = {}) {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
+
+      try {
+        return await fetch(url, { ...options, signal: controller.signal });
+      } catch (error) {
+        if (error.name === "AbortError") {
+          throw new Error("API request timed out. Check the remote proxy or firewall path rules.");
+        }
+        throw error;
+      } finally {
+        window.clearTimeout(timeout);
+      }
     }
 
     loadLogs();

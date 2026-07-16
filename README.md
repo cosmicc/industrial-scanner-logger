@@ -23,8 +23,8 @@ Industrial Scanner Logger is a Python 3, Debian/Ubuntu compatible, systemd-manag
 - Writes troubleshooting events to `/var/log/industrial-scanner-logger.log` when installed as a service.
 - Writes raw per-scan event lines to daily logs under `/var/log/industrial-scanner-logger/`.
 - Runs an optional REST API service for querying PostgreSQL scan data.
-- Serves health, tracking search, completed CSV log download, and TV dashboard
-  pages through nginx when installed.
+- Serves health, tracking/scanner search with matching totals, completed CSV log
+  download, and TV dashboard pages through nginx when installed.
 - Treats a scan as `SUCCESS` only when the barcode is exactly 34 numeric digits.
 - Treats blank scans, the configured no-read message, wrong lengths, and non-numeric values as `FAILED`.
 - Identifies each scanner by the last octet of its IPv4 address.
@@ -140,6 +140,9 @@ Check the installed receiver version:
 ```bash
 scanner-tcp-receiver --version
 ```
+
+The repository root `VERSION` file contains the same development or release
+version for deployment scripts.
 
 ## Ubuntu Install
 
@@ -484,6 +487,7 @@ GET /api/v1/logs/daily-csv
 GET /api/v1/logs/daily-csv/{scan_date}
 GET /api/v1/scans
 GET /api/v1/scans/count
+GET /api/v1/scans/summary
 GET /api/v1/scans/{scan_id}
 GET /api/v1/scanners
 GET /api/v1/views
@@ -500,8 +504,11 @@ The list endpoints support common filters such as `start_date`, `end_date`,
 `scanner_id`, `barcode`, `limit`, and `offset` where those fields exist.
 The `barcode` filter matches either the full 34-digit barcode or the 12-digit
 tracking number where those fields exist. Numeric 12-digit filters also match
-the end of full barcode fields. `/api/v1/scans` and `/api/v1/scans/count` also
-support `is_success`, `is_duplicate`, and `is_repaired`.
+the end of full barcode fields. `/api/v1/scans`, `/api/v1/scans/count`, and
+`/api/v1/scans/summary` also support `is_success`, `is_duplicate`, and
+`is_repaired`. The summary endpoint returns matching all, successful, failed,
+duplicate, and repaired totals. The `/search` page can list rows by scanner ID
+or configured scanner name and displays those totals above the result table.
 
 `/api/v1/logs/daily-csv` lists completed daily CSV files for download and
 excludes the current day because that file may still be open for writing.
@@ -513,7 +520,12 @@ TV dashboard is formatted for a 1920x1080 display and currently shows scan
 rate, today's total, successful, duplicate, and failed counts, last received
 scanner-data age, connected scanner count, and mandatory scanner warnings from
 the health dashboard data. Scanner connect and disconnect log messages do not
-count as last received scanner data.
+count as last received scanner data. The TV page calculates that age from the
+server timestamp in the health payload, so the viewing device clock does not
+reset or freeze the displayed age.
+
+For remote-only page or API failures, see
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#remote-web-access).
 
 The health page also monitors free disk space for the CSV output directory, raw
 scan data log directory, troubleshooting log directory, and root filesystem. It
