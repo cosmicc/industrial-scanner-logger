@@ -786,6 +786,7 @@ tr:last-child td {
   flex: 0 0 auto;
   display: block;
   width: 100%;
+  min-height: 79px;
 }
 
 .tv-header h1 {
@@ -821,15 +822,18 @@ tr:last-child td {
   color: #fecaca;
 }
 
-.tv-warning {
-  flex: 0 0 auto;
+.tv-status.warning {
   border: 3px solid rgba(245, 158, 11, 0.72);
-  border-radius: 8px;
   background: rgba(69, 26, 3, 0.78);
   color: #fde68a;
-  font-size: 34px;
-  font-weight: 800;
-  padding: 18px 28px;
+}
+
+.tv-status.health-overlay {
+  position: fixed;
+  z-index: 900;
+  inset: 0 0 auto 0;
+  border-radius: 0 0 8px 8px;
+  box-shadow: 0 10px 28px rgba(2, 6, 23, 0.55);
 }
 
 .tv-rate-grid,
@@ -920,6 +924,11 @@ tr:last-child td {
 
 .tv-secondary-grid .tv-value {
   font-size: 76px;
+}
+
+.tv-secondary-grid .tv-elapsed-time {
+  overflow-wrap: normal;
+  white-space: nowrap;
 }
 
 .tv-duplicate-alert {

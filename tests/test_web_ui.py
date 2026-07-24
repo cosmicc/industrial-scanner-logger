@@ -31,6 +31,30 @@ class WebUiContractTests(unittest.TestCase):
         )
         self.assertIn("dashboardReferenceTime(generatedAt)", tv_html)
 
+    def test_tv_dashboard_uses_one_severity_aware_health_overlay(self):
+        tv_html = self.read_project_file("html/tv-dashboard/index.html")
+        site_css = self.read_project_file("html/assets/site.css")
+
+        self.assertEqual(tv_html.count('id="tv-status"'), 1)
+        self.assertNotIn('id="tv-warning"', tv_html)
+        self.assertIn("dashboardHealthIssues(data)", tv_html)
+        self.assertIn('severity: "critical"', tv_html)
+        self.assertIn('severity: "warning"', tv_html)
+        self.assertIn("healthIssues.map((issue) => issue.message)", tv_html)
+        self.assertIn(".tv-status.health-overlay", site_css)
+        self.assertIn("position: fixed;", site_css)
+
+    def test_tv_last_received_age_is_compact_and_cannot_wrap(self):
+        tv_html = self.read_project_file("html/tv-dashboard/index.html")
+        site_css = self.read_project_file("html/assets/site.css")
+
+        self.assertIn('class="tv-value tv-elapsed-time"', tv_html)
+        self.assertIn('label: "Min"', tv_html)
+        self.assertIn('label: "Sec"', tv_html)
+        self.assertNotIn('return `${parts.join(", ")} ago`;', tv_html)
+        self.assertIn(".tv-secondary-grid .tv-elapsed-time", site_css)
+        self.assertIn("white-space: nowrap;", site_css)
+
     def test_search_exposes_scanner_mode_totals_and_timeout(self):
         search_html = self.read_project_file("html/search/index.html")
 

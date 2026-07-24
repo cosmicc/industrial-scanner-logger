@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.6 - Unreleased
+
+### Added
+
+- Add one severity-aware TV dashboard health overlay that combines all active
+  scanner, PostgreSQL, drive-space, outgoing API, and mandatory-scanner issues.
+
+### Changed
+
+- Show one yellow warning or red critical overlay at the top of the TV
+  dashboard without moving page content.
+- Remove "ago" from the Last Received Data age and abbreviate minutes and
+  seconds as `Min` and `Sec`.
+
+### Fixed
+
+- Keep the TV dashboard's Last Received Data age on one line.
+- Prevent a degraded TV dashboard from showing separate system and mandatory
+  scanner warning bars.
+
 ## 1.5 - 07.15.2026
 
 ### Added

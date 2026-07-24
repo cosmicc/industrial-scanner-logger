@@ -518,11 +518,13 @@ and shows the newest entries first in groups of 10. `/health` refreshes every 3
 seconds by default, and `/tv-dashboard` refreshes every second by default. The
 TV dashboard is formatted for a 1920x1080 display and currently shows scan
 rate, today's total, successful, duplicate, and failed counts, last received
-scanner-data age, connected scanner count, and mandatory scanner warnings from
-the health dashboard data. Scanner connect and disconnect log messages do not
-count as last received scanner data. The TV page calculates that age from the
-server timestamp in the health payload, so the viewing device clock does not
-reset or freeze the displayed age.
+scanner-data age, connected scanner count, and a single severity-aware health
+overlay. Warning-only degradation uses yellow, critical service or PostgreSQL
+degradation uses red, and simultaneous issues are combined without moving the
+dashboard content. Scanner connect and disconnect log messages do not count as
+last received scanner data. The TV page calculates that age from the server
+timestamp in the health payload, keeps it on one line, and uses compact `Min`
+and `Sec` labels without "ago".
 
 For remote-only page or API failures, see
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md#remote-web-access).
