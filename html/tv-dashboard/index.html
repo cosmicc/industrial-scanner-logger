@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TV Dashboard</title>
-  <link rel="stylesheet" href="/assets/site.css">
+  <link rel="stylesheet" href="/assets/site.css?v=1.6">
 </head>
 <body class="tv-body">
   <main class="tv-page">
@@ -92,8 +92,21 @@
     const DEFAULT_TV_REFRESH_SECONDS = 1;
     const DEFAULT_TV_DUPLICATE_ALERT_SECONDS = 60;
     const MAX_SEEN_PACKAGE_ALERT_IDS = 300;
+    const TV_SINGLE_LINE_SELECTOR = [
+      "#tv-status",
+      ".tv-page .tv-label",
+      ".tv-page .tv-value",
+      ".tv-page .tv-day-title",
+      ".tv-page .tv-date",
+      ".tv-duplicate-kicker",
+      ".tv-duplicate-action",
+      ".tv-duplicate-label",
+      ".tv-duplicate-value",
+      ".tv-duplicate-time"
+    ].join(", ");
     let tvRefreshTimer = null;
     let tvRefreshIntervalMs = null;
+    let tvTextFitFrame = null;
     let activePackageAlert = null;
     let packageAlertQueue = [];
     let packageAlertTimer = null;
@@ -136,6 +149,7 @@
       const heading = severity === "critical" ? "SYSTEM PROBLEM" : "SYSTEM WARNING";
       const detail = messages.filter(Boolean).join(" • ");
       status.textContent = detail ? `${heading} — ${detail}` : heading;
+      scheduleTvTextFit();
     }
 
     function renderDashboard(data) {
@@ -165,6 +179,7 @@
       );
       renderLastReceived(data.last_received, data.generated_at);
       renderConnectedScanners(data);
+      scheduleTvTextFit();
     }
 
     function dashboardHealthIssues(data) {
@@ -292,6 +307,65 @@
 
     function setText(id, value) {
       document.getElementById(id).textContent = value;
+      scheduleTvTextFit();
+    }
+
+    function scheduleTvTextFit() {
+      if (tvTextFitFrame !== null) {
+        window.cancelAnimationFrame(tvTextFitFrame);
+      }
+
+      tvTextFitFrame = window.requestAnimationFrame(() => {
+        tvTextFitFrame = null;
+        document.querySelectorAll(TV_SINGLE_LINE_SELECTOR).forEach(
+          fitTvTextToSingleLine
+        );
+      });
+    }
+
+    function fitTvTextToSingleLine(element) {
+      if (!element || element.hidden || element.clientWidth <= 0) {
+        return;
+      }
+
+      element.style.removeProperty("font-size");
+      const naturalFontSize = Number.parseFloat(
+        window.getComputedStyle(element).fontSize
+      );
+
+      if (
+        !Number.isFinite(naturalFontSize) ||
+        element.scrollWidth <= element.clientWidth
+      ) {
+        return;
+      }
+
+      let smallestFontSize = 1;
+      let largestFontSize = naturalFontSize;
+      let fittedFontSize = smallestFontSize;
+
+      while (largestFontSize - smallestFontSize > 0.1) {
+        const candidateFontSize = (smallestFontSize + largestFontSize) / 2;
+        element.style.fontSize = `${candidateFontSize}px`;
+
+        if (element.scrollWidth <= element.clientWidth) {
+          fittedFontSize = candidateFontSize;
+          smallestFontSize = candidateFontSize;
+        } else {
+          largestFontSize = candidateFontSize;
+        }
+      }
+
+      let finalFontSize = Math.max(1, fittedFontSize - 0.2);
+      element.style.fontSize = `${finalFontSize.toFixed(1)}px`;
+
+      while (
+        element.scrollWidth > element.clientWidth &&
+        finalFontSize > 1
+      ) {
+        finalFontSize = Math.max(1, finalFontSize - 0.1);
+        element.style.fontSize = `${finalFontSize.toFixed(1)}px`;
+      }
     }
 
     function renderLastReceived(lastReceived, generatedAt) {
@@ -452,6 +526,7 @@
 
       overlay.hidden = false;
       document.body.classList.add("tv-alert-active");
+      scheduleTvTextFit();
     }
 
     function finishActivePackageAlert() {
@@ -792,6 +867,8 @@
 
     loadDashboard();
     configureTvRefresh(DEFAULT_TV_REFRESH_SECONDS);
+    window.addEventListener("resize", scheduleTvTextFit);
+    scheduleTvTextFit();
   </script>
 </body>
 </html>

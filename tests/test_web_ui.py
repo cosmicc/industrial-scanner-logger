@@ -43,8 +43,9 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("healthIssues.map((issue) => issue.message)", tv_html)
         self.assertIn(".tv-status.health-overlay", site_css)
         self.assertIn("position: fixed;", site_css)
+        self.assertIn("background: #f59e0b;", site_css)
 
-    def test_tv_last_received_age_is_compact_and_cannot_wrap(self):
+    def test_tv_dashboard_data_is_auto_fitted_to_one_line(self):
         tv_html = self.read_project_file("html/tv-dashboard/index.html")
         site_css = self.read_project_file("html/assets/site.css")
 
@@ -52,8 +53,30 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn('label: "Min"', tv_html)
         self.assertIn('label: "Sec"', tv_html)
         self.assertNotIn('return `${parts.join(", ")} ago`;', tv_html)
-        self.assertIn(".tv-secondary-grid .tv-elapsed-time", site_css)
+        self.assertIn("TV_SINGLE_LINE_SELECTOR", tv_html)
+        self.assertIn("fitTvTextToSingleLine", tv_html)
+        self.assertIn('window.addEventListener("resize", scheduleTvTextFit)', tv_html)
+        self.assertIn("overflow-wrap: normal;", site_css)
         self.assertIn("white-space: nowrap;", site_css)
+
+    def test_stylesheet_is_versioned_and_not_cached_by_nginx(self):
+        nginx_config = self.read_project_file("nginx/industrial-scanner-logger.conf")
+
+        for relative_path in (
+            "html/index.html",
+            "html/health/index.html",
+            "html/logs/index.html",
+            "html/search/index.html",
+            "html/tv-dashboard/index.html",
+        ):
+            page_html = self.read_project_file(relative_path)
+            self.assertIn('href="/assets/site.css?v=1.6"', page_html)
+
+        self.assertIn("location = /assets/site.css {", nginx_config)
+        self.assertIn(
+            'add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;',
+            nginx_config,
+        )
 
     def test_search_exposes_scanner_mode_totals_and_timeout(self):
         search_html = self.read_project_file("html/search/index.html")

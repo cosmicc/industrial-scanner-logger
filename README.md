@@ -524,7 +524,11 @@ degradation uses red, and simultaneous issues are combined without moving the
 dashboard content. Scanner connect and disconnect log messages do not count as
 last received scanner data. The TV page calculates that age from the server
 timestamp in the health payload, keeps it on one line, and uses compact `Min`
-and `Sec` labels without "ago".
+and `Sec` labels without "ago". The fixed overlay and every dashboard data
+value remain on one line; longer text automatically shrinks to fit without
+changing the dashboard's coordinates. Stylesheet requests are versioned and
+served without caching so deployments immediately use the current TV colors
+and layout.
 
 For remote-only page or API failures, see
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md#remote-web-access).
