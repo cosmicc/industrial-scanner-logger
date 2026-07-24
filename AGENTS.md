@@ -301,6 +301,18 @@ scan history.
   must copy them.
 - The TV dashboard's last-received age must use the health payload's
   server-generated timestamp rather than trusting the viewing device clock.
+- The TV dashboard must render degraded health as one fixed top overlay that
+  combines every active issue without moving page content. Warning-only issues
+  use yellow; scanner receiver, API service, or PostgreSQL failures make the
+  combined overlay red.
+- Keep every TV dashboard label and data value on one line. Longer content must
+  automatically shrink to fit its existing container without moving panels or
+  changing dashboard coordinates.
+- Keep the TV dashboard's last-received elapsed value free of "ago" and
+  abbreviate minutes and seconds as `Min` and `Sec`.
+- Version the shared stylesheet URL in every static page when the app version
+  changes, and keep nginx from caching `/assets/site.css` so deployed UI fixes
+  cannot be hidden by stale browser CSS.
 - Keep explicit no-redirect nginx routes for `/health`, `/search`, `/logs`, and
   `/tv-dashboard`; remote reverse proxies may otherwise receive an internal
   host or port in an automatic directory redirect.

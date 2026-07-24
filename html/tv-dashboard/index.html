@@ -4,15 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TV Dashboard</title>
-  <link rel="stylesheet" href="/assets/site.css">
+  <link rel="stylesheet" href="/assets/site.css?v=1.6">
 </head>
 <body class="tv-body">
   <main class="tv-page">
     <header class="tv-header">
-      <div id="tv-status" class="tv-status">CHECKING</div>
+      <div
+        id="tv-status"
+        class="tv-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >CHECKING</div>
     </header>
-
-    <div id="tv-warning" class="tv-warning" hidden></div>
 
     <section class="tv-rate-grid">
       <div class="tv-panel tv-rate-panel">
@@ -51,7 +55,7 @@
     <section class="tv-secondary-grid">
       <div class="tv-panel">
         <div class="tv-day-title">Last Received Data</div>
-        <div id="tv-last-received-time" class="tv-value">Checking</div>
+        <div id="tv-last-received-time" class="tv-value tv-elapsed-time">Checking</div>
         <div id="tv-last-received-detail" class="tv-date">Waiting for data</div>
       </div>
 
@@ -88,8 +92,21 @@
     const DEFAULT_TV_REFRESH_SECONDS = 1;
     const DEFAULT_TV_DUPLICATE_ALERT_SECONDS = 60;
     const MAX_SEEN_PACKAGE_ALERT_IDS = 300;
+    const TV_SINGLE_LINE_SELECTOR = [
+      "#tv-status",
+      ".tv-page .tv-label",
+      ".tv-page .tv-value",
+      ".tv-page .tv-day-title",
+      ".tv-page .tv-date",
+      ".tv-duplicate-kicker",
+      ".tv-duplicate-action",
+      ".tv-duplicate-label",
+      ".tv-duplicate-value",
+      ".tv-duplicate-time"
+    ].join(", ");
     let tvRefreshTimer = null;
     let tvRefreshIntervalMs = null;
+    let tvTextFitFrame = null;
     let activePackageAlert = null;
     let packageAlertQueue = [];
     let packageAlertTimer = null;
@@ -110,33 +127,42 @@
         displayTimeZone = data.display_timezone || DEFAULT_DISPLAY_TIME_ZONE;
         renderDashboard(data);
       } catch (error) {
-        setSystemStatus(false);
+        setSystemStatus("critical", ["Health dashboard API unavailable."]);
       }
     }
 
-    function setSystemStatus(isOk) {
+    function setSystemStatus(severity, messages = []) {
       const status = document.getElementById("tv-status");
-      status.textContent = isOk ? "SYSTEM OK" : "SYSTEM PROBLEM";
-      status.classList.toggle("offline", !isOk);
+      const degraded = severity !== "ok";
+
+      status.classList.toggle("health-overlay", degraded);
+      status.classList.toggle("warning", severity === "warning");
+      status.classList.toggle("offline", severity === "critical");
+      status.setAttribute("role", degraded ? "alert" : "status");
+      status.setAttribute("aria-live", severity === "critical" ? "assertive" : "polite");
+
+      if (!degraded) {
+        status.textContent = "SYSTEM OK";
+        return;
+      }
+
+      const heading = severity === "critical" ? "SYSTEM PROBLEM" : "SYSTEM WARNING";
+      const detail = messages.filter(Boolean).join(" • ");
+      status.textContent = detail ? `${heading} — ${detail}` : heading;
+      scheduleTvTextFit();
     }
 
     function renderDashboard(data) {
       const rate = data.current_scan_rate || {};
       const totals = data.daily_totals || {};
       const today = totals.today || {};
-      const mandatoryScanners = data.mandatory_scanners || {};
-      const warning = document.getElementById("tv-warning");
+      const healthIssues = dashboardHealthIssues(data);
 
-      setSystemStatus(data.status === "ok");
+      setSystemStatus(
+        highestHealthSeverity(healthIssues),
+        healthIssues.map((issue) => issue.message)
+      );
       configureTvRefresh(data.tv_dashboard_refresh_seconds);
-
-      if (mandatoryScanners.warning) {
-        warning.hidden = false;
-        warning.textContent = mandatoryScanners.warning;
-      } else {
-        warning.hidden = true;
-        warning.textContent = "";
-      }
 
       setText("tv-scans-minute", formatNumber(rate.scans_per_minute));
       setText("tv-scans-hour", formatNumber(rate.scans_per_hour));
@@ -153,10 +179,193 @@
       );
       renderLastReceived(data.last_received, data.generated_at);
       renderConnectedScanners(data);
+      scheduleTvTextFit();
+    }
+
+    function dashboardHealthIssues(data) {
+      const issues = [];
+      const scannerService = data.services?.scanner;
+      const apiService = data.services?.api;
+      const database = data.database;
+      const mandatoryScanners = data.mandatory_scanners;
+      const storage = data.storage;
+      const outgoingApi = data.outgoing_api;
+
+      if (scannerService && !scannerService.active) {
+        issues.push({
+          severity: "critical",
+          message: serviceProblemMessage("Scanner receiver not running", scannerService)
+        });
+      }
+
+      if (apiService && !apiService.active) {
+        issues.push({
+          severity: "critical",
+          message: serviceProblemMessage("Scanner API service not running", apiService)
+        });
+      }
+
+      if (database && !database.active) {
+        issues.push({
+          severity: "critical",
+          message: "PostgreSQL unavailable."
+        });
+      }
+
+      if (mandatoryScanners?.warning) {
+        issues.push({
+          severity: "warning",
+          message: mandatoryScanners.warning
+        });
+      }
+
+      if (storage && !storage.ok) {
+        issues.push({
+          severity: "warning",
+          message: storageWarningMessage(storage)
+        });
+      }
+
+      if (outgoingApi?.enabled && outgoingApi.state !== "ok") {
+        issues.push({
+          severity: "warning",
+          message: outgoingApiWarningMessage(outgoingApi)
+        });
+      }
+
+      if (data.status === "degraded" && issues.length === 0) {
+        issues.push({
+          severity: "warning",
+          message: "System health is degraded."
+        });
+      }
+
+      return issues;
+    }
+
+    function highestHealthSeverity(issues) {
+      if (issues.some((issue) => issue.severity === "critical")) {
+        return "critical";
+      }
+
+      return issues.length > 0 ? "warning" : "ok";
+    }
+
+    function serviceProblemMessage(label, service) {
+      const state = String(service?.state || "").trim();
+      return state ? `${label} (${state}).` : `${label}.`;
+    }
+
+    function storageWarningMessage(storage) {
+      const lowest = storage.lowest;
+
+      if (!lowest) {
+        return "Drive space warning.";
+      }
+
+      const freeBytes = Number(lowest.free_bytes);
+      const freePercent = Number(lowest.free_percent);
+      const details = [];
+
+      if (Number.isFinite(freeBytes)) {
+        details.push(`${formatBytes(freeBytes)} free`);
+      }
+
+      if (Number.isFinite(freePercent)) {
+        details.push(`${formatPercent(freePercent)} free`);
+      }
+
+      const label = lowest.label || "Monitored drive";
+      let detailText = details[0] || "";
+
+      if (details.length > 1) {
+        detailText = `${details[0]} (${details[1]})`;
+      }
+
+      return detailText
+        ? `Low drive space: ${label} has ${detailText}.`
+        : `Low drive space: ${label}.`;
+    }
+
+    function outgoingApiWarningMessage(outgoingApi) {
+      const queueCount = Number(outgoingApi.queue_count || 0);
+      const queueText = `${formatInteger(queueCount)} queued`;
+      const httpStatus = Number(outgoingApi.last_http_status);
+      const statusText = Number.isFinite(httpStatus) && httpStatus > 0
+        ? `, HTTP ${httpStatus}`
+        : "";
+      const stateLabels = {
+        pending: "pending",
+        misconfigured: "misconfigured",
+        unavailable: "unavailable",
+        unknown: "unavailable"
+      };
+      const stateLabel = stateLabels[outgoingApi.state] || "unavailable";
+
+      return `Outgoing API ${stateLabel}: ${queueText}${statusText}.`;
     }
 
     function setText(id, value) {
       document.getElementById(id).textContent = value;
+      scheduleTvTextFit();
+    }
+
+    function scheduleTvTextFit() {
+      if (tvTextFitFrame !== null) {
+        window.cancelAnimationFrame(tvTextFitFrame);
+      }
+
+      tvTextFitFrame = window.requestAnimationFrame(() => {
+        tvTextFitFrame = null;
+        document.querySelectorAll(TV_SINGLE_LINE_SELECTOR).forEach(
+          fitTvTextToSingleLine
+        );
+      });
+    }
+
+    function fitTvTextToSingleLine(element) {
+      if (!element || element.hidden || element.clientWidth <= 0) {
+        return;
+      }
+
+      element.style.removeProperty("font-size");
+      const naturalFontSize = Number.parseFloat(
+        window.getComputedStyle(element).fontSize
+      );
+
+      if (
+        !Number.isFinite(naturalFontSize) ||
+        element.scrollWidth <= element.clientWidth
+      ) {
+        return;
+      }
+
+      let smallestFontSize = 1;
+      let largestFontSize = naturalFontSize;
+      let fittedFontSize = smallestFontSize;
+
+      while (largestFontSize - smallestFontSize > 0.1) {
+        const candidateFontSize = (smallestFontSize + largestFontSize) / 2;
+        element.style.fontSize = `${candidateFontSize}px`;
+
+        if (element.scrollWidth <= element.clientWidth) {
+          fittedFontSize = candidateFontSize;
+          smallestFontSize = candidateFontSize;
+        } else {
+          largestFontSize = candidateFontSize;
+        }
+      }
+
+      let finalFontSize = Math.max(1, fittedFontSize - 0.2);
+      element.style.fontSize = `${finalFontSize.toFixed(1)}px`;
+
+      while (
+        element.scrollWidth > element.clientWidth &&
+        finalFontSize > 1
+      ) {
+        finalFontSize = Math.max(1, finalFontSize - 0.1);
+        element.style.fontSize = `${finalFontSize.toFixed(1)}px`;
+      }
     }
 
     function renderLastReceived(lastReceived, generatedAt) {
@@ -317,6 +526,7 @@
 
       overlay.hidden = false;
       document.body.classList.add("tv-alert-active");
+      scheduleTvTextFit();
     }
 
     function finishActivePackageAlert() {
@@ -442,6 +652,33 @@
       });
     }
 
+    function formatInteger(value) {
+      const numericValue = Number(value || 0);
+      return Number.isFinite(numericValue)
+        ? Math.max(0, Math.floor(numericValue)).toLocaleString()
+        : "0";
+    }
+
+    function formatBytes(value) {
+      const bytes = Number(value || 0);
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let size = Math.max(0, bytes);
+      let unitIndex = 0;
+
+      while (size >= 1024 && unitIndex < units.length - 1) {
+        size /= 1024;
+        unitIndex += 1;
+      }
+
+      const digits = size >= 100 || unitIndex === 0 ? 0 : 1;
+      return `${size.toFixed(digits)} ${units[unitIndex]}`;
+    }
+
+    function formatPercent(value) {
+      const percent = Number(value);
+      return Number.isFinite(percent) ? `${percent.toFixed(1)}%` : "unknown";
+    }
+
     function configureTvRefresh(refreshSeconds) {
       const intervalMs = refreshIntervalMs(refreshSeconds, DEFAULT_TV_REFRESH_SECONDS);
 
@@ -493,10 +730,6 @@
         return "Now";
       }
 
-      if (elapsedSeconds <= 1) {
-        return "1 Second ago";
-      }
-
       const units = [
         {
           label: "Week",
@@ -514,12 +747,12 @@
           thresholdSeconds: 60 * 60
         },
         {
-          label: "Minute",
+          label: "Min",
           seconds: 60,
           thresholdSeconds: 60
         },
         {
-          label: "Second",
+          label: "Sec",
           seconds: 1,
           thresholdSeconds: 0
         }
@@ -536,7 +769,7 @@
         const parts = [formatElapsedPart(primaryValue, primary.label)];
         const secondary = units[index + 1];
 
-        if (secondary && primary.label !== "Second") {
+        if (secondary && primary.label !== "Sec") {
           const remainder = elapsedSeconds % primary.seconds;
           const secondaryValue = Math.floor(remainder / secondary.seconds);
 
@@ -545,14 +778,17 @@
           }
         }
 
-        return `${parts.join(", ")} ago`;
+        return parts.join(", ");
       }
 
       return "Now";
     }
 
     function formatElapsedPart(value, label) {
-      return `${value.toLocaleString()} ${label}${value === 1 ? "" : "s"}`;
+      const plural = ["Week", "Day", "Hour"].includes(label) && value !== 1
+        ? "s"
+        : "";
+      return `${value.toLocaleString()} ${label}${plural}`;
     }
 
     function formatScanDateTime(scanDateOrRow, scanTime) {
@@ -631,6 +867,8 @@
 
     loadDashboard();
     configureTvRefresh(DEFAULT_TV_REFRESH_SECONDS);
+    window.addEventListener("resize", scheduleTvTextFit);
+    scheduleTvTextFit();
   </script>
 </body>
 </html>
