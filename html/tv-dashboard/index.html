@@ -4,85 +4,89 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TV Dashboard</title>
-  <link rel="stylesheet" href="/assets/site.css?v=1.6">
+  <link rel="stylesheet" href="/assets/site.css?v=1.7">
 </head>
 <body class="tv-body">
-  <main class="tv-page">
-    <header class="tv-header">
-      <div
-        id="tv-status"
-        class="tv-status"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >CHECKING</div>
-    </header>
+  <div class="tv-viewport">
+    <div id="tv-stage" class="tv-stage">
+      <main class="tv-page">
+        <header class="tv-header">
+          <div
+            id="tv-status"
+            class="tv-status"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            hidden
+          ></div>
+        </header>
 
-    <section class="tv-rate-grid">
-      <div class="tv-panel tv-rate-panel">
-        <div class="tv-label">Scans Per Minute</div>
-        <div id="tv-scans-minute" class="tv-value">0</div>
-      </div>
-      <div class="tv-panel tv-rate-panel">
-        <div class="tv-label">Scans Per Hour</div>
-        <div id="tv-scans-hour" class="tv-value">0</div>
-      </div>
-    </section>
+        <section class="tv-rate-grid">
+          <div class="tv-panel tv-rate-panel">
+            <div class="tv-label">Scans Per Minute</div>
+            <div id="tv-scans-minute" class="tv-value">0</div>
+          </div>
+          <div class="tv-panel tv-rate-panel">
+            <div class="tv-label">Scans Per Hour</div>
+            <div id="tv-scans-hour" class="tv-value">0</div>
+          </div>
+        </section>
 
-    <section class="tv-panel tv-today-panel">
-      <div class="tv-day-title">Today</div>
-      <div id="tv-today-date" class="tv-date">Loading...</div>
-      <div class="tv-stat-row">
-        <div class="tv-stat-card">
-          <div class="tv-label">Total</div>
-          <div id="tv-today-total" class="tv-value">0</div>
-        </div>
-        <div class="tv-stat-card">
-          <div class="tv-label">Successful</div>
-          <div id="tv-today-success" class="tv-value success">0</div>
-        </div>
-        <div class="tv-stat-card">
-          <div class="tv-label">Duplicates</div>
-          <div id="tv-today-duplicates" class="tv-value duplicate">0</div>
-        </div>
-        <div class="tv-stat-card">
-          <div class="tv-label">Failed</div>
-          <div id="tv-today-failed" class="tv-value failed">0</div>
+        <section class="tv-panel tv-today-panel">
+          <div class="tv-day-title">Today</div>
+          <div id="tv-today-date" class="tv-date">Loading...</div>
+          <div class="tv-stat-row">
+            <div class="tv-stat-card">
+              <div class="tv-label">Total</div>
+              <div id="tv-today-total" class="tv-value">0</div>
+            </div>
+            <div class="tv-stat-card">
+              <div class="tv-label">Successful</div>
+              <div id="tv-today-success" class="tv-value success">0</div>
+            </div>
+            <div class="tv-stat-card">
+              <div class="tv-label">Duplicates</div>
+              <div id="tv-today-duplicates" class="tv-value duplicate">0</div>
+            </div>
+            <div class="tv-stat-card">
+              <div class="tv-label">Failed</div>
+              <div id="tv-today-failed" class="tv-value failed">0</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tv-secondary-grid">
+          <div class="tv-panel">
+            <div class="tv-day-title">Last Received Data</div>
+            <div id="tv-last-received-time" class="tv-value tv-elapsed-time">Checking</div>
+            <div id="tv-last-received-detail" class="tv-date">Waiting for data</div>
+          </div>
+
+          <div class="tv-panel">
+            <div class="tv-day-title">Connected Scanners</div>
+            <div id="tv-connected-count" class="tv-value">0</div>
+            <div id="tv-connected-detail" class="tv-date">Checking...</div>
+          </div>
+        </section>
+      </main>
+
+      <div id="tv-package-alert" class="tv-duplicate-alert" role="alert" aria-live="assertive" hidden>
+        <div class="tv-duplicate-alert-content">
+          <div id="tv-alert-kicker" class="tv-duplicate-kicker">Duplicate Package</div>
+          <div id="tv-alert-action" class="tv-duplicate-action">Remove This Package</div>
+          <div class="tv-duplicate-details">
+            <div>
+              <div class="tv-duplicate-label">Tracking Number</div>
+              <div id="tv-alert-tracking" class="tv-duplicate-value">----------</div>
+            </div>
+            <div>
+              <div class="tv-duplicate-label">Scanner</div>
+              <div id="tv-alert-scanner" class="tv-duplicate-value">Unknown</div>
+            </div>
+          </div>
+          <div id="tv-alert-time" class="tv-duplicate-time">Detected now</div>
         </div>
       </div>
-    </section>
-
-    <section class="tv-secondary-grid">
-      <div class="tv-panel">
-        <div class="tv-day-title">Last Received Data</div>
-        <div id="tv-last-received-time" class="tv-value tv-elapsed-time">Checking</div>
-        <div id="tv-last-received-detail" class="tv-date">Waiting for data</div>
-      </div>
-
-      <div class="tv-panel">
-        <div class="tv-day-title">Connected Scanners</div>
-        <div id="tv-connected-count" class="tv-value">0</div>
-        <div id="tv-connected-detail" class="tv-date">Checking...</div>
-      </div>
-    </section>
-
-  </main>
-
-  <div id="tv-package-alert" class="tv-duplicate-alert" role="alert" aria-live="assertive" hidden>
-    <div class="tv-duplicate-alert-content">
-      <div id="tv-alert-kicker" class="tv-duplicate-kicker">Duplicate Package</div>
-      <div id="tv-alert-action" class="tv-duplicate-action">Remove This Package</div>
-      <div class="tv-duplicate-details">
-        <div>
-          <div class="tv-duplicate-label">Tracking Number</div>
-          <div id="tv-alert-tracking" class="tv-duplicate-value">----------</div>
-        </div>
-        <div>
-          <div class="tv-duplicate-label">Scanner</div>
-          <div id="tv-alert-scanner" class="tv-duplicate-value">Unknown</div>
-        </div>
-      </div>
-      <div id="tv-alert-time" class="tv-duplicate-time">Detected now</div>
     </div>
   </div>
 
@@ -91,6 +95,8 @@
     const DEFAULT_DISPLAY_TIME_ZONE = "America/Detroit";
     const DEFAULT_TV_REFRESH_SECONDS = 1;
     const DEFAULT_TV_DUPLICATE_ALERT_SECONDS = 60;
+    const TV_CANVAS_WIDTH = 1920;
+    const TV_CANVAS_HEIGHT = 1080;
     const MAX_SEEN_PACKAGE_ALERT_IDS = 300;
     const TV_SINGLE_LINE_SELECTOR = [
       "#tv-status",
@@ -140,15 +146,41 @@
       status.classList.toggle("offline", severity === "critical");
       status.setAttribute("role", degraded ? "alert" : "status");
       status.setAttribute("aria-live", severity === "critical" ? "assertive" : "polite");
+      status.hidden = !degraded;
 
       if (!degraded) {
-        status.textContent = "SYSTEM OK";
+        status.textContent = "";
         return;
       }
 
       const heading = severity === "critical" ? "SYSTEM PROBLEM" : "SYSTEM WARNING";
       const detail = messages.filter(Boolean).join(" • ");
       status.textContent = detail ? `${heading} — ${detail}` : heading;
+      scheduleTvTextFit();
+    }
+
+    function fitTvStageToViewport() {
+      const stage = document.getElementById("tv-stage");
+
+      if (!stage) {
+        return;
+      }
+
+      const scale = Math.min(
+        window.innerWidth / TV_CANVAS_WIDTH,
+        window.innerHeight / TV_CANVAS_HEIGHT
+      );
+      const safeScale = Math.max(0, scale);
+      const scaledWidth = TV_CANVAS_WIDTH * safeScale;
+      const scaledHeight = TV_CANVAS_HEIGHT * safeScale;
+
+      stage.style.left = `${Math.max(0, (window.innerWidth - scaledWidth) / 2)}px`;
+      stage.style.top = `${Math.max(0, (window.innerHeight - scaledHeight) / 2)}px`;
+      stage.style.transform = `scale(${safeScale})`;
+    }
+
+    function handleTvViewportResize() {
+      fitTvStageToViewport();
       scheduleTvTextFit();
     }
 
@@ -865,9 +897,10 @@
       }).replace(/\s?(AM|PM)$/i, (suffix) => suffix.toLowerCase());
     }
 
+    fitTvStageToViewport();
     loadDashboard();
     configureTvRefresh(DEFAULT_TV_REFRESH_SECONDS);
-    window.addEventListener("resize", scheduleTvTextFit);
+    window.addEventListener("resize", handleTvViewportResize);
     scheduleTvTextFit();
   </script>
 </body>

@@ -10,7 +10,7 @@
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](README.md#current-behavior)
 <!-- badges:end -->
 
-Industrial Scanner Logger is a Python 3, Debian/Ubuntu compatible, systemd-managed shipment scan logging platform for Honeywell fixed-mount industrial scanners that receives scanner barcode output over TCP, validates and classifies FedEx tracking scan events, suppresses same-day same-scanner duplicate successes, writes durable CSV and raw diagnostic scan logs, records scan data in PostgreSQL for query and reporting, exposes FastAPI REST endpoints behind nginx, serves a lightweight web interface, and includes installer, schema, configuration, systemd service, firewall, logging, and troubleshooting tooling for running the complete scanner logging system on a production server.
+Industrial Scanner Logger is a Python 3, Debian/Ubuntu compatible, systemd-managed shipment scan logging platform for Honeywell fixed-mount industrial scanners that receives scanner barcode output over TCP, validates and classifies FedEx tracking scan events, suppresses duplicate reads, writes durable CSV and raw diagnostic scan logs, records scan data in PostgreSQL for query and reporting, exposes FastAPI REST endpoints behind nginx, serves a lightweight web interface, and includes installer, schema, configuration, systemd service, firewall, logging, and troubleshooting tooling for running the complete scanner logging system on a production server.
 
 ## Current Behavior
 
@@ -28,8 +28,9 @@ Industrial Scanner Logger is a Python 3, Debian/Ubuntu compatible, systemd-manag
 - Treats a scan as `SUCCESS` only when the barcode is exactly 34 numeric digits.
 - Treats blank scans, the configured no-read message, wrong lengths, and non-numeric values as `FAILED`.
 - Identifies each scanner by the last octet of its IPv4 address.
-- Logs repeated successful tracking numbers from the same or different scanners.
-- Marks a successful scan as a duplicate only after the 3 different successful tracking number repeat threshold is met.
+- Applies separate same-scanner and overlapping paired-scanner duplicate rules.
+- Suppresses paired-scanner overlap reads until the configured number of
+  different successful packages has progressed through the pair.
 
 ## Requirements
 
@@ -112,13 +113,13 @@ poll_interval = 1
 batch_size = 50
 
 [scanners]
-last_scanner_id =
 mandatory_scanner_ids =
 scanner_pairs =
+scanner_pair_suppression_distinct_successes = 10
 
 [scanner_names]
 # 20 = Lane 1 Scanner
-# 21 = Last Scanner
+# 21 = Partner Scanner
 
 [api]
 enabled = true
@@ -349,8 +350,7 @@ convention and do not carry an embedded timezone. The timestamp comes from the
 receiver script at the same point where the CSV row is written; PostgreSQL does
 not assign the scan event timestamp. PostgreSQL generated columns and views
 provide success/failure classification, failed scan queries, daily totals,
-package progression, duplicate queries, and successful packages missing the
-configured last scanner.
+package progression, and duplicate queries.
 
 Human-facing dates and times use the scanner site's `America/Detroit`
 timezone. That includes daily CSV filenames and rows, failed scan CSV rows, raw
@@ -359,33 +359,39 @@ search results, CSV log metadata, and the `industrial-scanner-health` CLI. The
 stored PostgreSQL `scan_timestamp` values remain UTC, and the outgoing API
 payload is the only app output that intentionally sends UTC timestamps.
 
-Use `[scanners] last_scanner_id` for the final outbound scanner before boxes
-are loaded. Use `[scanners] mandatory_scanner_ids` for scanner IDs that must
-stay connected for the health page and TV dashboard to report OK. Use
+Use `[scanners] mandatory_scanner_ids` for scanner IDs that must stay connected
+for the health page and TV dashboard to report OK. Use
 `[scanners] scanner_pairs` for scanners covering overlapping conveyor areas;
-each semicolon-separated group shares duplicate protection. Use
-`[scanner_names]` to map IP last-octet scanner IDs to readable names:
+each semicolon-separated group shares duplicate protection. The
+`scanner_pair_suppression_distinct_successes` value controls how many different
+successful packages must pass before a repeat from the paired scanner can be
+recorded. Use `[scanner_names]` to map IP last-octet scanner IDs to readable
+names:
 
 ```ini
 [scanners]
-last_scanner_id = 21
 mandatory_scanner_ids = 20, 21
 scanner_pairs = 20, 21
+scanner_pair_suppression_distinct_successes = 10
 
 [scanner_names]
 20 = Lane 1 Scanner
-21 = Last Scanner
+21 = Partner Scanner
 
 [dashboard]
 health_page_refresh_seconds = 3
 tv_dashboard_refresh_seconds = 1
 ```
 
-Repeated successful scans use one duplicate flag. A repeat from the same scanner,
-or from another scanner in the same configured pair, is silently dropped until
-that scanner group has accepted 3 different successful tracking numbers since
-the previous accepted scan of that tracking number in the previous 30 days.
-After that threshold is met, the repeat is logged with `is_duplicate = true`.
+Repeated successful scans use one duplicate flag. Same-scanner repeats are
+silently dropped until the scanner's duplicate group has accepted 3 different
+successful tracking numbers, then a later repeat is recorded with
+`is_duplicate = true`. A repeat from the other scanner in a configured pair is
+suppressed until 10 different successful tracking numbers have passed through
+the pair by default. This pair window is progression-based and has no short
+time timeout, so lunch breaks and stopped conveyors cannot expire it. The
+normal 30-day duplicate lookback still applies. After the configured pair
+window is met, the normal duplicate rule applies.
 
 Set `[receiver] tracking_repair_enabled = true` to allow conservative repair of
 short numeric failed scans. A short scan is repaired only when successful scans
@@ -404,11 +410,11 @@ no-read markers; those rows remain available in `raw_scan_events`.
 When `[outgoing_api] enabled = true`, each processed row inserted into
 `scanner_logger.scan_events` and each raw-only failed row inserted into
 `scanner_logger.raw_scan_events` is queued in `scanner_logger.outgoing_scan_queue`
-for JSON delivery to the configured external API URL. Same-scanner repeats that
-are suppressed by duplicate handling are not inserted into `scan_events` or
-`raw_scan_events`, so they are not sent. Successfully delivered rows are removed
-from the outgoing queue only; the main scan history remains in `scan_events`
-and `raw_scan_events`.
+for JSON delivery to the configured external API URL. Repeats suppressed by
+same-scanner or paired-scanner duplicate handling are not inserted into
+`scan_events` or `raw_scan_events`, so they are not sent. Successfully
+delivered rows are removed from the outgoing queue only; the main scan history
+remains in `scan_events` and `raw_scan_events`.
 
 The outgoing API sender posts one queued scan per request using
 `Content-Type: application/json` and `X-Scanner-Api-Key` from
@@ -450,13 +456,14 @@ DSN is used. With a custom DSN, the installer applies `db/schema.sql` through
 that DSN.
 
 Existing service installs keep their current config file. After this change,
-run `sudo refresh-app-config` to add new config options from
-`config/industrial-scanner-logger.conf` and remove obsolete options such as the
-old `[postgresql]` `enabled` and `required` keys without overwriting modified
-settings.
+run `sudo refresh-app-config` to add
+`scanner_pair_suppression_distinct_successes` and remove deleted options,
+including `last_scanner_id`, without overwriting settings that still exist.
 
 After pulling schema changes, reapply `db/schema.sql` to the PostgreSQL database
-before restarting PostgreSQL-backed logging or API queries.
+before restarting PostgreSQL-backed logging or API queries. The 1.7 migration
+removes the obsolete `last_scanner_id` columns, index, view, and related API
+surface while preserving scan rows.
 
 PostgreSQL connection, duplicate lookup, or write failures are logged to the
 troubleshooting log and stop the receiver so duplicate decisions cannot be made
@@ -497,7 +504,6 @@ GET /api/v1/views/failed-scans
 GET /api/v1/views/successful-scans
 GET /api/v1/views/duplicate-successful-scans
 GET /api/v1/views/successful-scan-progression
-GET /api/v1/views/successful-scans-missing-last-scanner
 ```
 
 The list endpoints support common filters such as `start_date`, `end_date`,
@@ -516,19 +522,19 @@ Header-only daily CSV files are shown as days with no scans instead of being
 made available for download. `/logs` is the browser page for those downloads
 and shows the newest entries first in groups of 10. `/health` refreshes every 3
 seconds by default, and `/tv-dashboard` refreshes every second by default. The
-TV dashboard is formatted for a 1920x1080 display and currently shows scan
-rate, today's total, successful, duplicate, and failed counts, last received
-scanner-data age, connected scanner count, and a single severity-aware health
-overlay. Warning-only degradation uses yellow, critical service or PostgreSQL
+TV dashboard uses a fixed 1920x1080 canvas and uniformly scales the entire
+canvas to the available full-screen viewport without reflowing or moving any
+panel. It shows scan rate, today's total, successful, duplicate, and failed
+counts, last received scanner-data age, connected scanner count, and one
+severity-aware health overlay. Healthy operation shows no status bar.
+Warning-only degradation uses yellow, critical service or PostgreSQL
 degradation uses red, and simultaneous issues are combined without moving the
 dashboard content. Scanner connect and disconnect log messages do not count as
 last received scanner data. The TV page calculates that age from the server
 timestamp in the health payload, keeps it on one line, and uses compact `Min`
-and `Sec` labels without "ago". The fixed overlay and every dashboard data
-value remain on one line; longer text automatically shrinks to fit without
-changing the dashboard's coordinates. Stylesheet requests are versioned and
-served without caching so deployments immediately use the current TV colors
-and layout.
+and `Sec` labels without "ago". Longer text automatically shrinks to fit.
+Stylesheet requests are versioned and served without caching so deployments
+immediately use the current TV colors and layout.
 
 For remote-only page or API failures, see
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md#remote-web-access).
@@ -612,11 +618,13 @@ The `scanner_id` is the last octet of the scanner IP address. For example,
 scanner `10.10.10.20` is recorded as scanner `20`. `scan_totals.csv` includes
 one row per scanner plus an `ALL` row for the full day.
 
-`is_duplicate` is `true` only for successful scans that repeat on the same
-scanner or configured scanner pair after the 3 different successful tracking
-number threshold is met. Pre-threshold repeats from the same scanner group are
-silently dropped. `is_repaired` is `true` only when tracking-number repair
-reconstructed a short numeric failed scan into a valid full 34-digit barcode.
+`is_duplicate` is `true` only for an accepted successful repeat. Same-scanner
+repeats use the 3-different-package rule. Cross-scanner repeats inside a
+configured pair use the configurable progression window, which defaults to 10
+different successful packages and has no separate short time timeout. The
+normal 30-day history boundary still applies. Suppressed rows are not stored.
+`is_repaired` is `true` only when tracking-number repair reconstructed a short
+numeric failed scan into a valid full 34-digit barcode.
 
 ## Development
 

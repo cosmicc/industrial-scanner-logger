@@ -26,6 +26,26 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn('runuser -u "${SERVICE_USER}"', health_script)
         self.assertIn("same database rows as the web health", health_script)
 
+    def test_installer_uses_current_scanner_config_contract(self):
+        install_script = (PROJECT_ROOT / "scripts" / "install.sh").read_text(
+            encoding="utf-8",
+        )
+        default_config = (
+            PROJECT_ROOT / "config" / "industrial-scanner-logger.conf"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("LAST_SCANNER_ID", install_script)
+        self.assertNotIn("last_scanner_id =", default_config)
+        self.assertIn("SCANNER_PAIRS", install_script)
+        self.assertIn(
+            "scanner_pair_suppression_distinct_successes",
+            install_script,
+        )
+        self.assertIn(
+            "scanner_pair_suppression_distinct_successes = 10",
+            default_config,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

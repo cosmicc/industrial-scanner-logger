@@ -58,7 +58,6 @@ SCAN_EVENT_SELECT_COLUMNS = [
     sql.Identifier("scan_timestamp"),
     sql.Identifier("scanner_id"),
     sql.Identifier("scanner_name"),
-    sql.Identifier("last_scanner_id"),
     sql.Identifier("is_duplicate"),
     sql.Identifier("is_repaired"),
     sql.Identifier("tracking_number"),
@@ -73,7 +72,6 @@ SCAN_EVENT_SELECT_SQL = """
                     scan_timestamp,
                     scanner_id,
                     scanner_name,
-                    last_scanner_id,
                     is_duplicate,
                     is_repaired,
                     tracking_number,
@@ -120,7 +118,6 @@ VIEW_DEFINITIONS = {
             "scan_time",
             "scanner_id",
             "scanner_name",
-            "last_scanner_id",
             "is_duplicate",
             "is_repaired",
             "tracking_number",
@@ -143,7 +140,6 @@ VIEW_DEFINITIONS = {
             "scan_time",
             "scanner_id",
             "scanner_name",
-            "last_scanner_id",
             "is_duplicate",
             "is_repaired",
             "tracking_number",
@@ -181,7 +177,6 @@ VIEW_DEFINITIONS = {
             "scan_time",
             "scanner_id",
             "scanner_name",
-            "last_scanner_id",
             "tracking_number",
             "barcode",
             "scan_sequence",
@@ -194,25 +189,6 @@ VIEW_DEFINITIONS = {
         "barcode_column": "barcode",
         "tracking_number_column": "tracking_number",
         "order": ["scan_timestamp DESC", "id DESC"],
-    },
-    "successful-scans-missing-last-scanner": {
-        "relation": "successful_scans_missing_last_scanner",
-        "columns": [
-            "scan_date",
-            "tracking_number",
-            "barcode",
-            "last_scanner_id",
-            "first_seen_at",
-            "last_seen_at",
-            "scan_count",
-            "scanner_count",
-            "scanner_ids",
-            "scanner_names",
-        ],
-        "date_column": "scan_date",
-        "barcode_column": "barcode",
-        "tracking_number_column": "tracking_number",
-        "order": ["scan_date DESC", "last_seen_at DESC", "barcode ASC"],
     },
 }
 
@@ -875,8 +851,6 @@ def configured_scanner_options(config) -> dict[int, dict]:
     scanner_names = getattr(config, "scanner_names", {}) or {}
     configured_ids = set(scanner_names)
     configured_ids.update(getattr(config, "mandatory_scanner_ids", []) or [])
-    if getattr(config, "last_scanner_id", ""):
-        configured_ids.add(config.last_scanner_id)
     for scanner_pair in (getattr(config, "scanner_pairs", {}) or {}).values():
         configured_ids.update(scanner_pair)
 
@@ -1047,7 +1021,6 @@ def fetch_active_duplicate_alert(db, config, alert_seconds: int) -> Optional[dic
             scan_timestamp,
             scanner_id,
             scanner_name,
-            last_scanner_id,
             is_duplicate,
             is_repaired,
             tracking_number,
@@ -1107,7 +1080,6 @@ def fetch_active_duplicate_package_alerts(db, config, alert_seconds: int) -> lis
             scan_timestamp,
             scanner_id,
             scanner_name,
-            last_scanner_id,
             is_duplicate,
             is_repaired,
             tracking_number,

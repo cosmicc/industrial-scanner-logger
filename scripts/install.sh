@@ -38,8 +38,9 @@ OUTGOING_API_TIMEOUT="${OUTGOING_API_TIMEOUT:-10}"
 OUTGOING_API_RETRY_INTERVAL="${OUTGOING_API_RETRY_INTERVAL:-30}"
 OUTGOING_API_POLL_INTERVAL="${OUTGOING_API_POLL_INTERVAL:-1}"
 OUTGOING_API_BATCH_SIZE="${OUTGOING_API_BATCH_SIZE:-50}"
-LAST_SCANNER_ID="${LAST_SCANNER_ID:-}"
 MANDATORY_SCANNER_IDS="${MANDATORY_SCANNER_IDS:-}"
+SCANNER_PAIRS="${SCANNER_PAIRS:-}"
+SCANNER_PAIR_SUPPRESSION_DISTINCT_SUCCESSES="${SCANNER_PAIR_SUPPRESSION_DISTINCT_SUCCESSES:-10}"
 CURRENT_SCAN_RATE_STALE_SECONDS="${CURRENT_SCAN_RATE_STALE_SECONDS:-60}"
 HEALTH_PAGE_REFRESH_SECONDS="${HEALTH_PAGE_REFRESH_SECONDS:-3}"
 TV_DASHBOARD_REFRESH_SECONDS="${TV_DASHBOARD_REFRESH_SECONDS:-1}"
@@ -111,8 +112,9 @@ Options:
   --outgoing-api-retry-interval SEC retry delay after outgoing API failures [${OUTGOING_API_RETRY_INTERVAL}]
   --outgoing-api-poll-interval SEC queue drain poll interval [${OUTGOING_API_POLL_INTERVAL}]
   --outgoing-api-batch-size NUM maximum queued scans sent per drain cycle [${OUTGOING_API_BATCH_SIZE}]
-  --last-scanner-id ID     scanner IP last octet for the final outbound scanner [${LAST_SCANNER_ID:-not set}]
   --mandatory-scanner-ids IDS comma or space-separated scanner IDs that must stay connected [${MANDATORY_SCANNER_IDS:-none}]
+  --scanner-pairs GROUPS   semicolon-separated overlapping scanner groups [${SCANNER_PAIRS:-none}]
+  --scanner-pair-suppression-distinct-successes NUM different successful packages required before a paired repeat can be recorded [${SCANNER_PAIR_SUPPRESSION_DISTINCT_SUCCESSES}]
   --current-scan-rate-stale-seconds SEC seconds before health scan-rate indicator turns red [${CURRENT_SCAN_RATE_STALE_SECONDS}]
   --health-page-refresh-seconds SEC health page automatic refresh interval [${HEALTH_PAGE_REFRESH_SECONDS}]
   --tv-dashboard-refresh-seconds SEC TV dashboard automatic refresh interval [${TV_DASHBOARD_REFRESH_SECONDS}]
@@ -324,8 +326,13 @@ emit_option("outgoing_api", "timeout", "OUTGOING_API_TIMEOUT")
 emit_option("outgoing_api", "retry_interval", "OUTGOING_API_RETRY_INTERVAL")
 emit_option("outgoing_api", "poll_interval", "OUTGOING_API_POLL_INTERVAL")
 emit_option("outgoing_api", "batch_size", "OUTGOING_API_BATCH_SIZE")
-emit_option("scanners", "last_scanner_id", "LAST_SCANNER_ID")
 emit_option("scanners", "mandatory_scanner_ids", "MANDATORY_SCANNER_IDS")
+emit_option("scanners", "scanner_pairs", "SCANNER_PAIRS")
+emit_option(
+    "scanners",
+    "scanner_pair_suppression_distinct_successes",
+    "SCANNER_PAIR_SUPPRESSION_DISTINCT_SUCCESSES",
+)
 emit_option("dashboard", "current_scan_rate_stale_seconds", "CURRENT_SCAN_RATE_STALE_SECONDS")
 emit_option("dashboard", "health_page_refresh_seconds", "HEALTH_PAGE_REFRESH_SECONDS")
 emit_option("dashboard", "tv_dashboard_refresh_seconds", "TV_DASHBOARD_REFRESH_SECONDS")
@@ -580,12 +587,16 @@ while [[ $# -gt 0 ]]; do
             OUTGOING_API_BATCH_SIZE="$2"
             shift 2
             ;;
-        --last-scanner-id)
-            LAST_SCANNER_ID="$2"
-            shift 2
-            ;;
         --mandatory-scanner-ids)
             MANDATORY_SCANNER_IDS="$2"
+            shift 2
+            ;;
+        --scanner-pairs)
+            SCANNER_PAIRS="$2"
+            shift 2
+            ;;
+        --scanner-pair-suppression-distinct-successes)
+            SCANNER_PAIR_SUPPRESSION_DISTINCT_SUCCESSES="$2"
             shift 2
             ;;
         --current-scan-rate-stale-seconds)
@@ -1037,11 +1048,6 @@ poll_interval = ${OUTGOING_API_POLL_INTERVAL}
 batch_size = ${OUTGOING_API_BATCH_SIZE}
 
 [scanners]
-# Scanner ID for the final outbound scanner before boxes are loaded.
-# Default: blank, which disables last-scanner matching. Range when set: 0-255.
-# Example: if the final scanner IP is 10.10.10.21, set last_scanner_id = 21.
-last_scanner_id = ${LAST_SCANNER_ID}
-
 # Scanner IDs that must stay connected for the health page and TV dashboard to report OK.
 # Default: blank, which disables mandatory scanner warnings. Format: comma or space-separated scanner IP last octets.
 # Example: mandatory_scanner_ids = 20, 21
@@ -1050,14 +1056,18 @@ mandatory_scanner_ids = ${MANDATORY_SCANNER_IDS}
 # Scanner IDs that share duplicate protection because they cover overlapping conveyor areas.
 # Default: blank, which keeps each scanner independent. Format: semicolon-separated groups, with comma or space-separated scanner IP last octets inside each group.
 # Example: scanner_pairs = 20, 21; 30, 31
-scanner_pairs =
+scanner_pairs = ${SCANNER_PAIRS}
+
+# Number of different successful tracking numbers that must pass through a configured scanner pair before a later cross-scanner repeat can be recorded under the normal duplicate rules.
+# Default: 10. Range: greater than 0. There is no short time timeout, so stopped conveyors do not generate extra duplicate rows; the normal 30-day duplicate lookback still applies.
+scanner_pair_suppression_distinct_successes = ${SCANNER_PAIR_SUPPRESSION_DISTINCT_SUCCESSES}
 
 [scanner_names]
 # Optional scanner ID to friendly-name mapping.
 # Default: no entries, so scanners display by ID. Add one line per scanner using the scanner IP last octet as the key.
 # Format: <0-255> = <display name>. Examples:
 #   20 = Lane 1 Scanner
-#   21 = Last Scanner
+#   21 = Partner Scanner
 
 [dashboard]
 # Seconds since the last received scan before the health page Current Scan Rate indicator turns red.
