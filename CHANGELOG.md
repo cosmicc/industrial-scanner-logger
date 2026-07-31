@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.7 - 07.30.2026
+
+### Added
+
+- Add `[scanners] same_scanner_suppression_distinct_successes`, defaulting to
+  5 different accepted successful packages on the exact scanner, for tuning
+  same-scanner repeat suppression.
+- Add `[scanners] scanner_pair_suppression_distinct_successes`, defaulting to
+  10 different accepted successful packages, for tuning overlapping scanner
+  pair suppression.
+- Add `[dashboard] tv_outgoing_api_queue_alert_threshold`, defaulting to 25,
+  for controlling when the TV dashboard reports an outgoing queue warning.
+- Add fixed-canvas TV dashboard scaling that preserves one 1920x1080 layout
+  across full-screen viewport sizes.
+
+### Changed
+
+- Count same-scanner duplicate progression independently on each scanner so its
+  configured partner cannot advance the five-package window.
+- Suppress a repeat from another scanner in the same configured pair until the
+  configured number of different successful packages has progressed through
+  the pair, without a separate short time timeout.
+- Hide the TV dashboard health overlay completely while the system is healthy.
+- Hide outgoing API warnings on the TV dashboard until the queue exceeds 25
+  rows by default; detailed health and queue state remain unchanged.
+- Remove the obsolete `last_scanner_id` config, installer option, receiver and
+  API metadata, PostgreSQL columns and index, missing-last-scanner view, and
+  related API route.
+- Move the unreleased development version to 1.7.
+
+### Fixed
+
+- Prevent high-throughput activity on a paired scanner from making same-scanner
+  rereads eligible as duplicates after only a few seconds.
+- Prevent paired scanners from recording expected overlap reads as duplicates
+  after only three intervening packages.
+- Keep paired-scanner suppression active through long conveyor stops, including
+  lunch breaks, because failed, repeated, and suppressed reads do not advance
+  its package-progression window.
+- Prevent TV dashboard media queries from rearranging panels or changing
+  coordinates outside the exact 1920x1080 viewport.
+
 ## 1.6 - 07.24.2026
 
 ### Added

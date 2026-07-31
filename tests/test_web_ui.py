@@ -42,8 +42,44 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn('severity: "warning"', tv_html)
         self.assertIn("healthIssues.map((issue) => issue.message)", tv_html)
         self.assertIn(".tv-status.health-overlay", site_css)
-        self.assertIn("position: fixed;", site_css)
+        self.assertIn("status.hidden = !degraded", tv_html)
+        self.assertIn('status.textContent = "";', tv_html)
+        self.assertNotIn('status.textContent = "SYSTEM OK";', tv_html)
+        self.assertIn(".tv-status[hidden]", site_css)
         self.assertIn("background: #f59e0b;", site_css)
+
+    def test_tv_outgoing_api_warning_requires_queue_above_configured_threshold(self):
+        tv_html = self.read_project_file("html/tv-dashboard/index.html")
+
+        self.assertIn(
+            "DEFAULT_TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD = 25",
+            tv_html,
+        )
+        self.assertIn(
+            "data.tv_outgoing_api_queue_alert_threshold",
+            tv_html,
+        )
+        self.assertIn(
+            "outgoingApiQueueExceedsAlertThreshold(",
+            tv_html,
+        )
+        self.assertIn("return safeQueueCount > safeThreshold;", tv_html)
+
+    def test_tv_dashboard_uses_one_fixed_scaled_1080p_canvas(self):
+        tv_html = self.read_project_file("html/tv-dashboard/index.html")
+        site_css = self.read_project_file("html/assets/site.css")
+
+        self.assertIn('id="tv-stage"', tv_html)
+        self.assertIn("TV_CANVAS_WIDTH = 1920", tv_html)
+        self.assertIn("TV_CANVAS_HEIGHT = 1080", tv_html)
+        self.assertIn("fitTvStageToViewport", tv_html)
+        self.assertIn('stage.style.transform = `scale(', tv_html)
+        self.assertIn("width: 1920px;", site_css)
+        self.assertIn("height: 1080px;", site_css)
+        self.assertIn("transform-origin: top left;", site_css)
+        self.assertIn("window.innerWidth - scaledWidth", tv_html)
+        self.assertIn("window.innerHeight - scaledHeight", tv_html)
+        self.assertNotIn("@media (max-width: 1200px), (max-height: 780px)", site_css)
 
     def test_tv_dashboard_data_is_auto_fitted_to_one_line(self):
         tv_html = self.read_project_file("html/tv-dashboard/index.html")
@@ -55,7 +91,7 @@ class WebUiContractTests(unittest.TestCase):
         self.assertNotIn('return `${parts.join(", ")} ago`;', tv_html)
         self.assertIn("TV_SINGLE_LINE_SELECTOR", tv_html)
         self.assertIn("fitTvTextToSingleLine", tv_html)
-        self.assertIn('window.addEventListener("resize", scheduleTvTextFit)', tv_html)
+        self.assertIn('window.addEventListener("resize", handleTvViewportResize)', tv_html)
         self.assertIn("overflow-wrap: normal;", site_css)
         self.assertIn("white-space: nowrap;", site_css)
 
@@ -70,7 +106,7 @@ class WebUiContractTests(unittest.TestCase):
             "html/tv-dashboard/index.html",
         ):
             page_html = self.read_project_file(relative_path)
-            self.assertIn('href="/assets/site.css?v=1.6"', page_html)
+            self.assertIn('href="/assets/site.css?v=1.7"', page_html)
 
         self.assertIn("location = /assets/site.css {", nginx_config)
         self.assertIn(

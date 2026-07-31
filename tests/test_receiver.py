@@ -49,7 +49,6 @@ class FakePostgreSQLLogger:
         barcode,
         scanner_id,
         scanner_name,
-        last_scanner_id,
         is_duplicate,
         is_repaired,
         scan_timestamp,
@@ -62,7 +61,6 @@ class FakePostgreSQLLogger:
             "scan_timestamp": scan_timestamp,
             "scanner_id": scanner_id,
             "scanner_name": scanner_name,
-            "last_scanner_id": last_scanner_id,
             "is_duplicate": raw_is_duplicate,
             "is_repaired": False,
             "tracking_number": raw_tracking_number or barcode,
@@ -76,7 +74,6 @@ class FakePostgreSQLLogger:
             "scan_timestamp": scan_timestamp,
             "scanner_id": scanner_id,
             "scanner_name": scanner_name,
-            "last_scanner_id": last_scanner_id,
             "is_duplicate": is_duplicate,
             "is_repaired": is_repaired,
             "tracking_number": tracking_number,
@@ -100,12 +97,20 @@ class FakeDuplicatePostgreSQLLogger(FakePostgreSQLLogger):
         tracking_number,
         scan_timestamp,
         paired_scanner_ids=None,
+        same_scanner_suppression_distinct_successes=5,
+        scanner_pair_suppression_distinct_successes=10,
     ):
         self.duplicate_calls.append({
             "scanner_id": scanner_id,
             "tracking_number": tracking_number,
             "scan_timestamp": scan_timestamp,
             "paired_scanner_ids": paired_scanner_ids,
+            "same_scanner_suppression_distinct_successes": (
+                same_scanner_suppression_distinct_successes
+            ),
+            "scanner_pair_suppression_distinct_successes": (
+                scanner_pair_suppression_distinct_successes
+            ),
         })
         return self.duplicate_state
 
@@ -139,6 +144,8 @@ class CapturingPostgreSQLScanLogger(PostgreSQLScanLogger):
         _tracking_number,
         _scan_timestamp,
         _paired_scanner_ids=None,
+        _same_scanner_suppression_distinct_successes=5,
+        _scanner_pair_suppression_distinct_successes=10,
     ):
         return None
 
@@ -149,7 +156,6 @@ class CapturingPostgreSQLScanLogger(PostgreSQLScanLogger):
         barcode,
         scanner_id,
         scanner_name,
-        last_scanner_id,
         is_duplicate,
         is_repaired,
         scan_timestamp,
@@ -162,7 +168,6 @@ class CapturingPostgreSQLScanLogger(PostgreSQLScanLogger):
             "barcode": barcode,
             "scanner_id": scanner_id,
             "scanner_name": scanner_name,
-            "last_scanner_id": last_scanner_id,
             "is_duplicate": is_duplicate,
             "is_repaired": is_repaired,
             "scan_timestamp": scan_timestamp,
@@ -213,8 +218,81 @@ class FakeSocket:
 
 
 class ReceiverTests(unittest.TestCase):
-    def test_project_version_is_1_6(self):
-        self.assertEqual(__version__, "1.6")
+    def test_database_same_scanner_progression_uses_only_exact_scanner(self):
+        logger = PostgreSQLScanLogger()
+        logger._connect = lambda: None
+        progression_calls = []
+
+        def duplicate_progression(
+            _tracking_number,
+            _scan_timestamp,
+            matching_scanner_ids,
+            event_scanner_ids,
+        ):
+            progression_calls.append((matching_scanner_ids, event_scanner_ids))
+
+            if matching_scanner_ids == [20]:
+                return True, 4
+
+            return False, 0
+
+        logger._duplicate_progression_on_scanners = duplicate_progression
+
+        state = logger.duplicate_state_for_success(
+            "20",
+            "123456789012",
+            datetime(2026, 7, 30, 16),
+            ("20", "21"),
+            same_scanner_suppression_distinct_successes=5,
+            scanner_pair_suppression_distinct_successes=10,
+        )
+
+        self.assertEqual(state, (True, False, False))
+        self.assertEqual(
+            progression_calls,
+            [
+                ([20], [20]),
+                ([21], [20, 21]),
+            ],
+        )
+
+    def test_database_pair_repeat_becomes_duplicate_at_pair_threshold(self):
+        logger = PostgreSQLScanLogger()
+        logger._connect = lambda: None
+        pair_progression = 9
+
+        def duplicate_progression(
+            _tracking_number,
+            _scan_timestamp,
+            matching_scanner_ids,
+            _event_scanner_ids,
+        ):
+            if matching_scanner_ids == [21]:
+                return True, pair_progression
+
+            return False, 0
+
+        logger._duplicate_progression_on_scanners = duplicate_progression
+
+        before_threshold = logger.duplicate_state_for_success(
+            "20",
+            "123456789012",
+            datetime(2026, 7, 30, 16),
+            ("20", "21"),
+        )
+        pair_progression = 10
+        at_threshold = logger.duplicate_state_for_success(
+            "20",
+            "123456789012",
+            datetime(2026, 7, 30, 16, 1),
+            ("20", "21"),
+        )
+
+        self.assertEqual(before_threshold, (True, False, True))
+        self.assertEqual(at_threshold, (True, True, False))
+
+    def test_project_version_is_1_7(self):
+        self.assertEqual(__version__, "1.7")
 
     def test_postgresql_logger_forces_utc_session_timezone(self):
         class FakePsycopg:
@@ -257,6 +335,11 @@ class ReceiverTests(unittest.TestCase):
         self.assertIn("REFERENCES scanner_logger.scan_events", schema_sql)
         self.assertIn("REFERENCES scanner_logger.raw_scan_events", schema_sql)
         self.assertIn("outgoing_scan_queue_one_event_source", schema_sql)
+        self.assertIn("DROP COLUMN IF EXISTS last_scanner_id", schema_sql)
+        self.assertNotIn(
+            "CREATE OR REPLACE VIEW scanner_logger.successful_scans_missing_last_scanner",
+            schema_sql,
+        )
 
     def test_clean_barcode_removes_scanner_line_noise(self):
         self.assertEqual(clean_barcode("\x0012345\r\n"), "12345")
@@ -317,6 +400,51 @@ class ReceiverTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_postgresql_table("scanner_logger.scan-events")
 
+    def test_config_rejects_nonpositive_pair_suppression_progression(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "scanner.conf"
+            config_path.write_text(
+                "[scanners]\n"
+                "scanner_pair_suppression_distinct_successes = 0\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "scanner_pair_suppression_distinct_successes must be greater than 0",
+            ):
+                load_receiver_config(str(config_path))
+
+    def test_config_rejects_nonpositive_same_scanner_suppression_progression(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "scanner.conf"
+            config_path.write_text(
+                "[scanners]\n"
+                "same_scanner_suppression_distinct_successes = 0\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "same_scanner_suppression_distinct_successes must be greater than 0",
+            ):
+                load_receiver_config(str(config_path))
+
+    def test_config_rejects_nonpositive_tv_outgoing_queue_alert_threshold(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "scanner.conf"
+            config_path.write_text(
+                "[dashboard]\n"
+                "tv_outgoing_api_queue_alert_threshold = 0\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "tv_outgoing_api_queue_alert_threshold must be greater than 0",
+            ):
+                load_receiver_config(str(config_path))
+
     def test_validate_outgoing_api_url_requires_https_for_external_hosts(self):
         self.assertEqual(
             validate_outgoing_api_url("https://api.example.test/scans", True),
@@ -345,7 +473,6 @@ class ReceiverTests(unittest.TestCase):
             "scan_time": "14:30:05",
             "scanner_id": 20,
             "scanner_name": "Lane 1 Scanner",
-            "last_scanner_id": 21,
             "is_duplicate": False,
             "is_repaired": True,
             "tracking_number": "123456789012",
@@ -423,7 +550,6 @@ class ReceiverTests(unittest.TestCase):
             barcode="__NO_READ__",
             scanner_id="20",
             scanner_name="Lane 1 Scanner",
-            last_scanner_id="21",
             is_duplicate=False,
             is_repaired=False,
             scan_timestamp=scan_timestamp,
@@ -444,7 +570,6 @@ class ReceiverTests(unittest.TestCase):
             barcode="9" * 34,
             scanner_id="20",
             scanner_name="Lane 1 Scanner",
-            last_scanner_id="21",
             is_duplicate=False,
             is_repaired=False,
             scan_timestamp=scan_timestamp,
@@ -549,13 +674,14 @@ poll_interval = 2
 batch_size = 25
 
 [scanners]
-last_scanner_id = 21
 mandatory_scanner_ids = 20, 21
 scanner_pairs = 20, 21; 30, 31
+same_scanner_suppression_distinct_successes = 7
+scanner_pair_suppression_distinct_successes = 12
 
 [scanner_names]
 20 = Lane 1 Scanner
-21 = Last Scanner
+21 = Partner Scanner
 30 = End Left
 31 = End Right
 
@@ -565,6 +691,7 @@ health_page_refresh_seconds = 4
 tv_dashboard_refresh_seconds = 2
 tv_duplicate_alert_enabled = false
 tv_duplicate_alert_seconds = 75
+tv_outgoing_api_queue_alert_threshold = 30
 disk_space_warning_percent = 12
 disk_space_warning_bytes = 123456789
 
@@ -610,7 +737,6 @@ log_level = warning
             self.assertEqual(config.outgoing_api_retry_interval, 17)
             self.assertEqual(config.outgoing_api_poll_interval, 2)
             self.assertEqual(config.outgoing_api_batch_size, 25)
-            self.assertEqual(config.last_scanner_id, "21")
             self.assertEqual(
                 config.scanner_pairs,
                 {
@@ -621,10 +747,18 @@ log_level = warning
                 },
             )
             self.assertEqual(
+                config.same_scanner_suppression_distinct_successes,
+                7,
+            )
+            self.assertEqual(
+                config.scanner_pair_suppression_distinct_successes,
+                12,
+            )
+            self.assertEqual(
                 config.scanner_names,
                 {
                     "20": "Lane 1 Scanner",
-                    "21": "Last Scanner",
+                    "21": "Partner Scanner",
                     "30": "End Left",
                     "31": "End Right",
                 },
@@ -636,6 +770,7 @@ log_level = warning
             self.assertEqual(config.tv_dashboard_refresh_seconds, 2)
             self.assertFalse(config.tv_duplicate_alert_enabled)
             self.assertEqual(config.tv_duplicate_alert_seconds, 75)
+            self.assertEqual(config.tv_outgoing_api_queue_alert_threshold, 30)
             self.assertEqual(config.disk_space_warning_percent, 12)
             self.assertEqual(config.disk_space_warning_bytes, 123456789)
             self.assertEqual(config.api_host, "0.0.0.0")
@@ -798,8 +933,7 @@ api_key =
                 file_prefix="Test",
                 no_read_message="__NO_READ__",
                 success_length=34,
-                last_scanner_id="21",
-                scanner_names={"21": "Last Scanner"},
+                scanner_names={"21": "Partner Scanner"},
             )
 
             self.assertEqual(list(output_dir.glob("*.backup-*")), [])
@@ -814,7 +948,7 @@ api_key =
                 rows = list(csv.DictReader(f))
 
             self.assertEqual(rows[0]["scanner_id"], "21")
-            self.assertEqual(rows[0]["scanner_name"], "Last Scanner")
+            self.assertEqual(rows[0]["scanner_name"], "Partner Scanner")
             self.assertEqual(rows[0]["status"], "SUCCESS")
             self.assertEqual(rows[0]["is_duplicate"], "false")
             self.assertEqual(rows[0]["is_repaired"], "false")
@@ -1015,7 +1149,7 @@ api_key =
                 ],
             )
 
-    def test_same_scanner_duplicate_requires_three_different_successes_between_scans(self):
+    def test_same_scanner_duplicate_requires_five_different_successes_between_scans(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
             logger = DailyCsvLogger(
                 output_dir=Path(temp_dir),
@@ -1028,11 +1162,18 @@ api_key =
             tracking_b = "2" * 34
             tracking_c = "3" * 34
             tracking_d = "4" * 34
+            tracking_e = "5" * 34
+            tracking_f = "6" * 34
 
             logger.write_scan_event(tracking_a, "20")
-            logger.write_scan_event(tracking_b, "20")
-            logger.write_scan_event(tracking_c, "20")
-            logger.write_scan_event(tracking_d, "20")
+            for tracking_number in (
+                tracking_b,
+                tracking_c,
+                tracking_d,
+                tracking_e,
+                tracking_f,
+            ):
+                logger.write_scan_event(tracking_number, "20")
             logger.write_scan_event(tracking_a, "20")
 
             with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
@@ -1041,7 +1182,7 @@ api_key =
             self.assertEqual(rows[-1]["tracking"], tracking_number_from_barcode(tracking_a))
             self.assertEqual(rows[-1]["is_duplicate"], "true")
 
-    def test_same_scanner_repeat_before_three_different_successes_is_dropped(self):
+    def test_same_scanner_repeat_before_five_different_successes_is_dropped(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
             logger = DailyCsvLogger(
                 output_dir=Path(temp_dir),
@@ -1053,10 +1194,14 @@ api_key =
             tracking_a = "1" * 34
             tracking_b = "2" * 34
             tracking_c = "3" * 34
+            tracking_d = "4" * 34
+            tracking_e = "5" * 34
 
             logger.write_scan_event(tracking_a, "20")
             logger.write_scan_event(tracking_b, "20")
             logger.write_scan_event(tracking_c, "20")
+            logger.write_scan_event(tracking_d, "20")
+            logger.write_scan_event(tracking_e, "20")
             logger.write_scan_event(tracking_a, "20")
 
             with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
@@ -1066,8 +1211,32 @@ api_key =
                 tracking_number_from_barcode(tracking_a),
                 tracking_number_from_barcode(tracking_b),
                 tracking_number_from_barcode(tracking_c),
+                tracking_number_from_barcode(tracking_d),
+                tracking_number_from_barcode(tracking_e),
             ])
-            self.assertEqual([row["is_duplicate"] for row in rows], ["false"] * 3)
+            self.assertEqual([row["is_duplicate"] for row in rows], ["false"] * 5)
+
+    def test_same_scanner_suppression_window_is_configurable(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                same_scanner_suppression_distinct_successes=2,
+            )
+
+            tracking_a = "1" * 34
+            logger.write_scan_event(tracking_a, "20")
+            logger.write_scan_event("2" * 34, "20")
+            logger.write_scan_event("3" * 34, "20")
+            logger.write_scan_event(tracking_a, "20")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(len(rows), 4)
+            self.assertEqual(rows[-1]["is_duplicate"], "true")
 
     def test_paired_scanner_immediate_repeat_is_dropped(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
@@ -1092,7 +1261,7 @@ api_key =
             self.assertEqual(rows[0]["tracking"], tracking_number_from_barcode(tracking_a))
             self.assertEqual(rows[0]["is_duplicate"], "false")
 
-    def test_paired_scanner_repeat_after_threshold_is_duplicate(self):
+    def test_paired_scanner_repeat_inside_suppression_window_is_dropped(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
             logger = DailyCsvLogger(
                 output_dir=Path(temp_dir),
@@ -1114,21 +1283,137 @@ api_key =
             with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
                 rows = list(csv.DictReader(f))
 
-            self.assertEqual(len(rows), 5)
+            self.assertEqual(len(rows), 4)
+            self.assertNotEqual(rows[-1]["tracking"], tracking_number_from_barcode(tracking_a))
+
+    def test_paired_scanner_repeat_after_suppression_window_is_duplicate(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                scanner_pairs="20, 21",
+            )
+
+            tracking_a = "1" * 34
+            other_tracking_numbers = [str(index) * 34 for index in range(2, 10)]
+            other_tracking_numbers.extend(["0" * 34, "12" * 17])
+
+            logger.write_scan_event(tracking_a, "20")
+            for index, tracking_number in enumerate(other_tracking_numbers):
+                logger.write_scan_event(
+                    tracking_number,
+                    "20" if index % 2 == 0 else "21",
+                )
+            logger.write_scan_event(tracking_a, "21")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(len(rows), 12)
             self.assertEqual(rows[-1]["scanner_id"], "21")
             self.assertEqual(rows[-1]["tracking"], tracking_number_from_barcode(tracking_a))
             self.assertEqual(rows[-1]["is_duplicate"], "true")
 
+    def test_paired_scanner_suppression_window_is_configurable(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                scanner_pairs="20, 21",
+                scanner_pair_suppression_distinct_successes=4,
+            )
+
+            tracking_a = "1" * 34
+            logger.write_scan_event(tracking_a, "20")
+            for tracking_number in ("2" * 34, "3" * 34, "4" * 34, "5" * 34):
+                logger.write_scan_event(tracking_number, "20")
+            logger.write_scan_event(tracking_a, "21")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(len(rows), 6)
+            self.assertEqual(rows[-1]["scanner_id"], "21")
+            self.assertEqual(rows[-1]["is_duplicate"], "true")
+
+    def test_suppressed_pair_reads_do_not_advance_progression(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                scanner_pairs="20, 21",
+                scanner_pair_suppression_distinct_successes=4,
+            )
+
+            tracking_a = "1" * 34
+            logger.write_scan_event(tracking_a, "20")
+            for _repeat in range(5):
+                logger.write_scan_event(tracking_a, "21")
+            for tracking_number in ("2" * 34, "3" * 34, "4" * 34):
+                logger.write_scan_event(tracking_number, "20")
+            logger.write_scan_event(tracking_a, "21")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows_before_window = list(csv.DictReader(f))
+
+            self.assertEqual(len(rows_before_window), 4)
+
+            logger.write_scan_event("5" * 34, "20")
+            logger.write_scan_event(tracking_a, "21")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows_after_window = list(csv.DictReader(f))
+
+            self.assertEqual(len(rows_after_window), 6)
+            self.assertEqual(rows_after_window[-1]["scanner_id"], "21")
+            self.assertEqual(rows_after_window[-1]["is_duplicate"], "true")
+
+    def test_partner_scans_do_not_advance_same_scanner_progression(self):
+        with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
+            logger = DailyCsvLogger(
+                output_dir=Path(temp_dir),
+                file_prefix="Test",
+                no_read_message="__NO_READ__",
+                success_length=34,
+                scanner_pairs="20, 21",
+            )
+
+            tracking_a = "1" * 34
+            logger.write_scan_event(tracking_a, "20")
+            for tracking_number in (
+                "2" * 34,
+                "3" * 34,
+                "4" * 34,
+                "5" * 34,
+                "6" * 34,
+            ):
+                logger.write_scan_event(tracking_number, "21")
+            logger.write_scan_event(tracking_a, "20")
+
+            with logger.current_csv_path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+
+            self.assertEqual(len(rows), 6)
+            self.assertNotEqual(
+                rows[-1]["tracking"],
+                tracking_number_from_barcode(tracking_a),
+            )
+
     def test_duplicate_flags_can_come_from_postgresql_month_lookup(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
-            postgresql_logger = FakeDuplicatePostgreSQLLogger((True, True))
+            postgresql_logger = FakeDuplicatePostgreSQLLogger((True, True, False))
             logger = DailyCsvLogger(
                 output_dir=Path(temp_dir),
                 file_prefix="Test",
                 no_read_message="__NO_READ__",
                 success_length=34,
                 postgresql_logger=postgresql_logger,
-                last_scanner_id="21",
             )
 
             valid_tracking = "1" * 34
@@ -1155,7 +1440,7 @@ api_key =
 
     def test_database_duplicate_lookup_receives_paired_scanner_ids(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
-            postgresql_logger = FakeDuplicatePostgreSQLLogger((True, False))
+            postgresql_logger = FakeDuplicatePostgreSQLLogger((True, False, True))
             logger = DailyCsvLogger(
                 output_dir=Path(temp_dir),
                 file_prefix="Test",
@@ -1172,17 +1457,28 @@ api_key =
                 postgresql_logger.duplicate_calls[0]["paired_scanner_ids"],
                 ("20", "21"),
             )
+            self.assertEqual(
+                postgresql_logger.duplicate_calls[0][
+                    "same_scanner_suppression_distinct_successes"
+                ],
+                5,
+            )
+            self.assertEqual(
+                postgresql_logger.duplicate_calls[0][
+                    "scanner_pair_suppression_distinct_successes"
+                ],
+                10,
+            )
 
     def test_database_duplicate_state_marks_regular_duplicate(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
-            postgresql_logger = FakeDuplicatePostgreSQLLogger((True, True))
+            postgresql_logger = FakeDuplicatePostgreSQLLogger((True, True, False))
             logger = DailyCsvLogger(
                 output_dir=Path(temp_dir),
                 file_prefix="Test",
                 no_read_message="__NO_READ__",
                 success_length=34,
                 postgresql_logger=postgresql_logger,
-                last_scanner_id="21",
             )
 
             valid_tracking = "1" * 34
@@ -1197,7 +1493,7 @@ api_key =
 
     def test_database_repeat_before_duplicate_threshold_is_dropped(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
-            postgresql_logger = FakeDuplicatePostgreSQLLogger((True, False))
+            postgresql_logger = FakeDuplicatePostgreSQLLogger((True, False, False))
             logger = DailyCsvLogger(
                 output_dir=Path(temp_dir),
                 file_prefix="Test",
@@ -1348,7 +1644,7 @@ api_key =
             self.assertEqual(rows[2]["is_repaired"], "false")
             self.assertEqual(rows[2]["tracking"], "871913626933")
 
-    def test_last_scanner_metadata_does_not_make_first_scan_duplicate(self):
+    def test_scanner_names_do_not_change_duplicate_decisions(self):
         with tempfile.TemporaryDirectory() as temp_dir, redirect_stdout(StringIO()):
             postgresql_logger = FakePostgreSQLLogger()
             logger = DailyCsvLogger(
@@ -1357,10 +1653,9 @@ api_key =
                 no_read_message="__NO_READ__",
                 success_length=34,
                 postgresql_logger=postgresql_logger,
-                last_scanner_id="21",
                 scanner_names={
                     "20": "Lane 1 Scanner",
-                    "21": "Last Scanner",
+                    "21": "Partner Scanner",
                 },
             )
 
@@ -1377,14 +1672,15 @@ api_key =
 
             self.assertEqual(rows[0]["scanner_name"], "Lane 1 Scanner")
             self.assertEqual(rows[0]["is_duplicate"], "false")
-            self.assertEqual(rows[-1]["scanner_name"], "Last Scanner")
+            self.assertEqual(rows[-1]["scanner_name"], "Partner Scanner")
             self.assertEqual(rows[-1]["is_duplicate"], "false")
 
             self.assertEqual(postgresql_logger.rows[0]["scanner_name"], "Lane 1 Scanner")
-            self.assertEqual(postgresql_logger.rows[0]["last_scanner_id"], "21")
             self.assertFalse(postgresql_logger.rows[0]["is_duplicate"])
-            self.assertEqual(postgresql_logger.rows[-1]["scanner_name"], "Last Scanner")
-            self.assertEqual(postgresql_logger.rows[-1]["last_scanner_id"], "21")
+            self.assertEqual(
+                postgresql_logger.rows[-1]["scanner_name"],
+                "Partner Scanner",
+            )
             self.assertFalse(postgresql_logger.rows[-1]["is_duplicate"])
 
     def test_other_scanner_first_seen_tracking_is_not_duplicate(self):
@@ -1394,7 +1690,6 @@ api_key =
                 file_prefix="Test",
                 no_read_message="__NO_READ__",
                 success_length=34,
-                last_scanner_id="21",
             )
 
             valid_tracking = "6" * 34
@@ -1425,7 +1720,6 @@ api_key =
                     file_prefix="Test",
                     no_read_message="__NO_READ__",
                     success_length=34,
-                    last_scanner_id="20",
                     scanner_names={"20": "Lane 1 Scanner"},
                 )
                 logger.write_scan_event(valid_tracking, "20")

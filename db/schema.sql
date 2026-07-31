@@ -11,8 +11,6 @@ CREATE TABLE IF NOT EXISTS scanner_logger.scan_events (
 
     scanner_name TEXT,
 
-    last_scanner_id SMALLINT CHECK (last_scanner_id BETWEEN 0 AND 255),
-
     is_duplicate BOOLEAN NOT NULL DEFAULT false,
 
     is_repaired BOOLEAN NOT NULL DEFAULT false,
@@ -54,8 +52,6 @@ CREATE TABLE IF NOT EXISTS scanner_logger.raw_scan_events (
     scanner_id SMALLINT NOT NULL CHECK (scanner_id BETWEEN 0 AND 255),
 
     scanner_name TEXT,
-
-    last_scanner_id SMALLINT CHECK (last_scanner_id BETWEEN 0 AND 255),
 
     is_duplicate BOOLEAN NOT NULL DEFAULT false,
 
@@ -204,6 +200,14 @@ ALTER TABLE scanner_logger.scan_events
 ALTER TABLE scanner_logger.raw_scan_events
     DROP COLUMN IF EXISTS scanner_role;
 
+DROP INDEX IF EXISTS scanner_logger.idx_scan_events_last_scanner_tracking;
+
+ALTER TABLE scanner_logger.scan_events
+    DROP COLUMN IF EXISTS last_scanner_id;
+
+ALTER TABLE scanner_logger.raw_scan_events
+    DROP COLUMN IF EXISTS last_scanner_id;
+
 -- Legacy rows used receiver-local America/Detroit date and time values.
 DO $$
 DECLARE
@@ -312,15 +316,6 @@ CREATE INDEX IF NOT EXISTS idx_scan_events_scanner_tracking_scan_timestamp
     ON scanner_logger.scan_events (scanner_id, tracking_number, scan_timestamp DESC, id DESC)
     WHERE is_success = true;
 
-CREATE INDEX IF NOT EXISTS idx_scan_events_last_scanner_tracking
-    ON scanner_logger.scan_events (
-        tracking_number,
-        last_scanner_id,
-        scanner_id,
-        scan_timestamp
-    )
-    WHERE is_success = true AND last_scanner_id IS NOT NULL;
-
 CREATE INDEX IF NOT EXISTS idx_raw_scan_events_scan_timestamp
     ON scanner_logger.raw_scan_events (scan_timestamp DESC, id DESC);
 
@@ -375,7 +370,6 @@ SELECT
     ((scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::time(0) AS scan_time,
     scanner_id,
     scanner_name,
-    last_scanner_id,
     is_duplicate,
     is_repaired,
     tracking_number,
@@ -393,7 +387,6 @@ SELECT
     ((scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::time(0) AS scan_time,
     scanner_id,
     scanner_name,
-    last_scanner_id,
     is_duplicate,
     is_repaired,
     tracking_number,
@@ -444,7 +437,6 @@ SELECT
     events.scan_time,
     events.scanner_id,
     events.scanner_name,
-    events.last_scanner_id,
     events.tracking_number,
     events.barcode,
     row_number() OVER (
@@ -458,42 +450,6 @@ FROM events_with_time AS events
 JOIN scanner_counts
   ON scanner_counts.scan_date = events.scan_date
  AND scanner_counts.tracking_number = events.tracking_number;
-
-CREATE OR REPLACE VIEW scanner_logger.successful_scans_missing_last_scanner AS
-WITH source AS (
-    SELECT
-        events.*,
-        ((events.scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::date AS scan_date
-    FROM scanner_logger.scan_events AS events
-    WHERE events.is_success = true
-)
-SELECT
-    source.scan_date,
-    source.tracking_number,
-    max(source.barcode) AS barcode,
-    source.last_scanner_id,
-    min(source.scan_timestamp) AS first_seen_at,
-    max(source.scan_timestamp) AS last_seen_at,
-    count(*) AS scan_count,
-    count(DISTINCT source.scanner_id) AS scanner_count,
-    array_agg(DISTINCT source.scanner_id ORDER BY source.scanner_id) AS scanner_ids,
-    array_agg(DISTINCT source.scanner_name ORDER BY source.scanner_name)
-        FILTER (WHERE source.scanner_name IS NOT NULL) AS scanner_names
-FROM source
-WHERE source.last_scanner_id IS NOT NULL
-  AND source.scanner_id <> source.last_scanner_id
-  AND NOT EXISTS (
-      SELECT 1
-      FROM scanner_logger.scan_events AS last_scan
-      WHERE last_scan.is_success = true
-        AND ((last_scan.scan_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'America/Detroit')::date = source.scan_date
-        AND last_scan.tracking_number = source.tracking_number
-        AND last_scan.scanner_id = source.last_scanner_id
-  )
-GROUP BY
-    source.scan_date,
-    source.tracking_number,
-    source.last_scanner_id;
 
 DO $$
 BEGIN

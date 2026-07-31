@@ -329,7 +329,7 @@ class HealthCliTests(unittest.TestCase):
                 },
                 {
                     "scanner_id": 21,
-                    "display_name": "Last Scanner",
+                    "display_name": "Partner Scanner",
                 },
             ],
             "mandatory_scanners": {
@@ -345,7 +345,7 @@ class HealthCliTests(unittest.TestCase):
                     },
                     {
                         "scanner_id": 21,
-                        "display_name": "Last Scanner",
+                        "display_name": "Partner Scanner",
                         "connected": True,
                     },
                 ],
@@ -369,7 +369,7 @@ class HealthCliTests(unittest.TestCase):
                     },
                     {
                         "scanner_id": 21,
-                        "display_name": "Last Scanner",
+                        "display_name": "Partner Scanner",
                         "total_scan_events": 4,
                         "successful_scans": 3,
                         "duplicate_scans": 0,

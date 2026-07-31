@@ -320,7 +320,7 @@ class ApiQueryTests(unittest.TestCase):
                     },
                     {
                         "scanner_id": 21,
-                        "scanner_name": "Last Scanner",
+                        "scanner_name": "Partner Scanner",
                         "total_scan_events": 4,
                         "successful_scans": 4,
                         "failed_scans": 0,
@@ -341,7 +341,7 @@ class ApiQueryTests(unittest.TestCase):
             SimpleNamespace(
                 scanner_names={
                     "20": "Lane 1 Scanner",
-                    "21": "Configured Last Scanner",
+                    "21": "Configured Partner Scanner",
                 }
             ),
             date(2026, 5, 18),
@@ -368,8 +368,8 @@ class ApiQueryTests(unittest.TestCase):
                 },
                 {
                     "scanner_id": 21,
-                    "scanner_name": "Configured Last Scanner",
-                    "display_name": "Configured Last Scanner",
+                    "scanner_name": "Configured Partner Scanner",
+                    "display_name": "Configured Partner Scanner",
                     "total_scan_events": 4,
                     "successful_scans": 4,
                     "failed_scans": 0,
@@ -513,7 +513,6 @@ class ApiQueryTests(unittest.TestCase):
                     "scan_timestamp": datetime(2026, 6, 16, 9, 30, 5),
                     "scanner_id": 20,
                     "scanner_name": "",
-                    "last_scanner_id": 21,
                     "is_duplicate": False,
                     "is_repaired": False,
                     "tracking_number": "__NO_READ__",
@@ -569,7 +568,6 @@ class ApiQueryTests(unittest.TestCase):
                     "scan_time": "08:15:30",
                     "scanner_id": 20,
                     "scanner_name": "",
-                    "last_scanner_id": 21,
                     "is_duplicate": True,
                     "is_repaired": False,
                     "tracking_number": "123456789012",
@@ -627,7 +625,6 @@ class ApiQueryTests(unittest.TestCase):
                         "scan_time": "08:15:30",
                         "scanner_id": 20,
                         "scanner_name": "",
-                        "last_scanner_id": 21,
                         "is_duplicate": True,
                         "is_repaired": False,
                         "tracking_number": "987654321098",
@@ -678,12 +675,12 @@ class ApiQueryTests(unittest.TestCase):
             port=55256,
             mandatory_scanner_ids=[],
             scanner_names={},
-            last_scanner_id="",
             current_scan_rate_stale_seconds=60,
             health_page_refresh_seconds=3,
             tv_dashboard_refresh_seconds=1,
             tv_duplicate_alert_enabled=False,
             tv_duplicate_alert_seconds=60,
+            tv_outgoing_api_queue_alert_threshold=25,
         )
 
         with (
@@ -724,6 +721,7 @@ class ApiQueryTests(unittest.TestCase):
 
         duplicate_alert.assert_not_called()
         self.assertFalse(payload["tv_duplicate_alert_enabled"])
+        self.assertEqual(payload["tv_outgoing_api_queue_alert_threshold"], 25)
         self.assertIsNone(payload["duplicate_alert"])
         self.assertEqual(payload["outgoing_api"]["state"], "disabled")
         self.assertEqual(payload["storage"]["state"], "ok")
@@ -904,7 +902,7 @@ class ApiQueryTests(unittest.TestCase):
         status = dashboard_mandatory_scanners(
             SimpleNamespace(
                 mandatory_scanner_ids=["20", "21"],
-                scanner_names={"20": "Lane 1 Scanner", "21": "Last Scanner"},
+                scanner_names={"20": "Lane 1 Scanner", "21": "Partner Scanner"},
             ),
             [20],
         )
@@ -922,8 +920,8 @@ class ApiQueryTests(unittest.TestCase):
                 },
                 {
                     "scanner_id": 21,
-                    "scanner_name": "Last Scanner",
-                    "display_name": "Last Scanner",
+                    "scanner_name": "Partner Scanner",
+                    "display_name": "Partner Scanner",
                     "connected": False,
                 },
             ],
@@ -933,7 +931,7 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(status["missing_scanner_ids"], [21])
         self.assertEqual(
             status["warning"],
-            "Mandatory scanner not connected: Last Scanner",
+            "Mandatory scanner not connected: Partner Scanner",
         )
 
     def test_scan_row_display_name_prefers_current_config_name(self):
@@ -1026,7 +1024,6 @@ class ApiQueryTests(unittest.TestCase):
         config = SimpleNamespace(
             scanner_names={"20": "Lane 1 Scanner", "21": "Configured Scanner"},
             mandatory_scanner_ids=["21"],
-            last_scanner_id="22",
             scanner_pairs={"22": ("22", "23"), "23": ("22", "23")},
         )
 
