@@ -95,6 +95,7 @@
     const DEFAULT_DISPLAY_TIME_ZONE = "America/Detroit";
     const DEFAULT_TV_REFRESH_SECONDS = 1;
     const DEFAULT_TV_DUPLICATE_ALERT_SECONDS = 60;
+    const DEFAULT_TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD = 25;
     const TV_CANVAS_WIDTH = 1920;
     const TV_CANVAS_HEIGHT = 1080;
     const MAX_SEEN_PACKAGE_ALERT_IDS = 300;
@@ -258,7 +259,14 @@
         });
       }
 
-      if (outgoingApi?.enabled && outgoingApi.state !== "ok") {
+      if (
+        outgoingApi?.enabled &&
+        outgoingApi.state !== "ok" &&
+        outgoingApiQueueExceedsAlertThreshold(
+          outgoingApi,
+          data.tv_outgoing_api_queue_alert_threshold
+        )
+      ) {
         issues.push({
           severity: "warning",
           message: outgoingApiWarningMessage(outgoingApi)
@@ -273,6 +281,19 @@
       }
 
       return issues;
+    }
+
+    function outgoingApiQueueExceedsAlertThreshold(outgoingApi, configuredThreshold) {
+      const queueCount = Number(outgoingApi?.queue_count || 0);
+      const threshold = Number(
+        configuredThreshold ?? DEFAULT_TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD
+      );
+      const safeQueueCount = Number.isFinite(queueCount) ? Math.max(0, queueCount) : 0;
+      const safeThreshold = Number.isFinite(threshold) && threshold > 0
+        ? threshold
+        : DEFAULT_TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD;
+
+      return safeQueueCount > safeThreshold;
     }
 
     function highestHealthSeverity(issues) {

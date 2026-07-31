@@ -115,6 +115,7 @@ batch_size = 50
 [scanners]
 mandatory_scanner_ids =
 scanner_pairs =
+same_scanner_suppression_distinct_successes = 5
 scanner_pair_suppression_distinct_successes = 10
 
 [scanner_names]
@@ -372,6 +373,7 @@ names:
 [scanners]
 mandatory_scanner_ids = 20, 21
 scanner_pairs = 20, 21
+same_scanner_suppression_distinct_successes = 5
 scanner_pair_suppression_distinct_successes = 10
 
 [scanner_names]
@@ -381,17 +383,19 @@ scanner_pair_suppression_distinct_successes = 10
 [dashboard]
 health_page_refresh_seconds = 3
 tv_dashboard_refresh_seconds = 1
+tv_outgoing_api_queue_alert_threshold = 25
 ```
 
 Repeated successful scans use one duplicate flag. Same-scanner repeats are
-silently dropped until the scanner's duplicate group has accepted 3 different
-successful tracking numbers, then a later repeat is recorded with
-`is_duplicate = true`. A repeat from the other scanner in a configured pair is
-suppressed until 10 different successful tracking numbers have passed through
-the pair by default. This pair window is progression-based and has no short
-time timeout, so lunch breaks and stopped conveyors cannot expire it. The
-normal 30-day duplicate lookback still applies. After the configured pair
-window is met, the normal duplicate rule applies.
+silently dropped until that exact scanner has accepted 5 different successful
+tracking numbers by default, then a later repeat is recorded with
+`is_duplicate = true`. Scans accepted by its configured partner do not advance
+this scanner-specific window. A repeat from the other scanner in a configured
+pair is suppressed until 10 different successful tracking numbers have passed
+through the pair by default, then it is recorded as a duplicate. Both windows
+are progression-based and have no short time timeout, so lunch breaks and
+stopped conveyors cannot expire them. The normal 30-day duplicate lookback
+still applies.
 
 Set `[receiver] tracking_repair_enabled = true` to allow conservative repair of
 short numeric failed scans. A short scan is repaired only when successful scans
@@ -457,7 +461,9 @@ that DSN.
 
 Existing service installs keep their current config file. After this change,
 run `sudo refresh-app-config` to add
-`scanner_pair_suppression_distinct_successes` and remove deleted options,
+`same_scanner_suppression_distinct_successes`,
+`scanner_pair_suppression_distinct_successes`, and
+`tv_outgoing_api_queue_alert_threshold`, and to remove deleted options,
 including `last_scanner_id`, without overwriting settings that still exist.
 
 After pulling schema changes, reapply `db/schema.sql` to the PostgreSQL database
@@ -529,12 +535,14 @@ counts, last received scanner-data age, connected scanner count, and one
 severity-aware health overlay. Healthy operation shows no status bar.
 Warning-only degradation uses yellow, critical service or PostgreSQL
 degradation uses red, and simultaneous issues are combined without moving the
-dashboard content. Scanner connect and disconnect log messages do not count as
-last received scanner data. The TV page calculates that age from the server
-timestamp in the health payload, keeps it on one line, and uses compact `Min`
-and `Sec` labels without "ago". Longer text automatically shrinks to fit.
-Stylesheet requests are versioned and served without caching so deployments
-immediately use the current TV colors and layout.
+dashboard content. Outgoing API warnings remain hidden on the TV page while the
+queue is at or below `tv_outgoing_api_queue_alert_threshold` (25 by default)
+and appear starting at 26 queued rows. Scanner connect and disconnect log
+messages do not count as last received scanner data. The TV page calculates
+that age from the server timestamp in the health payload, keeps it on one line,
+and uses compact `Min` and `Sec` labels without "ago". Longer text automatically
+shrinks to fit. Stylesheet requests are versioned and served without caching so
+deployments immediately use the current TV colors and layout.
 
 For remote-only page or API failures, see
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md#remote-web-access).

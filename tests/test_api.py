@@ -680,6 +680,7 @@ class ApiQueryTests(unittest.TestCase):
             tv_dashboard_refresh_seconds=1,
             tv_duplicate_alert_enabled=False,
             tv_duplicate_alert_seconds=60,
+            tv_outgoing_api_queue_alert_threshold=25,
         )
 
         with (
@@ -720,6 +721,7 @@ class ApiQueryTests(unittest.TestCase):
 
         duplicate_alert.assert_not_called()
         self.assertFalse(payload["tv_duplicate_alert_enabled"])
+        self.assertEqual(payload["tv_outgoing_api_queue_alert_threshold"], 25)
         self.assertIsNone(payload["duplicate_alert"])
         self.assertEqual(payload["outgoing_api"]["state"], "disabled")
         self.assertEqual(payload["storage"]["state"], "ok")

@@ -38,11 +38,23 @@ class InstallScriptTests(unittest.TestCase):
         self.assertNotIn("last_scanner_id =", default_config)
         self.assertIn("SCANNER_PAIRS", install_script)
         self.assertIn(
+            "same_scanner_suppression_distinct_successes",
+            install_script,
+        )
+        self.assertIn(
             "scanner_pair_suppression_distinct_successes",
             install_script,
         )
         self.assertIn(
+            "same_scanner_suppression_distinct_successes = 5",
+            default_config,
+        )
+        self.assertIn(
             "scanner_pair_suppression_distinct_successes = 10",
+            default_config,
+        )
+        self.assertIn(
+            "tv_outgoing_api_queue_alert_threshold = 25",
             default_config,
         )
 

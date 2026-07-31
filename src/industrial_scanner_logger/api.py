@@ -19,6 +19,7 @@ from industrial_scanner_logger.receiver import (
     DEFAULT_CONFIG_FILE,
     DEFAULT_OUTGOING_API_QUEUE_TABLE,
     DEFAULT_TV_DUPLICATE_ALERT_SECONDS,
+    DEFAULT_TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD,
     load_receiver_config,
     parse_postgresql_table,
     validate_outgoing_api_api_key,
@@ -211,6 +212,11 @@ def build_dashboard_health(
         "tv_duplicate_alert_seconds",
         DEFAULT_TV_DUPLICATE_ALERT_SECONDS,
     )
+    tv_outgoing_api_queue_alert_threshold = getattr(
+        config,
+        "tv_outgoing_api_queue_alert_threshold",
+        DEFAULT_TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD,
+    )
 
     services = {
         "scanner": systemd_service_status(scanner_service_unit),
@@ -327,6 +333,9 @@ def build_dashboard_health(
         ),
         "tv_duplicate_alert_enabled": tv_duplicate_alert_enabled,
         "tv_duplicate_alert_seconds": tv_duplicate_alert_seconds,
+        "tv_outgoing_api_queue_alert_threshold": (
+            tv_outgoing_api_queue_alert_threshold
+        ),
         "services": services,
         "database": database,
         "connected_scanner_ids": connected_scanner_ids,

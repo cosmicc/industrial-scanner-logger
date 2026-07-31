@@ -48,6 +48,23 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn(".tv-status[hidden]", site_css)
         self.assertIn("background: #f59e0b;", site_css)
 
+    def test_tv_outgoing_api_warning_requires_queue_above_configured_threshold(self):
+        tv_html = self.read_project_file("html/tv-dashboard/index.html")
+
+        self.assertIn(
+            "DEFAULT_TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD = 25",
+            tv_html,
+        )
+        self.assertIn(
+            "data.tv_outgoing_api_queue_alert_threshold",
+            tv_html,
+        )
+        self.assertIn(
+            "outgoingApiQueueExceedsAlertThreshold(",
+            tv_html,
+        )
+        self.assertIn("return safeQueueCount > safeThreshold;", tv_html)
+
     def test_tv_dashboard_uses_one_fixed_scaled_1080p_canvas(self):
         tv_html = self.read_project_file("html/tv-dashboard/index.html")
         site_css = self.read_project_file("html/assets/site.css")

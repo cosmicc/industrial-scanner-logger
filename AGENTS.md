@@ -154,10 +154,13 @@ scan history.
 - Duplicate protection is scoped to the scanner's duplicate group. By default
   each scanner is its own group. `[scanners] scanner_pairs` can join scanners
   that cover overlapping conveyor areas.
-- Same-scanner repeats are silently dropped until at least 3 different
-  successful tracking numbers have been accepted in the duplicate group since
-  the previous accepted scan of the repeated tracking number. Once that
-  threshold is met, the repeat is accepted with `is_duplicate = true`.
+- Same-scanner repeats are silently dropped until
+  `[scanners] same_scanner_suppression_distinct_successes` different successful
+  tracking numbers have been accepted by that exact scanner since its previous
+  accepted scan of the repeated tracking number. The default is 5. Activity on
+  another scanner, including its configured partner, does not advance this
+  scanner-specific window. Once the threshold is met, the repeat is accepted
+  with `is_duplicate = true`.
 - A repeat received from another scanner in the same configured pair is
   suppressed until
   `[scanners] scanner_pair_suppression_distinct_successes` different successful
@@ -169,8 +172,8 @@ scan history.
   lookback still bounds stored-history decisions.
 - Failed scans, suppressed scans, and repeated reads do not advance the
   paired-scanner progression window.
-- After the paired-scanner progression window is met, the normal duplicate
-  threshold determines whether the repeat is recorded.
+- After the paired-scanner progression window is met, the cross-scanner repeat
+  is accepted with `is_duplicate = true`.
 - Suppressed duplicate successes are not written to `scan_events` or
   `raw_scan_events`, and they must not be queued for outgoing API delivery.
 - PostgreSQL duplicate lookup considers the previous 30 days with UTC stored
@@ -319,6 +322,10 @@ scan history.
   combined overlay red.
 - Healthy TV dashboard operation must not render a green or "system OK" status
   bar. The health overlay is visible only while the app is degraded.
+- The TV dashboard must hide outgoing API warnings while the queue count is at
+  or below `[dashboard] tv_outgoing_api_queue_alert_threshold`. The default is
+  25, so the warning begins at 26 queued rows. This threshold affects only the
+  TV overlay; detailed outgoing API health remains available elsewhere.
 - Treat the TV dashboard as one fixed 1920x1080 canvas. Uniformly scale that
   canvas to fit the full-screen viewport; never reflow, rearrange, or move its
   panels at narrower viewport sizes.
@@ -386,6 +393,11 @@ scan history.
 - `[scanners] scanner_pair_suppression_distinct_successes` must be a positive
   integer. It counts different accepted successful tracking numbers, not
   elapsed time.
+- `[scanners] same_scanner_suppression_distinct_successes` must be a positive
+  integer. It counts different accepted successful tracking numbers on the
+  exact scanner, not across its duplicate group and not elapsed time.
+- `[dashboard] tv_outgoing_api_queue_alert_threshold` must be a positive
+  integer. The TV warning uses a strict greater-than comparison.
 - Keep validation strict: numeric ranges, safe filename prefixes, scanner IDs
   in 0-255 range, schema.table names only for PostgreSQL table config, API root
   path beginning with `/`, and API root path not `/` when nginx is enabled.

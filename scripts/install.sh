@@ -40,12 +40,14 @@ OUTGOING_API_POLL_INTERVAL="${OUTGOING_API_POLL_INTERVAL:-1}"
 OUTGOING_API_BATCH_SIZE="${OUTGOING_API_BATCH_SIZE:-50}"
 MANDATORY_SCANNER_IDS="${MANDATORY_SCANNER_IDS:-}"
 SCANNER_PAIRS="${SCANNER_PAIRS:-}"
+SAME_SCANNER_SUPPRESSION_DISTINCT_SUCCESSES="${SAME_SCANNER_SUPPRESSION_DISTINCT_SUCCESSES:-5}"
 SCANNER_PAIR_SUPPRESSION_DISTINCT_SUCCESSES="${SCANNER_PAIR_SUPPRESSION_DISTINCT_SUCCESSES:-10}"
 CURRENT_SCAN_RATE_STALE_SECONDS="${CURRENT_SCAN_RATE_STALE_SECONDS:-60}"
 HEALTH_PAGE_REFRESH_SECONDS="${HEALTH_PAGE_REFRESH_SECONDS:-3}"
 TV_DASHBOARD_REFRESH_SECONDS="${TV_DASHBOARD_REFRESH_SECONDS:-1}"
 TV_DUPLICATE_ALERT_ENABLED="${TV_DUPLICATE_ALERT_ENABLED:-1}"
 TV_DUPLICATE_ALERT_SECONDS="${TV_DUPLICATE_ALERT_SECONDS:-60}"
+TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD="${TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD:-25}"
 DISK_SPACE_WARNING_PERCENT="${DISK_SPACE_WARNING_PERCENT:-10}"
 DISK_SPACE_WARNING_BYTES="${DISK_SPACE_WARNING_BYTES:-5368709120}"
 API_ENABLED="${API_ENABLED:-1}"
@@ -114,6 +116,7 @@ Options:
   --outgoing-api-batch-size NUM maximum queued scans sent per drain cycle [${OUTGOING_API_BATCH_SIZE}]
   --mandatory-scanner-ids IDS comma or space-separated scanner IDs that must stay connected [${MANDATORY_SCANNER_IDS:-none}]
   --scanner-pairs GROUPS   semicolon-separated overlapping scanner groups [${SCANNER_PAIRS:-none}]
+  --same-scanner-suppression-distinct-successes NUM different successful packages required on one scanner before its repeat can be recorded [${SAME_SCANNER_SUPPRESSION_DISTINCT_SUCCESSES}]
   --scanner-pair-suppression-distinct-successes NUM different successful packages required before a paired repeat can be recorded [${SCANNER_PAIR_SUPPRESSION_DISTINCT_SUCCESSES}]
   --current-scan-rate-stale-seconds SEC seconds before health scan-rate indicator turns red [${CURRENT_SCAN_RATE_STALE_SECONDS}]
   --health-page-refresh-seconds SEC health page automatic refresh interval [${HEALTH_PAGE_REFRESH_SECONDS}]
@@ -121,6 +124,7 @@ Options:
   --enable-tv-duplicate-alert enable TV duplicate flashing screen and alarm [default]
   --disable-tv-duplicate-alert disable TV duplicate flashing screen and alarm
   --tv-duplicate-alert-seconds SEC TV duplicate alert display duration [${TV_DUPLICATE_ALERT_SECONDS}]
+  --tv-outgoing-api-queue-alert-threshold NUM queued outgoing API rows the TV warning must exceed [${TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD}]
   --disk-space-warning-percent PCT free disk percent that triggers health warning [${DISK_SPACE_WARNING_PERCENT}]
   --disk-space-warning-bytes BYTES free disk bytes that triggers health warning [${DISK_SPACE_WARNING_BYTES}]
   --enable-api             enable and start the REST API service [default]
@@ -330,6 +334,11 @@ emit_option("scanners", "mandatory_scanner_ids", "MANDATORY_SCANNER_IDS")
 emit_option("scanners", "scanner_pairs", "SCANNER_PAIRS")
 emit_option(
     "scanners",
+    "same_scanner_suppression_distinct_successes",
+    "SAME_SCANNER_SUPPRESSION_DISTINCT_SUCCESSES",
+)
+emit_option(
+    "scanners",
     "scanner_pair_suppression_distinct_successes",
     "SCANNER_PAIR_SUPPRESSION_DISTINCT_SUCCESSES",
 )
@@ -338,6 +347,11 @@ emit_option("dashboard", "health_page_refresh_seconds", "HEALTH_PAGE_REFRESH_SEC
 emit_option("dashboard", "tv_dashboard_refresh_seconds", "TV_DASHBOARD_REFRESH_SECONDS")
 emit_bool("dashboard", "tv_duplicate_alert_enabled", "TV_DUPLICATE_ALERT_ENABLED")
 emit_option("dashboard", "tv_duplicate_alert_seconds", "TV_DUPLICATE_ALERT_SECONDS")
+emit_option(
+    "dashboard",
+    "tv_outgoing_api_queue_alert_threshold",
+    "TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD",
+)
 emit_option("dashboard", "disk_space_warning_percent", "DISK_SPACE_WARNING_PERCENT")
 emit_option("dashboard", "disk_space_warning_bytes", "DISK_SPACE_WARNING_BYTES")
 emit_bool("api", "enabled", "API_ENABLED")
@@ -595,6 +609,10 @@ while [[ $# -gt 0 ]]; do
             SCANNER_PAIRS="$2"
             shift 2
             ;;
+        --same-scanner-suppression-distinct-successes)
+            SAME_SCANNER_SUPPRESSION_DISTINCT_SUCCESSES="$2"
+            shift 2
+            ;;
         --scanner-pair-suppression-distinct-successes)
             SCANNER_PAIR_SUPPRESSION_DISTINCT_SUCCESSES="$2"
             shift 2
@@ -621,6 +639,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --tv-duplicate-alert-seconds)
             TV_DUPLICATE_ALERT_SECONDS="$2"
+            shift 2
+            ;;
+        --tv-outgoing-api-queue-alert-threshold)
+            TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD="$2"
             shift 2
             ;;
         --disk-space-warning-percent)
@@ -1058,6 +1080,10 @@ mandatory_scanner_ids = ${MANDATORY_SCANNER_IDS}
 # Example: scanner_pairs = 20, 21; 30, 31
 scanner_pairs = ${SCANNER_PAIRS}
 
+# Number of different successful tracking numbers that must be accepted by one scanner before that same scanner can record a repeat as a duplicate.
+# Default: 5. Range: greater than 0. Other scanners, failed reads, repeated reads, and suppressed reads do not advance this scanner-specific progression window.
+same_scanner_suppression_distinct_successes = ${SAME_SCANNER_SUPPRESSION_DISTINCT_SUCCESSES}
+
 # Number of different successful tracking numbers that must pass through a configured scanner pair before a later cross-scanner repeat can be recorded under the normal duplicate rules.
 # Default: 10. Range: greater than 0. There is no short time timeout, so stopped conveyors do not generate extra duplicate rows; the normal 30-day duplicate lookback still applies.
 scanner_pair_suppression_distinct_successes = ${SCANNER_PAIR_SUPPRESSION_DISTINCT_SUCCESSES}
@@ -1089,6 +1115,10 @@ tv_duplicate_alert_enabled = ${TV_DUPLICATE_ALERT_ENABLED_TEXT}
 # Seconds the TV dashboard full-screen duplicate warning stays visible after a duplicate.
 # Default: 60. Range: greater than 0. Example: 30 clears the duplicate alert after 30 seconds.
 tv_duplicate_alert_seconds = ${TV_DUPLICATE_ALERT_SECONDS}
+
+# Outgoing API queue size that the TV dashboard must exceed before showing its outgoing API warning.
+# Default: 25. Range: greater than 0. A value of 25 keeps the TV warning hidden for queue counts from 0 through 25 and shows it starting at 26.
+tv_outgoing_api_queue_alert_threshold = ${TV_OUTGOING_API_QUEUE_ALERT_THRESHOLD}
 
 # Free disk percentage that triggers the health page low-space warning.
 # Default: 10. Range: 0 or greater. Set 0 to disable the percentage threshold.
