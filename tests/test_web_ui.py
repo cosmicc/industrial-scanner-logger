@@ -95,6 +95,30 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("overflow-wrap: normal;", site_css)
         self.assertIn("white-space: nowrap;", site_css)
 
+    def test_tv_dashboard_shows_mandatory_scanner_fraction(self):
+        tv_html = self.read_project_file("html/tv-dashboard/index.html")
+
+        self.assertIn("mandatoryScanners.required_count", tv_html)
+        self.assertIn("mandatoryScanners.connected_count", tv_html)
+        self.assertIn("mandatory scanners connected", tv_html)
+
+    def test_tv_dashboard_reloads_after_deployed_document_changes(self):
+        tv_html = self.read_project_file("html/tv-dashboard/index.html")
+        nginx_config = self.read_project_file("nginx/industrial-scanner-logger.conf")
+
+        self.assertIn("TV_DASHBOARD_UPDATE_CHECK_MS = 60 * 1000", tv_html)
+        self.assertIn("checkForDashboardUpdate", tv_html)
+        self.assertIn("fingerprintText(documentText)", tv_html)
+        self.assertIn("window.location.reload()", tv_html)
+        self.assertIn("location = /tv-dashboard {", nginx_config)
+        self.assertIn("location /tv-dashboard/ {", nginx_config)
+        self.assertGreaterEqual(
+            nginx_config.count(
+                'add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;'
+            ),
+            3,
+        )
+
     def test_stylesheet_is_versioned_and_not_cached_by_nginx(self):
         nginx_config = self.read_project_file("nginx/industrial-scanner-logger.conf")
 
@@ -106,7 +130,7 @@ class WebUiContractTests(unittest.TestCase):
             "html/tv-dashboard/index.html",
         ):
             page_html = self.read_project_file(relative_path)
-            self.assertIn('href="/assets/site.css?v=1.7"', page_html)
+            self.assertIn('href="/assets/site.css?v=1.8"', page_html)
 
         self.assertIn("location = /assets/site.css {", nginx_config)
         self.assertIn(
@@ -121,6 +145,9 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn('/api/v1/scans/summary', search_html)
         self.assertIn('id="search-totals"', search_html)
         self.assertIn("API_REQUEST_TIMEOUT_MS = 15000", search_html)
+        self.assertIn("All Duplicate Occurrences", search_html)
+        self.assertIn('include_duplicate_occurrences: "true"', search_html)
+        self.assertIn("occurrenceTypePill(row.occurrence_type)", search_html)
 
     def test_logs_page_has_bounded_api_request(self):
         logs_html = self.read_project_file("html/logs/index.html")

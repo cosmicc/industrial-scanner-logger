@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Scan Search</title>
-  <link rel="stylesheet" href="/assets/site.css?v=1.7">
+  <link rel="stylesheet" href="/assets/site.css?v=1.8">
 </head>
 <body>
   <main class="page">
@@ -31,7 +31,7 @@
               <option value="all">All Scan Rows</option>
               <option value="successful">Successful Scans</option>
               <option value="failed">Failed Scans</option>
-              <option value="duplicates">All Duplicates</option>
+              <option value="duplicates">All Duplicate Occurrences</option>
               <option value="repaired">Repaired Scans</option>
               <option value="unrepaired-failed">Unrepaired Failed Scans</option>
             </select>
@@ -137,6 +137,7 @@
               <th>Time</th>
               <th>Scanner</th>
               <th>Status</th>
+              <th>Occurrence</th>
               <th>Duplicate</th>
               <th>Repaired</th>
               <th>Tracking Number</th>
@@ -147,7 +148,7 @@
           </thead>
           <tbody id="search-results">
             <tr>
-              <td colspan="10">Search results will appear here.</td>
+              <td colspan="11">Search results will appear here.</td>
             </tr>
           </tbody>
         </table>
@@ -201,9 +202,9 @@
         params: { is_success: "false" }
       },
       duplicates: {
-        label: "All Duplicates",
+        label: "All Duplicate Occurrences",
         requiresTracking: false,
-        params: { is_duplicate: "true" }
+        params: { include_duplicate_occurrences: "true" }
       },
       repaired: {
         label: "Repaired Scans",
@@ -636,6 +637,7 @@
           <td>${formatTime12(row)}</td>
           <td>${escapeHtml(scannerDisplayName(row))}</td>
           <td>${statusCell}</td>
+          <td>${occurrenceTypePill(row.occurrence_type)}</td>
           <td>${yesNoPill(row.is_duplicate)}</td>
           <td>${yesNoPill(row.is_repaired)}</td>
           <td>${escapeHtml(row.tracking_number ?? "")}</td>
@@ -1033,6 +1035,24 @@
 
     function yesNoPill(value) {
       return resultPill(value ? "Yes" : "No", value ? "warning" : "success");
+    }
+
+    function occurrenceTypePill(value) {
+      const occurrenceType = String(value || "").toLowerCase();
+
+      if (occurrenceType === "original") {
+        return resultPill("Original", "success");
+      }
+
+      if (occurrenceType === "duplicate") {
+        return resultPill("Duplicate", "warning");
+      }
+
+      if (occurrenceType === "occurrence") {
+        return resultPill("Occurrence", "neutral");
+      }
+
+      return "";
     }
 
     function resultPill(label, tone) {

@@ -128,6 +128,37 @@ class ApiQueryTests(unittest.TestCase):
             ],
         )
 
+    def test_duplicate_occurrence_query_includes_period_rows_and_original(self):
+        from industrial_scanner_logger.api import build_scan_events_query
+
+        query, params = build_scan_events_query(
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 2),
+            scanner_id=20,
+            include_duplicate_occurrences=True,
+            limit=25,
+            offset=50,
+        )
+
+        query_text = str(query)
+        self.assertIn("matching_duplicate_tracking", query_text)
+        self.assertIn("duplicate_occurrence_origins", query_text)
+        self.assertIn("selected_duplicate_occurrences", query_text)
+        self.assertIn("occurrence_type", query_text)
+        self.assertEqual(
+            params,
+            [
+                datetime(2026, 8, 1, 4),
+                datetime(2026, 8, 3, 4),
+                20,
+                True,
+                datetime(2026, 8, 1, 4),
+                datetime(2026, 8, 3, 4),
+                25,
+                50,
+            ],
+        )
+
     def test_build_scan_events_count_query_collects_filters_without_pagination(self):
         from industrial_scanner_logger.api import build_scan_events_count_query
 
@@ -909,6 +940,8 @@ class ApiQueryTests(unittest.TestCase):
 
         self.assertFalse(status["ok"])
         self.assertTrue(status["configured"])
+        self.assertEqual(status["connected_count"], 1)
+        self.assertEqual(status["required_count"], 2)
         self.assertEqual(
             status["required_scanners"],
             [
@@ -931,7 +964,7 @@ class ApiQueryTests(unittest.TestCase):
         self.assertEqual(status["missing_scanner_ids"], [21])
         self.assertEqual(
             status["warning"],
-            "Mandatory scanner not connected: Partner Scanner",
+            "1 of 2 mandatory scanners connected. Not connected: Partner Scanner",
         )
 
     def test_scan_row_display_name_prefers_current_config_name(self):

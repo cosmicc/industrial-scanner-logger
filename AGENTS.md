@@ -305,6 +305,12 @@ scan history.
   barcode/tracking, status, duplicate, repair, limit, and offset filters.
 - `/api/v1/scans/summary` uses the same search filters and returns matching all,
   successful, failed, duplicate, and repaired totals.
+- When `include_duplicate_occurrences=true`, a duplicate row matching the
+  selected date/scanner filters selects its tracking-number group. Return every
+  occurrence for that tracking number in the selected `America/Detroit` date
+  range plus its earliest successful non-duplicate original, even when that
+  original predates the range or belongs to another scanner. Do not mutate or
+  backfill scan history to provide this read-only search expansion.
 - Search scanner choices and result rows should identify both scanner ID and
   configured scanner name so operators can use either value.
 - Numeric 12-digit barcode filters match `tracking_number` and the rightmost
@@ -316,6 +322,12 @@ scan history.
   must copy them.
 - The TV dashboard's last-received age must use the health payload's
   server-generated timestamp rather than trusting the viewing device clock.
+- The TV connected-scanner panel must state the connected mandatory count and
+  configured mandatory total, such as `3 of 4 mandatory scanners connected`.
+- The TV dashboard must fetch its deployed document every 60 seconds and reload
+  itself when the document fingerprint or dashboard build changes. Update the
+  embedded dashboard build whenever its static page changes, and keep nginx
+  from caching the dashboard document.
 - The TV dashboard must render degraded health as one fixed top overlay that
   combines every active issue without moving page content. Warning-only issues
   use yellow; scanner receiver, API service, or PostgreSQL failures make the

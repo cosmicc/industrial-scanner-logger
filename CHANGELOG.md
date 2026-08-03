@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.8 - 08.03.2026
+
+### Added
+
+- Add grouped duplicate-occurrence searches that show every occurrence in the
+  selected period and include the earliest successful original even when it is
+  outside the selected date range or scanner filter.
+- Add occurrence labels to distinguish original, duplicate, and other matching
+  scan rows on the Scan Search page.
+- Add a 60-second deployed-document check that automatically reloads a
+  long-running TV dashboard after its page is updated.
+
+### Changed
+
+- Show connected and configured mandatory scanner totals together on the TV
+  dashboard, such as `3 of 4 mandatory scanners connected`.
+- Move the development version to 1.8 and refresh static asset versioning.
+- Serve the TV dashboard document with no-cache headers so automatic reloads
+  receive the newly deployed page.
+
+### Fixed
+
+- Prevent duplicate-only searches from hiding the original and other recorded
+  occurrences needed to understand why a package was marked as a duplicate.
+- Remove the need to manually reload the browser on the dedicated TV computer
+  after deploying a dashboard change.
+
 ## 1.7 - 07.30.2026
 
 ### Added
