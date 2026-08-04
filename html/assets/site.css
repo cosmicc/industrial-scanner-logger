@@ -1057,6 +1057,61 @@ tr:last-child td {
   }
 }
 
+.data-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(2, 6, 23, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.data-loading-overlay[hidden] {
+  display: none;
+}
+
+.data-loading-panel {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  min-width: 190px;
+  padding: 28px 34px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: 0 22px 55px rgba(0, 0, 0, 0.42);
+}
+
+.data-loading-spinner {
+  width: 54px;
+  height: 54px;
+  border: 6px solid rgba(148, 163, 184, 0.3);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: data-loading-spin 0.85s linear infinite;
+}
+
+.data-loading-label {
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+@keyframes data-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .data-loading-spinner {
+    animation-duration: 1.7s;
+  }
+}
+
 @media (max-width: 960px) {
   .home-header,
   .home-link-grid {

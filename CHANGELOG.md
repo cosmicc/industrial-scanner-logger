@@ -13,19 +13,28 @@ All notable changes to this project will be documented in this file.
   scan rows on the Scan Search page.
 - Add a 60-second deployed-document check that automatically reloads a
   long-running TV dashboard after its page is updated.
+- Add a centered `Loading Data` spinner overlay when Search or CSV Logs API data
+  requests remain active for longer than one second.
 
 ### Changed
 
-- Show connected and configured mandatory scanner totals together on the TV
-  dashboard, such as `3 of 4 mandatory scanners connected`.
+- Show the connected and configured mandatory scanner totals as the large TV
+  dashboard value, such as `3 of 4`, while the smaller line lists only offline
+  scanner names or confirms that all mandatory scanners are online.
 - Move the development version to 1.8 and refresh static asset versioning.
 - Serve the TV dashboard document with no-cache headers so automatic reloads
   receive the newly deployed page.
+- Serve the Search document with no-cache headers so its grouped duplicate
+  occurrence behavior cannot remain stale after deployment.
+- Serve the CSV Logs document with no-cache headers so its loading-overlay
+  behavior cannot remain stale after deployment.
 
 ### Fixed
 
 - Prevent duplicate-only searches from hiding the original and other recorded
   occurrences needed to understand why a package was marked as a duplicate.
+- Prevent a cached pre-1.8 Search page from continuing to request only duplicate
+  rows after the grouped occurrence API has been deployed.
 - Remove the need to manually reload the browser on the dedicated TV computer
   after deploying a dashboard change.
 

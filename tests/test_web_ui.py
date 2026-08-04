@@ -100,7 +100,14 @@ class WebUiContractTests(unittest.TestCase):
 
         self.assertIn("mandatoryScanners.required_count", tv_html)
         self.assertIn("mandatoryScanners.connected_count", tv_html)
-        self.assertIn("mandatory scanners connected", tv_html)
+        self.assertIn(
+            "`${formatNumber(connectedMandatoryCount)} of "
+            "${formatNumber(requiredMandatoryCount)}`",
+            tv_html,
+        )
+        self.assertIn('`Offline: ${offlineLabels.join(", ")}`', tv_html)
+        self.assertIn("All mandatory scanners online", tv_html)
+        self.assertIn(".filter((scanner) => !scanner.connected)", tv_html)
 
     def test_tv_dashboard_reloads_after_deployed_document_changes(self):
         tv_html = self.read_project_file("html/tv-dashboard/index.html")
@@ -155,11 +162,53 @@ class WebUiContractTests(unittest.TestCase):
         self.assertIn("API_REQUEST_TIMEOUT_MS = 15000", logs_html)
         self.assertIn("fetchWithTimeout(LOGS_API_URL", logs_html)
 
+    def test_search_and_logs_show_delayed_data_loading_overlay(self):
+        site_css = self.read_project_file("html/assets/site.css")
+
+        for relative_path in (
+            "html/search/index.html",
+            "html/logs/index.html",
+        ):
+            page_html = self.read_project_file(relative_path)
+            self.assertIn('id="data-loading-overlay"', page_html)
+            self.assertIn("Loading Data", page_html)
+            self.assertIn("DATA_LOADING_DELAY_MS = 1000", page_html)
+            self.assertIn("const dataRequestId = beginDataRequest();", page_html)
+            self.assertIn("endDataRequest(dataRequestId);", page_html)
+            self.assertIn("overdueDataRequestIds", page_html)
+
+        self.assertIn(".data-loading-overlay", site_css)
+        self.assertIn(".data-loading-spinner", site_css)
+        self.assertIn("@keyframes data-loading-spin", site_css)
+
+        logs_html = self.read_project_file("html/logs/index.html")
+        self.assertIn('href="${API_ROOT}${row.download_url}"', logs_html)
+        self.assertNotIn("downloadCsvWithOverlay", logs_html)
+
     def test_nginx_serves_search_without_directory_redirect(self):
         nginx_config = self.read_project_file("nginx/industrial-scanner-logger.conf")
 
         self.assertIn("location = /search {", nginx_config)
         self.assertIn("try_files /search/index.html =404;", nginx_config)
+        self.assertGreaterEqual(
+            nginx_config.count(
+                'add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;'
+            ),
+            5,
+        )
+
+    def test_nginx_serves_logs_without_stale_page_caching(self):
+        nginx_config = self.read_project_file("nginx/industrial-scanner-logger.conf")
+
+        self.assertIn("location = /logs {", nginx_config)
+        self.assertIn("location /logs/ {", nginx_config)
+        self.assertIn("try_files /logs/index.html =404;", nginx_config)
+        self.assertGreaterEqual(
+            nginx_config.count(
+                'add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0" always;'
+            ),
+            7,
+        )
 
 
 if __name__ == "__main__":

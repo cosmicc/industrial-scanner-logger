@@ -508,48 +508,39 @@
         mandatoryScanners.connected_required_scanner_ids?.length ??
         0
       );
-      const mandatorySummary = (
-        `${formatNumber(connectedMandatoryCount)} of ` +
-        `${formatNumber(requiredMandatoryCount)} mandatory scanners connected`
-      );
+      if (mandatoryScanners.configured) {
+        const offlineLabels = offlineMandatoryScannerLabels(mandatoryScanners);
+        setText(
+          "tv-connected-count",
+          `${formatNumber(connectedMandatoryCount)} of ${formatNumber(requiredMandatoryCount)}`
+        );
+        setText(
+          "tv-connected-detail",
+          offlineLabels.length > 0
+            ? `Offline: ${offlineLabels.join(", ")}`
+            : "All mandatory scanners online"
+        );
+        document.getElementById("tv-connected-detail").classList.toggle(
+          "warning",
+          offlineLabels.length > 0
+        );
+        return;
+      }
 
       setText("tv-connected-count", formatNumber(connectedCount));
-
-      if (mandatoryScanners.warning) {
-        setText(
-          "tv-connected-detail",
-          mandatoryScanners.warning.startsWith(mandatorySummary)
-            ? mandatoryScanners.warning
-            : `${mandatorySummary}. ${mandatoryScanners.warning}`
-        );
-        document.getElementById("tv-connected-detail").classList.add("warning");
-        return;
-      }
-
       document.getElementById("tv-connected-detail").classList.remove("warning");
-
-      if (mandatoryScanners.configured) {
-        const labels = mandatoryScannerLabels(mandatoryScanners);
-        setText(
-          "tv-connected-detail",
-          labels.length > 0
-            ? `${mandatorySummary}: ${labels.join(", ")}.`
-            : `${mandatorySummary}.`
-        );
-        return;
-      }
-
       setText("tv-connected-detail", "No mandatory scanners configured.");
     }
 
-    function mandatoryScannerLabels(mandatoryScanners) {
+    function offlineMandatoryScannerLabels(mandatoryScanners) {
       if (Array.isArray(mandatoryScanners?.required_scanners)) {
         return mandatoryScanners.required_scanners
+          .filter((scanner) => !scanner.connected)
           .map(scannerDisplayName)
           .filter(Boolean);
       }
 
-      return (mandatoryScanners?.required_scanner_ids || [])
+      return (mandatoryScanners?.missing_scanner_ids || [])
         .map((scannerId) => `Scanner ${scannerId}`)
         .filter(Boolean);
     }

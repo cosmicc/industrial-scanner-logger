@@ -163,6 +163,20 @@
 
   </main>
 
+  <div
+    id="data-loading-overlay"
+    class="data-loading-overlay"
+    role="status"
+    aria-live="polite"
+    aria-label="Loading data"
+    hidden
+  >
+    <div class="data-loading-panel">
+      <div class="data-loading-spinner" aria-hidden="true"></div>
+      <div class="data-loading-label">Loading Data</div>
+    </div>
+  </div>
+
   <script>
     const SEARCH_API_URL = "/api/v1/scans";
     const SEARCH_SUMMARY_API_URL = "/api/v1/scans/summary";
@@ -173,6 +187,7 @@
     const FEDEX_FULL_BARCODE_DIGITS = 34;
     const FEDEX_TRACKING_DIGITS = 12;
     const API_REQUEST_TIMEOUT_MS = 15000;
+    const DATA_LOADING_DELAY_MS = 1000;
     const NO_RESULTS_MESSAGE = "No results were found based on your search";
     const SEARCH_MODES = {
       tracking: {
@@ -222,6 +237,9 @@
     };
     let activeSearchToken = 0;
     let lastSearchRequest = null;
+    let nextDataRequestId = 0;
+    const dataLoadingDelayTimers = new Map();
+    const overdueDataRequestIds = new Set();
 
     const form = document.getElementById("search-form");
     const modeSelect = document.getElementById("search-mode");
@@ -1071,6 +1089,7 @@
     async function fetchWithTimeout(url, options = {}) {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
+      const dataRequestId = beginDataRequest();
 
       try {
         return await fetch(url, { ...options, signal: controller.signal });
@@ -1081,7 +1100,30 @@
         throw error;
       } finally {
         window.clearTimeout(timeout);
+        endDataRequest(dataRequestId);
       }
+    }
+
+    function beginDataRequest() {
+      nextDataRequestId += 1;
+      const dataRequestId = nextDataRequestId;
+      const delayTimer = window.setTimeout(() => {
+        dataLoadingDelayTimers.delete(dataRequestId);
+        overdueDataRequestIds.add(dataRequestId);
+        document.getElementById("data-loading-overlay").hidden = false;
+      }, DATA_LOADING_DELAY_MS);
+      dataLoadingDelayTimers.set(dataRequestId, delayTimer);
+      return dataRequestId;
+    }
+
+    function endDataRequest(dataRequestId) {
+      if (dataLoadingDelayTimers.has(dataRequestId)) {
+        window.clearTimeout(dataLoadingDelayTimers.get(dataRequestId));
+        dataLoadingDelayTimers.delete(dataRequestId);
+      }
+
+      overdueDataRequestIds.delete(dataRequestId);
+      document.getElementById("data-loading-overlay").hidden = overdueDataRequestIds.size === 0;
     }
 
     setDefaultDates();

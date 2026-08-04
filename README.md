@@ -526,7 +526,9 @@ in the selected period, shows every occurrence during that period, and also
 includes the earliest successful original when it is outside the selected date
 range or scanner filter. API clients can request the same grouped result with
 `include_duplicate_occurrences=true` on the scan list, count, and summary
-endpoints.
+endpoints. Search and CSV Logs show a centered `Loading Data` spinner when an
+API data request takes longer than one second. Native CSV file downloads remain
+browser-managed and do not use this overlay.
 
 `/api/v1/logs/daily-csv` lists completed daily CSV files for download and
 excludes the current day because that file may still be open for writing.
@@ -542,6 +544,10 @@ mandatory scanner fraction, and one severity-aware health overlay. Healthy
 operation shows no status bar. The page checks its deployed document every 60
 seconds and reloads itself when a new dashboard build is installed, so a
 long-running TV browser does not require a manual refresh after an update.
+When mandatory scanners are configured, the large Connected Scanners value
+shows a fraction such as `3 of 4`; the smaller line lists only configured
+scanner names that are offline, or confirms that all mandatory scanners are
+online.
 Warning-only degradation uses yellow, critical service or PostgreSQL
 degradation uses red, and simultaneous issues are combined without moving the
 dashboard content. Outgoing API warnings remain hidden on the TV page while the

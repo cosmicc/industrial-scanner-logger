@@ -47,13 +47,31 @@
 
   </main>
 
+  <div
+    id="data-loading-overlay"
+    class="data-loading-overlay"
+    role="status"
+    aria-live="polite"
+    aria-label="Loading data"
+    hidden
+  >
+    <div class="data-loading-panel">
+      <div class="data-loading-spinner" aria-hidden="true"></div>
+      <div class="data-loading-label">Loading Data</div>
+    </div>
+  </div>
+
   <script>
     const API_ROOT = "/api";
     const LOGS_API_URL = `${API_ROOT}/v1/logs/daily-csv`;
     const LOGS_PAGE_SIZE = 10;
     const API_REQUEST_TIMEOUT_MS = 15000;
+    const DATA_LOADING_DELAY_MS = 1000;
     let allLogs = [];
     let currentPage = 1;
+    let nextDataRequestId = 0;
+    const dataLoadingDelayTimers = new Map();
+    const overdueDataRequestIds = new Set();
 
     async function loadLogs() {
       const status = document.getElementById("logs-status");
@@ -195,6 +213,7 @@
     async function fetchWithTimeout(url, options = {}) {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
+      const dataRequestId = beginDataRequest();
 
       try {
         return await fetch(url, { ...options, signal: controller.signal });
@@ -205,7 +224,30 @@
         throw error;
       } finally {
         window.clearTimeout(timeout);
+        endDataRequest(dataRequestId);
       }
+    }
+
+    function beginDataRequest() {
+      nextDataRequestId += 1;
+      const dataRequestId = nextDataRequestId;
+      const delayTimer = window.setTimeout(() => {
+        dataLoadingDelayTimers.delete(dataRequestId);
+        overdueDataRequestIds.add(dataRequestId);
+        document.getElementById("data-loading-overlay").hidden = false;
+      }, DATA_LOADING_DELAY_MS);
+      dataLoadingDelayTimers.set(dataRequestId, delayTimer);
+      return dataRequestId;
+    }
+
+    function endDataRequest(dataRequestId) {
+      if (dataLoadingDelayTimers.has(dataRequestId)) {
+        window.clearTimeout(dataLoadingDelayTimers.get(dataRequestId));
+        dataLoadingDelayTimers.delete(dataRequestId);
+      }
+
+      overdueDataRequestIds.delete(dataRequestId);
+      document.getElementById("data-loading-overlay").hidden = overdueDataRequestIds.size === 0;
     }
 
     loadLogs();
