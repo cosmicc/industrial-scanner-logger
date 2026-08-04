@@ -305,8 +305,19 @@ scan history.
   barcode/tracking, status, duplicate, repair, limit, and offset filters.
 - `/api/v1/scans/summary` uses the same search filters and returns matching all,
   successful, failed, duplicate, and repaired totals.
+- When `include_duplicate_occurrences=true`, a duplicate row matching the
+  selected date/scanner filters selects its tracking-number group. Return every
+  occurrence for that tracking number in the selected `America/Detroit` date
+  range plus its earliest successful non-duplicate original, even when that
+  original predates the range or belongs to another scanner. Do not mutate or
+  backfill scan history to provide this read-only search expansion.
 - Search scanner choices and result rows should identify both scanner ID and
   configured scanner name so operators can use either value.
+- Search and CSV Logs API data requests must show a centered `Loading Data`
+  overlay with an animated spinner only after a request has remained active for
+  one second. Hide it as soon as all active requests finish or fail. Keep
+  native CSV file downloads unchanged; the overlay covers the CSV page's data
+  listing request, not the browser-managed file transfer.
 - Numeric 12-digit barcode filters match `tracking_number` and the rightmost
   12 digits of full barcode fields.
 - `/api/v1/logs/daily-csv` excludes the current `America/Detroit` day because
@@ -316,6 +327,15 @@ scan history.
   must copy them.
 - The TV dashboard's last-received age must use the health payload's
   server-generated timestamp rather than trusting the viewing device clock.
+- When mandatory scanners are configured, the TV connected-scanner panel's
+  large value must show the connected mandatory count and configured mandatory
+  total, such as `3 of 4`. Its smaller detail must show only configured scanner
+  names that are offline, or `All mandatory scanners online` when none are
+  offline. Do not repeat the fraction in the smaller detail.
+- The TV dashboard must fetch its deployed document every 60 seconds and reload
+  itself when the document fingerprint or dashboard build changes. Update the
+  embedded dashboard build whenever its static page changes, and keep nginx
+  from caching the dashboard document.
 - The TV dashboard must render degraded health as one fixed top overlay that
   combines every active issue without moving page content. Warning-only issues
   use yellow; scanner receiver, API service, or PostgreSQL failures make the
@@ -337,6 +357,10 @@ scan history.
 - Version the shared stylesheet URL in every static page when the app version
   changes, and keep nginx from caching `/assets/site.css` so deployed UI fixes
   cannot be hidden by stale browser CSS.
+- Keep nginx from caching the Search document so grouped duplicate-occurrence
+  JavaScript cannot remain stale after an app update.
+- Keep nginx from caching the CSV Logs document so delayed-loading behavior
+  cannot remain stale after an app update.
 - Keep explicit no-redirect nginx routes for `/health`, `/search`, `/logs`, and
   `/tv-dashboard`; remote reverse proxies may otherwise receive an internal
   host or port in an automatic directory redirect.

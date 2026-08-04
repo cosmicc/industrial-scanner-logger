@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Scan Search</title>
-  <link rel="stylesheet" href="/assets/site.css?v=1.7">
+  <link rel="stylesheet" href="/assets/site.css?v=1.8">
 </head>
 <body>
   <main class="page">
@@ -31,7 +31,7 @@
               <option value="all">All Scan Rows</option>
               <option value="successful">Successful Scans</option>
               <option value="failed">Failed Scans</option>
-              <option value="duplicates">All Duplicates</option>
+              <option value="duplicates">All Duplicate Occurrences</option>
               <option value="repaired">Repaired Scans</option>
               <option value="unrepaired-failed">Unrepaired Failed Scans</option>
             </select>
@@ -137,6 +137,7 @@
               <th>Time</th>
               <th>Scanner</th>
               <th>Status</th>
+              <th>Occurrence</th>
               <th>Duplicate</th>
               <th>Repaired</th>
               <th>Tracking Number</th>
@@ -147,7 +148,7 @@
           </thead>
           <tbody id="search-results">
             <tr>
-              <td colspan="10">Search results will appear here.</td>
+              <td colspan="11">Search results will appear here.</td>
             </tr>
           </tbody>
         </table>
@@ -162,6 +163,20 @@
 
   </main>
 
+  <div
+    id="data-loading-overlay"
+    class="data-loading-overlay"
+    role="status"
+    aria-live="polite"
+    aria-label="Loading data"
+    hidden
+  >
+    <div class="data-loading-panel">
+      <div class="data-loading-spinner" aria-hidden="true"></div>
+      <div class="data-loading-label">Loading Data</div>
+    </div>
+  </div>
+
   <script>
     const SEARCH_API_URL = "/api/v1/scans";
     const SEARCH_SUMMARY_API_URL = "/api/v1/scans/summary";
@@ -172,6 +187,7 @@
     const FEDEX_FULL_BARCODE_DIGITS = 34;
     const FEDEX_TRACKING_DIGITS = 12;
     const API_REQUEST_TIMEOUT_MS = 15000;
+    const DATA_LOADING_DELAY_MS = 1000;
     const NO_RESULTS_MESSAGE = "No results were found based on your search";
     const SEARCH_MODES = {
       tracking: {
@@ -201,9 +217,9 @@
         params: { is_success: "false" }
       },
       duplicates: {
-        label: "All Duplicates",
+        label: "All Duplicate Occurrences",
         requiresTracking: false,
-        params: { is_duplicate: "true" }
+        params: { include_duplicate_occurrences: "true" }
       },
       repaired: {
         label: "Repaired Scans",
@@ -221,6 +237,9 @@
     };
     let activeSearchToken = 0;
     let lastSearchRequest = null;
+    let nextDataRequestId = 0;
+    const dataLoadingDelayTimers = new Map();
+    const overdueDataRequestIds = new Set();
 
     const form = document.getElementById("search-form");
     const modeSelect = document.getElementById("search-mode");
@@ -636,6 +655,7 @@
           <td>${formatTime12(row)}</td>
           <td>${escapeHtml(scannerDisplayName(row))}</td>
           <td>${statusCell}</td>
+          <td>${occurrenceTypePill(row.occurrence_type)}</td>
           <td>${yesNoPill(row.is_duplicate)}</td>
           <td>${yesNoPill(row.is_repaired)}</td>
           <td>${escapeHtml(row.tracking_number ?? "")}</td>
@@ -1035,6 +1055,24 @@
       return resultPill(value ? "Yes" : "No", value ? "warning" : "success");
     }
 
+    function occurrenceTypePill(value) {
+      const occurrenceType = String(value || "").toLowerCase();
+
+      if (occurrenceType === "original") {
+        return resultPill("Original", "success");
+      }
+
+      if (occurrenceType === "duplicate") {
+        return resultPill("Duplicate", "warning");
+      }
+
+      if (occurrenceType === "occurrence") {
+        return resultPill("Occurrence", "neutral");
+      }
+
+      return "";
+    }
+
     function resultPill(label, tone) {
       return `<span class="result-pill result-pill-${tone}">${escapeHtml(label)}</span>`;
     }
@@ -1051,6 +1089,7 @@
     async function fetchWithTimeout(url, options = {}) {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
+      const dataRequestId = beginDataRequest();
 
       try {
         return await fetch(url, { ...options, signal: controller.signal });
@@ -1061,7 +1100,30 @@
         throw error;
       } finally {
         window.clearTimeout(timeout);
+        endDataRequest(dataRequestId);
       }
+    }
+
+    function beginDataRequest() {
+      nextDataRequestId += 1;
+      const dataRequestId = nextDataRequestId;
+      const delayTimer = window.setTimeout(() => {
+        dataLoadingDelayTimers.delete(dataRequestId);
+        overdueDataRequestIds.add(dataRequestId);
+        document.getElementById("data-loading-overlay").hidden = false;
+      }, DATA_LOADING_DELAY_MS);
+      dataLoadingDelayTimers.set(dataRequestId, delayTimer);
+      return dataRequestId;
+    }
+
+    function endDataRequest(dataRequestId) {
+      if (dataLoadingDelayTimers.has(dataRequestId)) {
+        window.clearTimeout(dataLoadingDelayTimers.get(dataRequestId));
+        dataLoadingDelayTimers.delete(dataRequestId);
+      }
+
+      overdueDataRequestIds.delete(dataRequestId);
+      document.getElementById("data-loading-overlay").hidden = overdueDataRequestIds.size === 0;
     }
 
     setDefaultDates();

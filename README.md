@@ -521,6 +521,14 @@ the end of full barcode fields. `/api/v1/scans`, `/api/v1/scans/count`, and
 `is_repaired`. The summary endpoint returns matching all, successful, failed,
 duplicate, and repaired totals. The `/search` page can list rows by scanner ID
 or configured scanner name and displays those totals above the result table.
+Its **All Duplicate Occurrences** search finds tracking numbers with a duplicate
+in the selected period, shows every occurrence during that period, and also
+includes the earliest successful original when it is outside the selected date
+range or scanner filter. API clients can request the same grouped result with
+`include_duplicate_occurrences=true` on the scan list, count, and summary
+endpoints. Search and CSV Logs show a centered `Loading Data` spinner when an
+API data request takes longer than one second. Native CSV file downloads remain
+browser-managed and do not use this overlay.
 
 `/api/v1/logs/daily-csv` lists completed daily CSV files for download and
 excludes the current day because that file may still be open for writing.
@@ -531,8 +539,15 @@ seconds by default, and `/tv-dashboard` refreshes every second by default. The
 TV dashboard uses a fixed 1920x1080 canvas and uniformly scales the entire
 canvas to the available full-screen viewport without reflowing or moving any
 panel. It shows scan rate, today's total, successful, duplicate, and failed
-counts, last received scanner-data age, connected scanner count, and one
-severity-aware health overlay. Healthy operation shows no status bar.
+counts, last received scanner-data age, connected scanner count, the connected
+mandatory scanner fraction, and one severity-aware health overlay. Healthy
+operation shows no status bar. The page checks its deployed document every 60
+seconds and reloads itself when a new dashboard build is installed, so a
+long-running TV browser does not require a manual refresh after an update.
+When mandatory scanners are configured, the large Connected Scanners value
+shows a fraction such as `3 of 4`; the smaller line lists only configured
+scanner names that are offline, or confirms that all mandatory scanners are
+online.
 Warning-only degradation uses yellow, critical service or PostgreSQL
 degradation uses red, and simultaneous issues are combined without moving the
 dashboard content. Outgoing API warnings remain hidden on the TV page while the

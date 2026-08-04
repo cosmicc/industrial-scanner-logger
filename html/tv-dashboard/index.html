@@ -3,8 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="industrial-scanner-dashboard-build" content="1.8">
   <title>TV Dashboard</title>
-  <link rel="stylesheet" href="/assets/site.css?v=1.7">
+  <link rel="stylesheet" href="/assets/site.css?v=1.8">
 </head>
 <body class="tv-body">
   <div class="tv-viewport">
@@ -92,6 +93,9 @@
 
   <script>
     const API_URL = "/api/v1/dashboard/health";
+    const DASHBOARD_DOCUMENT_URL = "/tv-dashboard/index.html";
+    const TV_DASHBOARD_BUILD = "1.8";
+    const TV_DASHBOARD_UPDATE_CHECK_MS = 60 * 1000;
     const DEFAULT_DISPLAY_TIME_ZONE = "America/Detroit";
     const DEFAULT_TV_REFRESH_SECONDS = 1;
     const DEFAULT_TV_DUPLICATE_ALERT_SECONDS = 60;
@@ -113,6 +117,7 @@
     ].join(", ");
     let tvRefreshTimer = null;
     let tvRefreshIntervalMs = null;
+    let dashboardDocumentFingerprint = null;
     let tvTextFitFrame = null;
     let activePackageAlert = null;
     let packageAlertQueue = [];
@@ -136,6 +141,52 @@
       } catch (error) {
         setSystemStatus("critical", ["Health dashboard API unavailable."]);
       }
+    }
+
+    async function checkForDashboardUpdate() {
+      try {
+        const response = await fetch(DASHBOARD_DOCUMENT_URL, { cache: "no-store" });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const documentText = await response.text();
+        const servedBuild = dashboardBuildFromDocument(documentText);
+        const nextFingerprint = fingerprintText(documentText);
+        const buildChanged = servedBuild && servedBuild !== TV_DASHBOARD_BUILD;
+        const documentChanged = (
+          dashboardDocumentFingerprint !== null &&
+          nextFingerprint !== dashboardDocumentFingerprint
+        );
+
+        if (buildChanged || documentChanged) {
+          window.location.reload();
+          return;
+        }
+
+        dashboardDocumentFingerprint = nextFingerprint;
+      } catch (_error) {
+        // A failed update check must not interfere with live dashboard polling.
+      }
+    }
+
+    function dashboardBuildFromDocument(documentText) {
+      const parsedDocument = new DOMParser().parseFromString(documentText, "text/html");
+      return parsedDocument.querySelector(
+        'meta[name="industrial-scanner-dashboard-build"]'
+      )?.content || "";
+    }
+
+    function fingerprintText(value) {
+      let hash = 2166136261;
+
+      for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+
+      return `${value.length}:${hash >>> 0}`;
     }
 
     function setSystemStatus(severity, messages = []) {
@@ -447,39 +498,49 @@
       const connectedIds = data.connected_scanner_ids || [];
       const connectedCount = Number(data.connected_scanner_count ?? connectedIds.length);
       const mandatoryScanners = data.mandatory_scanners || {};
-
-      setText("tv-connected-count", formatNumber(connectedCount));
-
-      if (mandatoryScanners.warning) {
-        setText("tv-connected-detail", mandatoryScanners.warning);
-        document.getElementById("tv-connected-detail").classList.add("warning");
-        return;
-      }
-
-      document.getElementById("tv-connected-detail").classList.remove("warning");
-
+      const requiredMandatoryCount = Number(
+        mandatoryScanners.required_count ??
+        mandatoryScanners.required_scanner_ids?.length ??
+        0
+      );
+      const connectedMandatoryCount = Number(
+        mandatoryScanners.connected_count ??
+        mandatoryScanners.connected_required_scanner_ids?.length ??
+        0
+      );
       if (mandatoryScanners.configured) {
-        const labels = mandatoryScannerLabels(mandatoryScanners);
+        const offlineLabels = offlineMandatoryScannerLabels(mandatoryScanners);
+        setText(
+          "tv-connected-count",
+          `${formatNumber(connectedMandatoryCount)} of ${formatNumber(requiredMandatoryCount)}`
+        );
         setText(
           "tv-connected-detail",
-          labels.length > 0
-            ? `Mandatory scanners connected: ${labels.join(", ")}.`
-            : "All mandatory scanners connected."
+          offlineLabels.length > 0
+            ? `Offline: ${offlineLabels.join(", ")}`
+            : "All mandatory scanners online"
+        );
+        document.getElementById("tv-connected-detail").classList.toggle(
+          "warning",
+          offlineLabels.length > 0
         );
         return;
       }
 
+      setText("tv-connected-count", formatNumber(connectedCount));
+      document.getElementById("tv-connected-detail").classList.remove("warning");
       setText("tv-connected-detail", "No mandatory scanners configured.");
     }
 
-    function mandatoryScannerLabels(mandatoryScanners) {
+    function offlineMandatoryScannerLabels(mandatoryScanners) {
       if (Array.isArray(mandatoryScanners?.required_scanners)) {
         return mandatoryScanners.required_scanners
+          .filter((scanner) => !scanner.connected)
           .map(scannerDisplayName)
           .filter(Boolean);
       }
 
-      return (mandatoryScanners?.required_scanner_ids || [])
+      return (mandatoryScanners?.missing_scanner_ids || [])
         .map((scannerId) => `Scanner ${scannerId}`)
         .filter(Boolean);
     }
@@ -921,6 +982,8 @@
     fitTvStageToViewport();
     loadDashboard();
     configureTvRefresh(DEFAULT_TV_REFRESH_SECONDS);
+    checkForDashboardUpdate();
+    window.setInterval(checkForDashboardUpdate, TV_DASHBOARD_UPDATE_CHECK_MS);
     window.addEventListener("resize", handleTvViewportResize);
     scheduleTvTextFit();
   </script>

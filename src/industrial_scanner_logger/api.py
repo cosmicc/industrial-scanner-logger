@@ -54,18 +54,22 @@ DISPLAY_SCAN_DATE_SQL = (
     f"AT TIME ZONE '{DISPLAY_TIMEZONE_NAME}')::date"
 )
 
+SCAN_EVENT_SELECT_COLUMN_NAMES = [
+    "id",
+    "scan_timestamp",
+    "scanner_id",
+    "scanner_name",
+    "is_duplicate",
+    "is_repaired",
+    "tracking_number",
+    "barcode",
+    "barcode_length",
+    "is_success",
+    "failure_reason",
+]
 SCAN_EVENT_SELECT_COLUMNS = [
-    sql.Identifier("id"),
-    sql.Identifier("scan_timestamp"),
-    sql.Identifier("scanner_id"),
-    sql.Identifier("scanner_name"),
-    sql.Identifier("is_duplicate"),
-    sql.Identifier("is_repaired"),
-    sql.Identifier("tracking_number"),
-    sql.Identifier("barcode"),
-    sql.Identifier("barcode_length"),
-    sql.Identifier("is_success"),
-    sql.Identifier("failure_reason"),
+    sql.Identifier(column_name)
+    for column_name in SCAN_EVENT_SELECT_COLUMN_NAMES
 ]
 
 SCAN_EVENT_SELECT_SQL = """
@@ -699,17 +703,22 @@ def dashboard_mandatory_scanners(config, connected_scanner_ids: list[int]) -> di
     warning = None
 
     if missing_scanner_ids:
-        warning = "Mandatory scanner not connected: "
-        if len(missing_scanner_ids) > 1:
-            warning = "Mandatory scanners not connected: "
-        warning += ", ".join(
+        connected_count = len(connected_required_scanner_ids)
+        required_count = len(required_scanner_ids)
+        missing_labels = ", ".join(
             dashboard_mandatory_scanner_label(config, scanner_id)
             for scanner_id in missing_scanner_ids
+        )
+        warning = (
+            f"{connected_count} of {required_count} mandatory scanners connected. "
+            f"Not connected: {missing_labels}"
         )
 
     return {
         "configured": bool(required_scanner_ids),
         "ok": not missing_scanner_ids,
+        "connected_count": len(connected_required_scanner_ids),
+        "required_count": len(required_scanner_ids),
         "required_scanners": required_scanners,
         "required_scanner_ids": [int(scanner_id) for scanner_id in required_scanner_ids],
         "connected_required_scanner_ids": [
@@ -1507,6 +1516,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
         is_success: Optional[bool] = None,
         is_duplicate: Optional[bool] = None,
         is_repaired: Optional[bool] = None,
+        include_duplicate_occurrences: bool = False,
         limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
         offset: int = Query(default=0, ge=0),
         db=Depends(get_db),
@@ -1520,6 +1530,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             is_success=is_success,
             is_duplicate=is_duplicate,
             is_repaired=is_repaired,
+            include_duplicate_occurrences=include_duplicate_occurrences,
             limit=limit,
             offset=offset,
         )
@@ -1537,6 +1548,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
         is_success: Optional[bool] = None,
         is_duplicate: Optional[bool] = None,
         is_repaired: Optional[bool] = None,
+        include_duplicate_occurrences: bool = False,
         db=Depends(get_db),
     ):
         query, params = build_scan_events_count_query(
@@ -1547,6 +1559,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             is_success=is_success,
             is_duplicate=is_duplicate,
             is_repaired=is_repaired,
+            include_duplicate_occurrences=include_duplicate_occurrences,
         )
         row = fetch_one(db, query, params)
         return {"total_results": int(row.get("total_results") or 0)}
@@ -1560,6 +1573,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
         is_success: Optional[bool] = None,
         is_duplicate: Optional[bool] = None,
         is_repaired: Optional[bool] = None,
+        include_duplicate_occurrences: bool = False,
         db=Depends(get_db),
     ):
         query, params = build_scan_events_summary_query(
@@ -1570,6 +1584,7 @@ def create_app(root_path: str = DEFAULT_API_ROOT_PATH) -> FastAPI:
             is_success=is_success,
             is_duplicate=is_duplicate,
             is_repaired=is_repaired,
+            include_duplicate_occurrences=include_duplicate_occurrences,
         )
         row = fetch_one(db, query, params) or {}
         return {
@@ -1730,8 +1745,14 @@ def column_list(columns):
     return sql.SQL(", ").join(sql.Identifier(column) for column in columns)
 
 
-def scan_event_column_list():
-    return sql.SQL(", ").join(SCAN_EVENT_SELECT_COLUMNS)
+def scan_event_column_list(table_alias: Optional[str] = None):
+    if table_alias is None:
+        return sql.SQL(", ").join(SCAN_EVENT_SELECT_COLUMNS)
+
+    return sql.SQL(", ").join(
+        sql.Identifier(table_alias, column_name)
+        for column_name in SCAN_EVENT_SELECT_COLUMN_NAMES
+    )
 
 
 def scan_events_filter_conditions(
@@ -1742,6 +1763,7 @@ def scan_events_filter_conditions(
     is_success: Optional[bool] = None,
     is_duplicate: Optional[bool] = None,
     is_repaired: Optional[bool] = None,
+    table_alias: Optional[str] = None,
 ):
     conditions = []
     params = []
@@ -1756,15 +1778,112 @@ def scan_events_filter_conditions(
         date_column="scan_timestamp",
         date_column_kind="timestamp_utc",
         tracking_number_column="tracking_number",
+        table_alias=table_alias,
     )
 
     if is_success is not None:
-        conditions.append(sql.SQL("is_success = %s"))
+        conditions.append(
+            sql.SQL("{} = %s").format(
+                qualified_identifier("is_success", table_alias)
+            )
+        )
         params.append(is_success)
 
-    add_boolean_filter(conditions, params, "is_duplicate", is_duplicate)
-    add_boolean_filter(conditions, params, "is_repaired", is_repaired)
+    add_boolean_filter(
+        conditions,
+        params,
+        "is_duplicate",
+        is_duplicate,
+        table_alias=table_alias,
+    )
+    add_boolean_filter(
+        conditions,
+        params,
+        "is_repaired",
+        is_repaired,
+        table_alias=table_alias,
+    )
     return conditions, params
+
+
+def duplicate_occurrence_ctes(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    scanner_id: Optional[int] = None,
+    barcode: Optional[str] = None,
+    is_success: Optional[bool] = None,
+    is_repaired: Optional[bool] = None,
+):
+    """Build CTEs selecting duplicate groups and their visible occurrences.
+
+    A duplicate row that matches the operator's filters selects its tracking
+    number. All occurrences for that tracking number inside the requested
+    display-timezone date range are returned, regardless of scanner. The first
+    successful non-duplicate row is also included as the original even when it
+    predates the requested range or belongs to another scanner.
+    """
+    duplicate_conditions, params = scan_events_filter_conditions(
+        start_date=start_date,
+        end_date=end_date,
+        scanner_id=scanner_id,
+        barcode=barcode,
+        is_success=is_success,
+        is_duplicate=True,
+        is_repaired=is_repaired,
+        table_alias="candidate",
+    )
+    occurrence_conditions = []
+    occurrence_params = []
+    add_common_filters(
+        occurrence_conditions,
+        occurrence_params,
+        start_date=start_date,
+        end_date=end_date,
+        scanner_id=None,
+        barcode=None,
+        date_column="scan_timestamp",
+        date_column_kind="timestamp_utc",
+        table_alias="occurrence",
+    )
+    params.extend(occurrence_params)
+
+    ctes = sql.SQL(
+        """
+        WITH matching_duplicate_tracking AS (
+            SELECT
+                candidate.tracking_number,
+                max(candidate.scan_timestamp) AS latest_duplicate_at
+            FROM scanner_logger.scan_events AS candidate{}
+            GROUP BY candidate.tracking_number
+        ),
+        duplicate_occurrence_origins AS (
+            SELECT DISTINCT ON (origin.tracking_number)
+                origin.tracking_number,
+                origin.id
+            FROM scanner_logger.scan_events AS origin
+            JOIN matching_duplicate_tracking AS matching
+              ON matching.tracking_number = origin.tracking_number
+            WHERE origin.is_success
+              AND NOT origin.is_duplicate
+            ORDER BY origin.tracking_number, origin.scan_timestamp, origin.id
+        ),
+        selected_duplicate_occurrences AS (
+            SELECT occurrence.id, occurrence.tracking_number
+            FROM scanner_logger.scan_events AS occurrence
+            JOIN matching_duplicate_tracking AS matching
+              ON matching.tracking_number = occurrence.tracking_number{}
+
+            UNION
+
+            SELECT origin.id, origin.tracking_number
+            FROM duplicate_occurrence_origins AS origin
+        )
+        """
+    ).format(
+        where_clause(duplicate_conditions),
+        where_clause(occurrence_conditions),
+    )
+    return ctes, params
 
 
 def build_scan_events_query(
@@ -1775,9 +1894,45 @@ def build_scan_events_query(
     is_success: Optional[bool] = None,
     is_duplicate: Optional[bool] = None,
     is_repaired: Optional[bool] = None,
+    include_duplicate_occurrences: bool = False,
     limit: int = DEFAULT_LIMIT,
     offset: int = 0,
 ):
+    if include_duplicate_occurrences:
+        ctes, params = duplicate_occurrence_ctes(
+            start_date=start_date,
+            end_date=end_date,
+            scanner_id=scanner_id,
+            barcode=barcode,
+            is_success=is_success,
+            is_repaired=is_repaired,
+        )
+        query = ctes + sql.SQL(
+            """
+            SELECT {},
+                CASE
+                    WHEN events.id = origins.id THEN 'original'
+                    WHEN events.is_duplicate THEN 'duplicate'
+                    ELSE 'occurrence'
+                END AS occurrence_type
+            FROM scanner_logger.scan_events AS events
+            JOIN selected_duplicate_occurrences AS selected
+              ON selected.id = events.id
+            JOIN matching_duplicate_tracking AS matching
+              ON matching.tracking_number = events.tracking_number
+            LEFT JOIN duplicate_occurrence_origins AS origins
+              ON origins.tracking_number = events.tracking_number
+            ORDER BY
+                matching.latest_duplicate_at DESC,
+                events.tracking_number,
+                events.scan_timestamp,
+                events.id
+            LIMIT %s OFFSET %s
+            """
+        ).format(scan_event_column_list("events"))
+        params.extend([limit, offset])
+        return query, params
+
     conditions, params = scan_events_filter_conditions(
         start_date=start_date,
         end_date=end_date,
@@ -1805,7 +1960,27 @@ def build_scan_events_count_query(
     is_success: Optional[bool] = None,
     is_duplicate: Optional[bool] = None,
     is_repaired: Optional[bool] = None,
+    include_duplicate_occurrences: bool = False,
 ):
+    if include_duplicate_occurrences:
+        ctes, params = duplicate_occurrence_ctes(
+            start_date=start_date,
+            end_date=end_date,
+            scanner_id=scanner_id,
+            barcode=barcode,
+            is_success=is_success,
+            is_repaired=is_repaired,
+        )
+        query = ctes + sql.SQL(
+            """
+            SELECT count(*) AS total_results
+            FROM scanner_logger.scan_events AS events
+            JOIN selected_duplicate_occurrences AS selected
+              ON selected.id = events.id
+            """
+        )
+        return query, params
+
     conditions, params = scan_events_filter_conditions(
         start_date=start_date,
         end_date=end_date,
@@ -1829,8 +2004,33 @@ def build_scan_events_summary_query(
     is_success: Optional[bool] = None,
     is_duplicate: Optional[bool] = None,
     is_repaired: Optional[bool] = None,
+    include_duplicate_occurrences: bool = False,
 ):
     """Build one aggregate query for the totals shown above search results."""
+    if include_duplicate_occurrences:
+        ctes, params = duplicate_occurrence_ctes(
+            start_date=start_date,
+            end_date=end_date,
+            scanner_id=scanner_id,
+            barcode=barcode,
+            is_success=is_success,
+            is_repaired=is_repaired,
+        )
+        query = ctes + sql.SQL(
+            """
+            SELECT
+                count(*) AS total_results,
+                count(*) FILTER (WHERE events.is_success) AS successful_scans,
+                count(*) FILTER (WHERE NOT events.is_success) AS failed_scans,
+                count(*) FILTER (WHERE events.is_duplicate) AS duplicate_scans,
+                count(*) FILTER (WHERE events.is_repaired) AS repaired_scans
+            FROM scanner_logger.scan_events AS events
+            JOIN selected_duplicate_occurrences AS selected
+              ON selected.id = events.id
+            """
+        )
+        return query, params
+
     conditions, params = scan_events_filter_conditions(
         start_date=start_date,
         end_date=end_date,
@@ -1859,11 +2059,16 @@ def add_boolean_filter(
     params: list,
     column_name: str,
     value: Optional[bool],
+    table_alias: Optional[str] = None,
 ):
     if value is None:
         return
 
-    conditions.append(sql.SQL("{} = %s").format(sql.Identifier(column_name)))
+    conditions.append(
+        sql.SQL("{} = %s").format(
+            qualified_identifier(column_name, table_alias)
+        )
+    )
     params.append(value)
 
 
@@ -1961,16 +2166,25 @@ def add_common_filters(
     scanner_column: Optional[str] = "scanner_id",
     barcode_column: Optional[str] = "barcode",
     tracking_number_column: Optional[str] = None,
+    table_alias: Optional[str] = None,
 ):
     if start_date is not None:
         if date_column is None:
             raise HTTPException(status_code=400, detail="start_date is not supported")
 
         if date_column_kind == "timestamp_utc":
-            conditions.append(sql.SQL("{} >= %s").format(sql.Identifier(date_column)))
+            conditions.append(
+                sql.SQL("{} >= %s").format(
+                    qualified_identifier(date_column, table_alias)
+                )
+            )
             params.append(display_day_start_utc(start_date))
         else:
-            conditions.append(sql.SQL("{} >= %s").format(sql.Identifier(date_column)))
+            conditions.append(
+                sql.SQL("{} >= %s").format(
+                    qualified_identifier(date_column, table_alias)
+                )
+            )
             params.append(start_date)
 
     if end_date is not None:
@@ -1978,16 +2192,28 @@ def add_common_filters(
             raise HTTPException(status_code=400, detail="end_date is not supported")
 
         if date_column_kind == "timestamp_utc":
-            conditions.append(sql.SQL("{} < %s").format(sql.Identifier(date_column)))
+            conditions.append(
+                sql.SQL("{} < %s").format(
+                    qualified_identifier(date_column, table_alias)
+                )
+            )
             params.append(next_display_day_start_utc(end_date))
         else:
-            conditions.append(sql.SQL("{} <= %s").format(sql.Identifier(date_column)))
+            conditions.append(
+                sql.SQL("{} <= %s").format(
+                    qualified_identifier(date_column, table_alias)
+                )
+            )
             params.append(end_date)
 
     if scanner_id is not None:
         if scanner_column is None:
             raise HTTPException(status_code=400, detail="scanner_id is not supported")
-        conditions.append(sql.SQL("{} = %s").format(sql.Identifier(scanner_column)))
+        conditions.append(
+            sql.SQL("{} = %s").format(
+                qualified_identifier(scanner_column, table_alias)
+            )
+        )
         params.append(scanner_id)
 
     if barcode is not None:
@@ -1998,13 +2224,17 @@ def add_common_filters(
         barcode_filters = []
 
         if barcode_column is not None:
-            barcode_filters.append(sql.Identifier(barcode_column))
+            barcode_filters.append(
+                qualified_identifier(barcode_column, table_alias)
+            )
 
         if (
             tracking_number_column is not None
             and tracking_number_column != barcode_column
         ):
-            barcode_filters.append(sql.Identifier(tracking_number_column))
+            barcode_filters.append(
+                qualified_identifier(tracking_number_column, table_alias)
+            )
 
         filter_parts = []
 
@@ -2018,6 +2248,14 @@ def add_common_filters(
 
         filter_sql = sql.SQL(" OR ").join(filter_parts)
         conditions.append(sql.SQL("(") + filter_sql + sql.SQL(")"))
+
+
+def qualified_identifier(column_name: str, table_alias: Optional[str] = None):
+    """Return a safely quoted column, optionally qualified by a table alias."""
+    if table_alias:
+        return sql.Identifier(table_alias, column_name)
+
+    return sql.Identifier(column_name)
 
 
 def is_tracking_suffix_search(value: str) -> bool:

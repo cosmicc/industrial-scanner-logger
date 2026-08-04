@@ -292,7 +292,7 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(at_threshold, (True, True, False))
 
     def test_project_version_is_1_7(self):
-        self.assertEqual(__version__, "1.7")
+        self.assertEqual(__version__, "1.8")
 
     def test_postgresql_logger_forces_utc_session_timezone(self):
         class FakePsycopg:
